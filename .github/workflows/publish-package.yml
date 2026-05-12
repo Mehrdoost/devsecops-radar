@@ -26,9 +26,15 @@ jobs:
       - name: Build package
         run: python -m build
 
+      - name: Show dist contents
+        run: ls -la dist/
+
+      - name: Check package metadata
+        run: twine check dist/*
+
       - name: Publish to GitHub Packages
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          TWINE_REPOSITORY_URL: https://pypkg.github.com/${{ github.repository }}
-        run: twine upload --verbose dist/*
+          TWINE_REPOSITORY_URL: https://pypi.pkg.github.com/${{ github.repository }}/
+        run: twine upload --verbose --non-interactive dist/*
