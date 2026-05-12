@@ -1,0 +1,60 @@
+name: 'Pipeline Sentinel CI/CD Scan'
+description: 'Aggregate security findings from Trivy, Semgrep, and Poutine'
+author: 'Mehrdoost'
+branding:
+  icon: 'shield'
+  color: 'red'
+
+inputs:
+  trivy_report:
+    description: 'Path to Trivy JSON report'
+    required: false
+    default: ''
+  semgrep_report:
+    description: 'Path to Semgrep JSON report'
+    required: false
+    default: ''
+  poutine_report:
+    description: 'Path to Poutine JSON report'
+    required: false
+    default: ''
+  findings_file:
+    description: 'Output filename for merged findings'
+    required: false
+    default: 'findings.json'
+
+outputs:
+  critical_count:
+    description: 'Number of CRITICAL findings'
+    value: ${{ steps.parse.outputs.critical_count }}
+  high_count:
+    description: 'Number of HIGH findings'
+    value: ${{ steps.parse.outputs.high_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies and project
+      shell: bash
+      run: |
+        pip install -e ${{ github.action_path }}/..
+
+    - name: Merge findings
+      shell: bash
+      run: |
+        devsecops-radar \
+          --trivy "${{ inputs.trivy_report }}" \
+          --semgrep "${{ inputs.semgrep_report }}" \
+          --poutine "${{ inputs.poutine_report }}" \
+          --output "${{ inputs.findings_file }}"
+
+    - name: Generate summary
+      id: parse
+      shell: bash
+      run: |
+        python ${{ github.action_path }}/comment_on_pr.py "${{ inputs.findings_file }}"

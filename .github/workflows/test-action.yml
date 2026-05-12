@@ -1,0 +1,20 @@
+name: Test Pipeline Sentinel Action
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Pipeline Sentinel
+        uses: ./action
+        with:
+          trivy_report: sample_trivy.json
+          semgrep_report: sample_semgrep.json
+          poutine_report: sample_poutine.json
