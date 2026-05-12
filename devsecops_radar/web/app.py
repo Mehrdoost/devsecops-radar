@@ -1,6 +1,7 @@
 from flask import Flask, render_template, jsonify
 import json
 import os
+from devsecops_radar.core.database import get_all_scans
 
 app = Flask(__name__)
 
@@ -20,6 +21,10 @@ def index():
 @app.route('/api/findings')
 def api_findings():
     return jsonify(load_findings())
+
+@app.route('/api/history')
+def api_history():
+    return jsonify(get_all_scans())
 
 def start_server(host='0.0.0.0', port=8080):
     app.run(host=host, port=port, debug=True)

@@ -36,3 +36,15 @@ body {
 code {
     color: #38bdf8;
 }
+
+/* --- Branding & Footer --- */
+.navbar-brand {
+    letter-spacing: 0.5px;
+}
+footer a {
+    color: #38bdf8;
+    transition: color 0.2s;
+}
+footer a:hover {
+    color: #e2e8f0;
+}

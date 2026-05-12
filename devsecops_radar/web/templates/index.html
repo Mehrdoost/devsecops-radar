@@ -15,6 +15,7 @@
         </div>
     </nav>
     <div class="container">
+        <!-- Charts Row -->
         <div class="row mb-4">
             <div class="col-md-4">
                 <div class="card bg-secondary text-white shadow">
@@ -27,6 +28,18 @@
             <div class="col-md-8">
                 <div class="card bg-secondary text-white shadow">
                     <div class="card-body">
+                        <h5 class="card-title">Trend Over Time</h5>
+                        <canvas id="trendChart" width="300" height="100"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters Row -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card bg-secondary text-white shadow">
+                    <div class="card-body">
                         <h5 class="card-title">Filters</h5>
                         <div class="row g-2">
                             <div class="col">
@@ -37,6 +50,8 @@
                                     <option value="">All Tools</option>
                                     <option value="Trivy">Trivy</option>
                                     <option value="Semgrep">Semgrep</option>
+                                    <option value="Poutine">Poutine</option>
+                                    <option value="Zizmor">Zizmor</option>
                                 </select>
                             </div>
                             <div class="col">
@@ -54,6 +69,7 @@
             </div>
         </div>
 
+        <!-- Findings Table -->
         <div class="card bg-secondary text-white shadow">
             <div class="card-body">
                 <table class="table table-dark table-striped table-hover" id="findings-table">
@@ -72,7 +88,18 @@
             </div>
         </div>
     </div>
-
+    <footer class="text-center text-muted py-3 mt-5 border-top border-secondary">
+        <small>
+            🛡️ <strong>Pipeline Sentinel</strong> · crafted by 
+            <a href="https://github.com/Mehrdoost" class="text-decoration-none text-info" target="_blank">
+                Mehrdoost
+            </a>
+            ·
+            <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none text-info" target="_blank">
+                View on GitHub
+            </a>
+        </small>
+    </footer>
     <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
