@@ -1,0 +1,37 @@
+{
+    "results": [
+      {
+        "path": "src/api.py",
+        "check_id": "python.lang.security.audit.dynamic-http-request.dynamic-http-request",
+        "extra": {
+          "severity": "HIGH",
+          "message": "detected dynamic http request"
+        },
+        "start": {
+          "line": 42
+        }
+      },
+      {
+        "path": "src/db.py",
+        "check_id": "python.lang.security.audit.sqlalchemy-sqli.sqlalchemy-sqli",
+        "extra": {
+          "severity": "MEDIUM",
+          "message": "SQLAlchemy potential SQL injection"
+        },
+        "start": {
+          "line": 17
+        }
+      },
+      {
+        "path": "src/views.py",
+        "check_id": "python.lang.security.audit.xss.avoid-jinja2-autoescape-off.avoid-jinja2-autoescape-off",
+        "extra": {
+          "severity": "LOW",
+          "message": "Jinja2 autoescape is off"
+        },
+        "start": {
+          "line": 5
+        }
+      }
+    ]
+  }

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevSecOps Radar</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="{{ url_for('static', filename='js/chart.umd.min.js') }}"></script>
+</head>
+<body class="bg-dark text-light">
+    <nav class="navbar navbar-dark border-bottom border-secondary mb-4">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">🛡️ DevSecOps Radar</span>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="card bg-secondary text-white shadow">
+                    <div class="card-body">
+                        <h5 class="card-title">Severity Breakdown</h5>
+                        <canvas id="severityChart" width="100" height="100"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="card bg-secondary text-white shadow">
+                    <div class="card-body">
+                        <h5 class="card-title">Filters</h5>
+                        <div class="row g-2">
+                            <div class="col">
+                                <input type="text" id="searchInput" class="form-control" placeholder="Search...">
+                            </div>
+                            <div class="col">
+                                <select id="toolFilter" class="form-select">
+                                    <option value="">All Tools</option>
+                                    <option value="Trivy">Trivy</option>
+                                    <option value="Semgrep">Semgrep</option>
+                                </select>
+                            </div>
+                            <div class="col">
+                                <select id="severityFilter" class="form-select">
+                                    <option value="">All Severities</option>
+                                    <option value="CRITICAL">CRITICAL</option>
+                                    <option value="HIGH">HIGH</option>
+                                    <option value="MEDIUM">MEDIUM</option>
+                                    <option value="LOW">LOW</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card bg-secondary text-white shadow">
+            <div class="card-body">
+                <table class="table table-dark table-striped table-hover" id="findings-table">
+                    <thead>
+                        <tr>
+                            <th>Tool</th>
+                            <th>ID</th>
+                            <th>Severity</th>
+                            <th>Target</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

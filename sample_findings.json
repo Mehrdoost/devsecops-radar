@@ -1,0 +1,73 @@
+[
+    {
+      "tool": "Trivy",
+      "target": "library/node:16-alpine",
+      "id": "CVE-2023-4586",
+      "severity": "CRITICAL",
+      "title": "node-fetch: SSRF via insufficiently validated URLs",
+      "description": "A server-side request forgery (SSRF) vulnerability exists in node-fetch due to insufficient validation of URLs.",
+      "package": "node-fetch",
+      "installed_version": "2.6.7",
+      "fixed_version": "2.6.9"
+    },
+    {
+      "tool": "Trivy",
+      "target": "app/requirements.txt",
+      "id": "CVE-2022-40897",
+      "severity": "HIGH",
+      "title": "setuptools: Regular Expression Denial of Service (ReDoS) in package_index.py",
+      "description": "An issue in Python setuptools allows a remote attacker to cause a denial of service via crafted package.",
+      "package": "setuptools",
+      "installed_version": "65.5.1",
+      "fixed_version": "65.5.2"
+    },
+    {
+      "tool": "Trivy",
+      "target": "Dockerfile",
+      "id": "CVE-2023-44487",
+      "severity": "HIGH",
+      "title": "HTTP/2 Rapid Reset Attack (Multiple CVEs)",
+      "description": "Multiple HTTP/2 enabled web servers are vulnerable to a DDoS attack (Rapid Reset Attack).",
+      "package": "golang.org/x/net",
+      "installed_version": "0.17.0",
+      "fixed_version": "0.17.1"
+    },
+    {
+      "tool": "Trivy",
+      "target": "app/package-lock.json",
+      "id": "CVE-2021-3807",
+      "severity": "MEDIUM",
+      "title": "ansi-regex: Inefficient Regular Expression Complexity",
+      "description": "ansi-regex is vulnerable to Inefficient Regular Expression Complexity.",
+      "package": "ansi-regex",
+      "installed_version": "5.0.0",
+      "fixed_version": "5.0.1"
+    },
+    {
+      "tool": "Semgrep",
+      "target": "src/api.py",
+      "id": "python.lang.security.audit.dynamic-http-request.dynamic-http-request",
+      "severity": "HIGH",
+      "title": "detected dynamic http request",
+      "description": "User-controlled data flows into an HTTP request. This could lead to SSRF.",
+      "line": 42
+    },
+    {
+      "tool": "Semgrep",
+      "target": "src/db.py",
+      "id": "python.lang.security.audit.sqlalchemy-sqli.sqlalchemy-sqli",
+      "severity": "MEDIUM",
+      "title": "SQLAlchemy potential SQL injection",
+      "description": "Detected string formatting in a SQLAlchemy query. This could lead to SQL injection if user input is used.",
+      "line": 17
+    },
+    {
+      "tool": "Semgrep",
+      "target": "src/views.py",
+      "id": "python.lang.security.audit.xss.avoid-jinja2-autoescape-off.avoid-jinja2-autoescape-off",
+      "severity": "LOW",
+      "title": "Jinja2 autoescape is off",
+      "description": "Autoescape is set to off for this template. This could lead to XSS.",
+      "line": 5
+    }
+  ]

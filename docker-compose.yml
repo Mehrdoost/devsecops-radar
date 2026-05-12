@@ -1,0 +1,10 @@
+version: '3.8'
+services:
+  radar:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./sample_findings.json:/app/findings.json
+    environment:
+      - FINDINGS_FILE=/app/findings.json
