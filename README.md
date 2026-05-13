@@ -2,36 +2,31 @@
 
 **Unified CI/CD Security Observability — AI‑Enhanced & Offline‑Ready**
 
-Aggregate findings from **Trivy, Semgrep, Poutine, Zizmor** and more into a single, beautiful dashboard. Correlate risks with an **LLM‑powered analysis engine**, track trends over time, and enforce guardrails – all in one CLI + web UI.
+Aggregate findings from **Trivy, Semgrep, Poutine, Zizmor** and more into a single, beautiful dashboard. Correlate risks with an **LLM‑powered analysis engine**, track security trends over time, and enforce guardrails – all in one CLI + web UI.
 
 [![GitHub stars](https://img.shields.io/github/stars/Mehrdoost/devsecops-radar?style=social)](https://github.com/Mehrdoost/devsecops-radar/stargazers)
 [![License](https://img.shields.io/github/license/Mehrdoost/devsecops-radar)](LICENSE)
 [![Docker Pulls](https://img.shields.io/docker/pulls/Mehrdoost/devsecops-radar)](https://hub.docker.com/r/Mehrdoost/devsecops-radar)
+[![PyPI version](https://img.shields.io/pypi/v/devsecops-radar.svg)](https://pypi.org/project/devsecops-radar/)
 [![GitHub release](https://img.shields.io/github/v/release/Mehrdoost/devsecops-radar?include_prereleases)](https://github.com/Mehrdoost/devsecops-radar/releases)
+[![CI](https://github.com/Mehrdoost/devsecops-radar/actions/workflows/test-action.yml/badge.svg)](https://github.com/Mehrdoost/devsecops-radar/actions/workflows/test-action.yml)
 
 ---
 
 ## 🚀 Quick Start
 
 ```bash
-git clone [https://github.com/Mehrdoost/devsecops-radar.git](https://github.com/Mehrdoost/devsecops-radar.git)
-cd devsecops-radar
-docker-compose up
-```
+# Install from PyPI
+pip install devsecops-radar
 
-Open http://localhost:8080 – the dashboard loads instantly with sample data.
+# Or install directly from GitHub
+pip install git+[https://github.com/Mehrdoost/devsecops-radar.git](https://github.com/Mehrdoost/devsecops-radar.git)
 
-**🐍 No Docker?**
-```bash
-pip install -e .
+# Run the web dashboard
 devsecops-radar-web
 ```
 
----
-
-## 📸 Screenshot
-
-![DevSecOps Radar Dashboard](docs/demo.png)
+🐳 **Docker:** `docker pull ghcr.io/mehrdoost/devsecops-radar:latest` *(see instructions below)*
 
 ---
 
@@ -44,7 +39,7 @@ devsecops-radar-web
 | 📈 **Scan History & Trends** | SQLite‑powered historical storage. Visual trend chart shows risk evolution over time. |
 | 🤖 **GitHub Action** | One‑step integration into your CI/CD. Summarises findings and optionally comments on PRs. |
 | 🎨 **Beautiful Dark Dashboard** | Severity doughnut, trend line chart, search & filters – works fully offline (all assets bundled). |
-| 🐳 **Docker Native** | Official image on Docker Hub. Just one `docker run` away. |
+| 🐳 **Docker Native** | Official image on GitHub Container Registry. Just one `docker run` away. |
 
 ---
 
@@ -59,6 +54,13 @@ devsecops-radar-web
 | **Snyk, ZAP, Dependency-Track** | Roadmap | 🔲 |
 
 *Adding a new scanner is easy – extend `BaseScanner` and plug it in.*
+
+---
+
+
+## 📸 Screenshot
+
+![DevSecOps Radar Dashboard](docs/demo.png)
 
 ---
 
@@ -109,7 +111,7 @@ devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json --zizmor
 
 ---
 
-## 🛠️ Installation & Usage
+## 🛠️ Usage
 
 ### From Source (Python)
 ```bash
@@ -120,8 +122,8 @@ devsecops-radar-web
 
 ### Docker
 ```bash
-docker pull Mehrdoost/devsecops-radar
-docker run -p 8080:8080 -v $(pwd)/findings.json:/data/findings.json Mehrdoost/devsecops-radar
+docker pull ghcr.io/mehrdoost/devsecops-radar:latest
+docker run -p 8080:8080 -v $(pwd)/findings.json:/data/findings.json ghcr.io/mehrdoost/devsecops-radar:latest
 ```
 
 ### Using Sample Data
@@ -137,7 +139,7 @@ devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json --poutin
 - [x] AI correlation & analysis
 - [x] Scan history & trend visualisation
 - [x] GitHub Action (composite)
-- [x] Docker image (Docker Hub)
+- [x] Docker image (GitHub Container Registry)
 - [ ] Security guardrail policies (`policy.yml`)
 - [ ] AI remediation advisor (detailed fix guidance)
 - [ ] Findings diff/compare between branches
@@ -154,8 +156,9 @@ If you’d like to integrate a new scanner, open an issue with a sample of its J
 
 ## 👨‍💻 Author
 
-Crafted with ❤️ by **Mehrdoost**  
-[![Mehrdoost](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost)
+**Mehrdoost** 
+
+[![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost)
 
 ---
 
