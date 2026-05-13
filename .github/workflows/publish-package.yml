@@ -1,17 +1,17 @@
-name: Publish Python Package to GitHub Packages
+name: Publish Python Package to PyPI
 
 on:
-  release:
-    types: [published]
   push:
-    branches: [ main ]
+    tags:
+      - 'v*'
 
 jobs:
-  publish:
+  deploy:
     runs-on: ubuntu-latest
+    environment: release
     permissions:
-      contents: read
-      packages: write
+      id-token: write
+      contents: write
     steps:
       - uses: actions/checkout@v6
 
@@ -21,20 +21,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install build tools
-        run: pip install build twine
+        run: pip install build
 
       - name: Build package
         run: python -m build
 
-      - name: Show dist contents
-        run: ls -la dist/
-
-      - name: Check package metadata
-        run: twine check dist/*
-
-      - name: Publish to GitHub Packages
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-          TWINE_REPOSITORY_URL: https://pypi.pkg.github.com/${{ github.repository }}/
-        run: twine upload --verbose --non-interactive dist/*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

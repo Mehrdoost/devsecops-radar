@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "devsecops-radar"
+version = "0.1.0"
+description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Mehrdoost", email = "mehrdoost@users.noreply.github.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Security",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "flask>=3.0",
+    "semgrep>=1.0",
+    "pyyaml>=6.0",
+    "requests>=2.31"
+]
+
+[project.urls]
+Homepage = "https://github.com/Mehrdoost/devsecops-radar"
+Source = "https://github.com/Mehrdoost/devsecops-radar"
+
+[tool.setuptools]
+packages = ["devsecops_radar", "devsecops_radar.core", "devsecops_radar.cli", "devsecops_radar.web", "devsecops_radar.scanners"]
+
+[project.scripts]
+devsecops-radar = "devsecops_radar.cli.scanner:main"
+devsecops-radar-web = "devsecops_radar.web.app:start_server"
