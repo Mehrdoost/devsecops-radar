@@ -58,9 +58,9 @@ devsecops-radar-web
 ---
 
 
-## 📸 Screenshot
+## 📸 Dashboard Preview
 
-![DevSecOps Radar Dashboard](docs/demo.png)
+![DevSecOps Radar Dashboard](docs/Demo.gif)
 
 ---
 
