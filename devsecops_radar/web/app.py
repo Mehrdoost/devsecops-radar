@@ -7,7 +7,9 @@ app = Flask(__name__)
 
 FINDINGS_FILE = os.environ.get('FINDINGS_FILE', 'findings.json')
 
-# Embedded HTML template – no external files needed
+# ------------------------------------------
+# Embedded HTML template – offline dashboard
+# ------------------------------------------
 DASHBOARD_HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
@@ -28,8 +30,10 @@ DASHBOARD_HTML = r"""
         .table { border-radius: 10px; overflow: hidden; }
         .badge { font-size: 0.8rem; padding: 0.4em 0.6em; }
         code { color: #38bdf8; }
+        #attack-graph { background: #1e293b; border-radius: 10px; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body class="bg-dark text-light">
     <nav class="navbar navbar-dark border-bottom border-secondary mb-4">
@@ -38,6 +42,7 @@ DASHBOARD_HTML = r"""
         </div>
     </nav>
     <div class="container">
+        <!-- Charts Row -->
         <div class="row mb-4">
             <div class="col-md-4">
                 <div class="card bg-secondary text-white shadow">
@@ -57,6 +62,19 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
+        <!-- Attack Path Visualization -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card bg-secondary text-white shadow">
+                    <div class="card-body">
+                        <h5 class="card-title">Attack Paths (AI-Generated)</h5>
+                        <div id="attack-graph" style="width:100%; height:400px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters Row -->
         <div class="row mb-4">
             <div class="col-12">
                 <div class="card bg-secondary text-white shadow">
@@ -90,6 +108,7 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
+        <!-- Findings Table -->
         <div class="card bg-secondary text-white shadow">
             <div class="card-body">
                 <table class="table table-dark table-striped table-hover" id="findings-table">
@@ -157,6 +176,7 @@ DASHBOARD_HTML = r"""
             renderTable(filtered);
         }
 
+        // Fetch findings for table and donut chart
         fetch('/api/findings')
             .then(res => res.json())
             .then(data => {
@@ -185,6 +205,7 @@ DASHBOARD_HTML = r"""
                 document.getElementById('severityFilter').addEventListener('change', applyFilters);
             });
 
+        // Fetch history for trend chart
         fetch('/api/history')
             .then(res => res.json())
             .then(scans => {
@@ -205,6 +226,68 @@ DASHBOARD_HTML = r"""
                         scales: { y: { beginAtZero: true, ticks: { color: 'white' } }, x: { ticks: { color: 'white' } } },
                         plugins: { legend: { labels: { color: 'white' } } }
                     }
+                });
+            });
+
+        // Attack Path Graph
+        fetch('/api/attack-paths')
+            .then(res => res.json())
+            .then(data => {
+                if (!data.nodes || data.nodes.length === 0) return;
+                const container = document.getElementById('attack-graph');
+                const width = container.clientWidth;
+                const height = container.clientHeight;
+                const svg = d3.select('#attack-graph')
+                    .append('svg')
+                    .attr('width', width)
+                    .attr('height', height);
+
+                const simulation = d3.forceSimulation(data.nodes)
+                    .force('link', d3.forceLink(data.links).id(d => d.id).distance(100))
+                    .force('charge', d3.forceManyBody().strength(-400))
+                    .force('center', d3.forceCenter(width / 2, height / 2));
+
+                const link = svg.append('g')
+                    .selectAll('line')
+                    .data(data.links)
+                    .enter().append('line')
+                    .attr('stroke', '#999')
+                    .attr('stroke-opacity', 0.6);
+
+                const node = svg.append('g')
+                    .selectAll('circle')
+                    .data(data.nodes)
+                    .enter().append('circle')
+                    .attr('r', 8)
+                    .attr('fill', d => {
+                        switch(d.severity) {
+                            case 'CRITICAL': return '#dc3545';
+                            case 'HIGH': return '#fd7e14';
+                            case 'MEDIUM': return '#0dcaf0';
+                            case 'LOW': return '#0d6efd';
+                            default: return '#6c757d';
+                        }
+                    })
+                    .call(d3.drag()
+                        .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+                        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+                        .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+                const label = svg.append('g')
+                    .selectAll('text')
+                    .data(data.nodes)
+                    .enter().append('text')
+                    .text(d => d.id)
+                    .attr('font-size', '10px')
+                    .attr('dx', 12)
+                    .attr('dy', 4)
+                    .attr('fill', 'white');
+
+                simulation.on('tick', () => {
+                    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+                        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+                    node.attr('cx', d => d.x).attr('cy', d => d.y);
+                    label.attr('x', d => d.x).attr('y', d => d.y);
                 });
             });
     </script>
@@ -230,6 +313,51 @@ def api_findings():
 @app.route('/api/history')
 def api_history():
     return jsonify(get_all_scans())
+
+@app.route('/api/attack-paths')
+def api_attack_paths():
+    """Return LLM-generated attack paths for the latest scan."""
+    findings = load_findings()
+    if not findings:
+        return jsonify({"attack_paths": [], "nodes": [], "links": []})
+    try:
+        from devsecops_radar.core.analyzer import OllamaAnalyzer
+        analyzer = OllamaAnalyzer()
+        analysis = analyzer.analyze(findings)
+        attack_paths = analysis.get("attack_paths", [])
+        
+        # Build nodes and links for D3.js force graph
+        nodes = []
+        links = []
+        node_ids = set()
+        
+        for path in attack_paths:
+            involved = path.get("involved_findings", [])
+            for fid in involved:
+                if fid not in node_ids:
+                    finding = next((f for f in findings if f.get("id") == fid), None)
+                    nodes.append({
+                        "id": fid,
+                        "label": fid,
+                        "severity": finding.get("severity", "UNKNOWN") if finding else "UNKNOWN",
+                        "title": finding.get("title", "")[:50] if finding else ""
+                    })
+                    node_ids.add(fid)
+            # Link nodes in order
+            for i in range(len(involved) - 1):
+                links.append({
+                    "source": involved[i],
+                    "target": involved[i+1],
+                    "description": path.get("description", "")
+                })
+        
+        return jsonify({
+            "attack_paths": attack_paths,
+            "nodes": nodes,
+            "links": links
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "attack_paths": [], "nodes": [], "links": []})
 
 def start_server(host='0.0.0.0', port=8080):
     app.run(host=host, port=port, debug=True)

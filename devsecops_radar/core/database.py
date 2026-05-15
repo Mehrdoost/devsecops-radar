@@ -54,7 +54,6 @@ def get_all_scans() -> List[Dict[str, Any]]:
     return scans
 
 def get_findings_by_severity(severity: str, limit: int = 100) -> List[Dict[str, Any]]:
-    """Get findings of a specific severity across all scans."""
     init_db()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -75,7 +74,6 @@ def get_findings_by_severity(severity: str, limit: int = 100) -> List[Dict[str, 
     return results
 
 def get_scan_by_id(scan_id: int) -> Optional[Dict[str, Any]]:
-    """Retrieve a specific scan by its ID."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -97,7 +95,6 @@ def get_scan_by_id(scan_id: int) -> Optional[Dict[str, Any]]:
     }
 
 def compare_scans(scan_id_1: int, scan_id_2: int) -> Dict[str, Any]:
-    """Compare two scans and return added/removed/unchanged findings."""
     scan1 = get_scan_by_id(scan_id_1)
     scan2 = get_scan_by_id(scan_id_2)
     if not scan1 or not scan2:
@@ -108,14 +105,13 @@ def compare_scans(scan_id_1: int, scan_id_2: int) -> Dict[str, Any]:
 
     added = [f for f in scan2['findings'] if f.get('id') not in ids1]
     removed = [f for f in scan1['findings'] if f.get('id') not in ids2]
-    unchanged = [f for f in scan2['findings'] if f.get('id') in ids1]
 
     return {
         'scan1': {'id': scan1['id'], 'timestamp': scan1['timestamp'], 'total': scan1['total']},
         'scan2': {'id': scan2['id'], 'timestamp': scan2['timestamp'], 'total': scan2['total']},
         'added': len(added),
         'removed': len(removed),
-        'unchanged': len(unchanged),
+        'unchanged': len(scan1['findings']) - len(removed),
         'added_findings': added,
         'removed_findings': removed,
     }

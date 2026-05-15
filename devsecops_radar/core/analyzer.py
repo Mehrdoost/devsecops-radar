@@ -24,8 +24,6 @@ class OllamaAnalyzer(BaseAnalyzer):
         mediums = [f for f in findings if f.get("severity") == "MEDIUM"]
         lows = [f for f in findings if f.get("severity") == "LOW"]
 
-        findings_hash = hashlib.sha256(json.dumps(findings, sort_keys=True).encode()).hexdigest()
-
         prompt = f"""You are a senior DevSecOps security architect. Analyze the following aggregated security findings from CI/CD scanners (Trivy, Semgrep, Poutine, Zizmor).
 
 Total findings: {len(findings)} (CRITICAL: {len(criticals)}, HIGH: {len(highs)}, MEDIUM: {len(mediums)}, LOW: {len(lows)})
