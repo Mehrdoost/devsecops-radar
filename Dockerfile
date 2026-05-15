@@ -1,20 +1,17 @@
-FROM python:3.12-slim
-
-WORKDIR /app
-
-# Copy and install dependencies
+# Stage 1: Build dependencies
+FROM python:3.12-slim as builder
+RUN pip install --upgrade pip
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --user --no-cache-dir -r requirements.txt
 
-# Copy the rest of the project and install it
+# Stage 2: Production image
+FROM python:3.12-slim
+RUN useradd -m -u 1000 pipeline && mkdir /app && chown pipeline /app
+WORKDIR /app
+COPY --from=builder /root/.local /home/pipeline/.local
 COPY . .
-RUN pip install -e .
-
-# Create a directory for the database and set as volume
-RUN mkdir /data
-VOLUME /data
-ENV FINDINGS_FILE=/data/findings.json
-
+RUN chown -R pipeline /app
+ENV PATH="/home/pipeline/.local/bin:$PATH"
+USER pipeline
 EXPOSE 8080
-
 CMD ["python", "-m", "devsecops_radar.web.app"]

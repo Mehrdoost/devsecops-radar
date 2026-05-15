@@ -1,53 +1,68 @@
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request, abort
 import json
 import os
 from devsecops_radar.core.database import get_all_scans
 
 app = Flask(__name__)
 
+# Simple API key (set via PIPELINE_API_KEY env var, or "disabled" to skip)
+API_KEY = os.environ.get("PIPELINE_API_KEY", "disabled")
+
 FINDINGS_FILE = os.environ.get('FINDINGS_FILE', 'findings.json')
 AI_SUMMARY_FILE = os.environ.get('AI_SUMMARY_FILE', 'findings_ai_summary.json')
 
-# ------------------------------------------
-# Embedded HTML template – professional dashboard
-# ------------------------------------------
+def require_api_key(func):
+    """Decorator to protect API endpoints."""
+    def wrapper(*args, **kwargs):
+        if API_KEY != "disabled":
+            key = request.headers.get("X-API-Key")
+            if key != API_KEY:
+                abort(401, "API key required")
+        return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
+
+# -------------------------------------------------------------------
+# Embedded dashboard (HTML, CSS, JS) – fully self-contained
+# -------------------------------------------------------------------
 DASHBOARD_HTML = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DevSecOps Radar</title>
+    <title>Pipeline Sentinel</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { padding-bottom: 2rem; }
+        body { padding-bottom: 2rem; background: #0f172a; color: #e2e8f0; }
         .severity-row.severity-critical { border-left: 4px solid #dc3545; }
         .severity-row.severity-high { border-left: 4px solid #fd7e14; }
         .severity-row.severity-medium { border-left: 4px solid #0dcaf0; }
         .severity-row.severity-low { border-left: 4px solid #0d6efd; }
         .navbar { box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
-        .card { border: none; border-radius: 10px; transition: transform 0.2s; }
-        .card:hover { transform: translateY(-2px); }
+        .card { border: none; border-radius: 10px; background: #1e293b; color: #e2e8f0; }
+        .card:hover { transform: translateY(-2px); transition: transform 0.2s; }
         .table { border-radius: 10px; overflow: hidden; }
         .badge { font-size: 0.8rem; padding: 0.4em 0.6em; }
         code { color: #38bdf8; }
-        #attack-graph { background: #1e293b; border-radius: 10px; }
-        .pipeline-badge { background: #6f42c1; }
+        #attack-graph, #topology-graph { background: #1e293b; border-radius: 10px; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
-<body class="bg-dark text-light">
-    <nav class="navbar navbar-dark border-bottom border-secondary mb-4">
+<body>
+    <nav class="navbar navbar-dark border-bottom border-secondary mb-4" style="background:#1e293b;">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h1">🛡️ Pipeline Sentinel</span>
+            <span class="text-muted">v0.3.0</span>
         </div>
     </nav>
+
     <div class="container">
         <!-- Charts Row -->
         <div class="row mb-4">
             <div class="col-md-4">
-                <div class="card bg-secondary text-white shadow">
+                <div class="card shadow">
                     <div class="card-body">
                         <h5 class="card-title">Severity Breakdown</h5>
                         <canvas id="severityChart" width="100" height="100"></canvas>
@@ -55,7 +70,7 @@ DASHBOARD_HTML = r"""
                 </div>
             </div>
             <div class="col-md-8">
-                <div class="card bg-secondary text-white shadow">
+                <div class="card shadow">
                     <div class="card-body">
                         <h5 class="card-title">Trend Over Time</h5>
                         <canvas id="trendChart" width="300" height="100"></canvas>
@@ -67,22 +82,14 @@ DASHBOARD_HTML = r"""
         <!-- Pipeline Security Summary (Poutine + Zizmor) -->
         <div class="row mb-4" id="pipeline-summary-row">
             <div class="col-12">
-                <div class="card bg-secondary text-white shadow">
+                <div class="card shadow">
                     <div class="card-body">
                         <h5 class="card-title">Pipeline Security (Poutine & Zizmor)</h5>
-                        <div id="pipeline-summary" class="d-flex gap-3">
-                            <div class="p-2 bg-dark rounded">
-                                <span id="pipeline-critical" class="fs-4 text-danger">0</span> Critical
-                            </div>
-                            <div class="p-2 bg-dark rounded">
-                                <span id="pipeline-high" class="fs-4 text-warning">0</span> High
-                            </div>
-                            <div class="p-2 bg-dark rounded">
-                                <span id="pipeline-medium" class="fs-4 text-info">0</span> Medium
-                            </div>
-                            <div class="p-2 bg-dark rounded">
-                                <span id="pipeline-low" class="fs-4 text-primary">0</span> Low
-                            </div>
+                        <div class="d-flex gap-3">
+                            <div class="p-2 bg-dark rounded"><span id="pipeline-critical" class="fs-4 text-danger">0</span> Critical</div>
+                            <div class="p-2 bg-dark rounded"><span id="pipeline-high" class="fs-4 text-warning">0</span> High</div>
+                            <div class="p-2 bg-dark rounded"><span id="pipeline-medium" class="fs-4 text-info">0</span> Medium</div>
+                            <div class="p-2 bg-dark rounded"><span id="pipeline-low" class="fs-4 text-primary">0</span> Low</div>
                         </div>
                     </div>
                 </div>
@@ -92,7 +99,7 @@ DASHBOARD_HTML = r"""
         <!-- Attack Path Visualization -->
         <div class="row mb-4" id="attack-path-row">
             <div class="col-12">
-                <div class="card bg-secondary text-white shadow">
+                <div class="card shadow">
                     <div class="card-body">
                         <h5 class="card-title">Attack Paths (AI-Generated)</h5>
                         <div id="attack-graph" style="width:100%; height:400px;"></div>
@@ -102,10 +109,22 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
-        <!-- Management Report Card -->
+        <!-- Topology Graph (if available) -->
+        <div class="row mb-4" id="topology-row" style="display:none;">
+            <div class="col-12">
+                <div class="card shadow">
+                    <div class="card-body">
+                        <h5 class="card-title">Topology (Assets & Connections)</h5>
+                        <div id="topology-graph" style="width:100%; height:400px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- AI Executive Summary Card -->
         <div class="row mb-4" id="summary-row">
             <div class="col-12">
-                <div class="card bg-secondary text-white shadow">
+                <div class="card shadow">
                     <div class="card-body">
                         <h5 class="card-title">AI Executive Summary</h5>
                         <div id="exec-summary" class="text-muted">No AI analysis available. Run with --analyze to generate one.</div>
@@ -118,7 +137,7 @@ DASHBOARD_HTML = r"""
         <!-- Filters Row -->
         <div class="row mb-4">
             <div class="col-12">
-                <div class="card bg-secondary text-white shadow">
+                <div class="card shadow">
                     <div class="card-body">
                         <h5 class="card-title">Filters</h5>
                         <div class="row g-2">
@@ -150,7 +169,7 @@ DASHBOARD_HTML = r"""
         </div>
 
         <!-- Findings Table -->
-        <div class="card bg-secondary text-white shadow">
+        <div class="card shadow">
             <div class="card-body">
                 <table class="table table-dark table-striped table-hover" id="findings-table">
                     <thead>
@@ -162,8 +181,7 @@ DASHBOARD_HTML = r"""
                             <th>Description</th>
                         </tr>
                     </thead>
-                    <tbody id="tableBody">
-                    </tbody>
+                    <tbody id="tableBody"></tbody>
                 </table>
             </div>
         </div>
@@ -175,7 +193,18 @@ DASHBOARD_HTML = r"""
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        // ---------- Inline dashboard JS ----------
+        // The API key (if set) must be sent in headers for the API calls.
+        // We inject it from the server using Flask's template variable.
+        const API_KEY = "{{ api_key }}";
+
+        function getHeaders() {
+            if (API_KEY && API_KEY !== 'disabled') {
+                return { 'X-API-Key': API_KEY };
+            }
+            return {};
+        }
+
+        // ---------- Helper functions ----------
         let allFindings = [];
 
         function renderTable(data) {
@@ -209,7 +238,7 @@ DASHBOARD_HTML = r"""
             const search = document.getElementById('searchInput').value.toLowerCase();
             const tool = document.getElementById('toolFilter').value;
             const severity = document.getElementById('severityFilter').value;
-            const filtered = allFindings.filter(f => 
+            const filtered = allFindings.filter(f =>
                 (f.id.toLowerCase().includes(search) || (f.description && f.description.toLowerCase().includes(search))) &&
                 (tool === '' || f.tool === tool) &&
                 (severity === '' || f.severity === severity)
@@ -217,8 +246,8 @@ DASHBOARD_HTML = r"""
             renderTable(filtered);
         }
 
-        // Fetch findings for table and donut chart
-        fetch('/api/findings')
+        // ---------- Fetch data ----------
+        fetch('/api/findings', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
                 allFindings = data;
@@ -229,6 +258,7 @@ DASHBOARD_HTML = r"""
                     const sev = f.severity.toUpperCase();
                     counts[sev] = (counts[sev] || 0) + 1;
                 });
+                // Severity doughnut
                 new Chart(document.getElementById('severityChart'), {
                     type: 'doughnut',
                     data: {
@@ -241,7 +271,7 @@ DASHBOARD_HTML = r"""
                     options: { plugins: { legend: { labels: { color: 'white' } } } }
                 });
 
-                // Pipeline-specific stats (Poutine + Zizmor)
+                // Pipeline stats (Poutine + Zizmor)
                 const pipeline = data.filter(f => f.tool === 'Poutine' || f.tool === 'Zizmor');
                 const pCounts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
                 pipeline.forEach(f => {
@@ -253,13 +283,14 @@ DASHBOARD_HTML = r"""
                 document.getElementById('pipeline-medium').textContent = pCounts.MEDIUM;
                 document.getElementById('pipeline-low').textContent = pCounts.LOW;
 
+                // Filter listeners
                 document.getElementById('searchInput').addEventListener('input', applyFilters);
                 document.getElementById('toolFilter').addEventListener('change', applyFilters);
                 document.getElementById('severityFilter').addEventListener('change', applyFilters);
             });
 
-        // Fetch history for trend chart
-        fetch('/api/history')
+        // Trend chart
+        fetch('/api/history', { headers: getHeaders() })
             .then(res => res.json())
             .then(scans => {
                 if (!scans.length) return;
@@ -282,8 +313,8 @@ DASHBOARD_HTML = r"""
                 });
             });
 
-        // Attack Path Graph
-        fetch('/api/attack-paths')
+        // Attack Path Graph (D3)
+        fetch('/api/attack-paths', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
                 if (data.error) {
@@ -354,7 +385,7 @@ DASHBOARD_HTML = r"""
             });
 
         // AI Summary
-        fetch('/api/summary')
+        fetch('/api/summary', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
                 if (data.executive_summary) {
@@ -367,43 +398,118 @@ DASHBOARD_HTML = r"""
                     }
                 }
             });
+
+        // Topology graph (if available)
+        fetch('/api/topology', { headers: getHeaders() })
+            .then(res => res.json())
+            .then(topo => {
+                if (!topo || !topo.servers || topo.servers.length === 0) return;
+                document.getElementById('topology-row').style.display = 'block';
+                const nodes = topo.servers.map(s => ({ id: s.name, group: s.ip }));
+                const links = topo.connections.map(c => ({ source: c.source, target: c.target, label: c.protocol }));
+                const container = document.getElementById('topology-graph');
+                const width = container.clientWidth;
+                const height = container.clientHeight;
+                const svg = d3.select('#topology-graph')
+                    .append('svg')
+                    .attr('width', width)
+                    .attr('height', height);
+                const simulation = d3.forceSimulation(nodes)
+                    .force('link', d3.forceLink(links).id(d => d.id).distance(80))
+                    .force('charge', d3.forceManyBody().strength(-300))
+                    .force('center', d3.forceCenter(width / 2, height / 2));
+                const link = svg.append('g')
+                    .selectAll('line')
+                    .data(links)
+                    .enter().append('line')
+                    .attr('stroke', '#6c757d')
+                    .attr('stroke-width', 2);
+                const node = svg.append('g')
+                    .selectAll('circle')
+                    .data(nodes)
+                    .enter().append('circle')
+                    .attr('r', 12)
+                    .attr('fill', '#0d6efd')
+                    .call(d3.drag()
+                        .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+                        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+                        .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+                const label = svg.append('g')
+                    .selectAll('text')
+                    .data(nodes)
+                    .enter().append('text')
+                    .text(d => d.id)
+                    .attr('font-size', '10px')
+                    .attr('dx', 15)
+                    .attr('dy', 4)
+                    .attr('fill', 'white');
+                simulation.on('tick', () => {
+                    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+                        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+                    node.attr('cx', d => d.x).attr('cy', d => d.y);
+                    label.attr('x', d => d.x).attr('y', d => d.y);
+                });
+            });
     </script>
 </body>
 </html>
 """
 
+# -------------------------------------------------------------------
+# Helper functions
+# -------------------------------------------------------------------
 def load_findings():
     if not os.path.exists(FINDINGS_FILE):
         return []
-    with open(FINDINGS_FILE) as f:
+    with open(FINDINGS_FILE, 'r') as f:
         return json.load(f)
 
 def load_ai_summary():
     if not os.path.exists(AI_SUMMARY_FILE):
         return {}
-    with open(AI_SUMMARY_FILE) as f:
+    with open(AI_SUMMARY_FILE, 'r') as f:
         return json.load(f)
 
+# -------------------------------------------------------------------
+# Routes
+# -------------------------------------------------------------------
 @app.route('/')
 def index():
     findings = load_findings()
-    return render_template_string(DASHBOARD_HTML, findings=findings)
+    return render_template_string(
+        DASHBOARD_HTML,
+        findings=findings,
+        api_key=API_KEY  # inject so JS can use it in fetch headers
+    )
 
 @app.route('/api/findings')
+@require_api_key
 def api_findings():
     return jsonify(load_findings())
 
 @app.route('/api/history')
+@require_api_key
 def api_history():
     return jsonify(get_all_scans())
 
 @app.route('/api/summary')
+@require_api_key
 def api_summary():
     return jsonify(load_ai_summary())
 
+@app.route('/api/topology')
+@require_api_key
+def api_topology():
+    topo_file = os.environ.get("TOPOLOGY_FILE", "topology.json")
+    if os.path.exists(topo_file):
+        with open(topo_file) as f:
+            return jsonify(json.load(f))
+    return jsonify({})
+
 @app.route('/api/attack-paths')
+@require_api_key
 def api_attack_paths():
-    """Return LLM-generated attack paths for the latest scan, gracefully handle missing Ollama."""
+    """Return LLM-generated attack paths for the latest scan, handling missing Ollama gracefully."""
     findings = load_findings()
     if not findings:
         return jsonify({"attack_paths": [], "nodes": [], "links": []})
@@ -412,11 +518,12 @@ def api_attack_paths():
         analyzer = OllamaAnalyzer()
         analysis = analyzer.analyze(findings)
         attack_paths = analysis.get("attack_paths", [])
-        
+
+        # Build D3 graph data
         nodes = []
         links = []
         node_ids = set()
-        
+
         for path in attack_paths:
             involved = path.get("involved_findings", [])
             for fid in involved:
@@ -435,15 +542,19 @@ def api_attack_paths():
                     "target": involved[i+1],
                     "description": path.get("description", "")
                 })
-        
+
         return jsonify({"attack_paths": attack_paths, "nodes": nodes, "links": links})
     except Exception as e:
-        return jsonify({"error": f"AI analysis unavailable: {str(e)}. Run with --analyze to generate.", "attack_paths": [], "nodes": [], "links": []})
+        return jsonify({
+            "error": f"AI analysis unavailable: {str(e)}. Run with --analyze to generate.",
+            "attack_paths": [],
+            "nodes": [],
+            "links": []
+        })
 
-@app.route('/api/scans')
-def api_scans():
-    return jsonify(get_all_scans())
-
+# -------------------------------------------------------------------
+# Entry point
+# -------------------------------------------------------------------
 def start_server(host='0.0.0.0', port=8080):
     app.run(host=host, port=port, debug=True)
 
