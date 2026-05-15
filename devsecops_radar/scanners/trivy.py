@@ -3,17 +3,22 @@ import subprocess
 import tempfile
 import os
 from typing import List, Dict, Any
-from .base import BaseScanner
+from devsecops_radar.plugins import ScannerPlugin
 
-class TrivyScanner(BaseScanner):
+class TrivyScanner(ScannerPlugin):
+    name = "trivy"
+    version = "1.0.0"
+
     def run(self, target: str) -> List[Dict[str, Any]]:
-        # Basic input validation
         if any(c in target for c in [';', '|', '&', '`', '$', '\n', '\r']):
             raise ValueError("Target contains invalid characters.")
         with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
             outfile = tmp.name
         try:
-            subprocess.run(['trivy', 'image', '--format', 'json', '--output', outfile, target], check=True)
+            subprocess.run(
+                ['trivy', 'image', '--format', 'json', '--output', outfile, target],
+                check=True
+            )
             return self.parse(outfile)
         finally:
             if os.path.exists(outfile):

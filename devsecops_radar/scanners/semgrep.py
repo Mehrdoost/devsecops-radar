@@ -3,12 +3,13 @@ import subprocess
 import tempfile
 import os
 from typing import List, Dict, Any
-from .base import BaseScanner
+from devsecops_radar.plugins import ScannerPlugin
 
+class SemgrepScanner(ScannerPlugin):
+    name = "semgrep"
+    version = "1.0.0"
 
-class SemgrepScanner(BaseScanner):
     def run(self, target: str) -> List[Dict[str, Any]]:
-        # Basic input validation
         if any(c in target for c in [';', '|', '&', '`', '$', '\n', '\r']):
             raise ValueError("Target contains invalid characters.")
         with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
@@ -16,7 +17,7 @@ class SemgrepScanner(BaseScanner):
         try:
             subprocess.run(
                 ['semgrep', '--config=auto', '--json', '--output', outfile, target],
-                check=True,
+                check=True
             )
             return self.parse(outfile)
         finally:
@@ -35,6 +36,6 @@ class SemgrepScanner(BaseScanner):
                 "severity": result.get("extra", {}).get("severity", "WARNING").upper(),
                 "title": result.get("check_id", ""),
                 "description": result.get("extra", {}).get("message", ""),
-                "line": result.get("start", {}).get("line", 0),
+                "line": result.get("start", {}).get("line", 0)
             })
         return findings

@@ -5,3 +5,4 @@ requests>=2.31
 loguru>=0.7
 reportlab>=4.0
 litellm>=1.50
+sqlalchemy>=2.0
