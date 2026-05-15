@@ -5,12 +5,19 @@ import os
 from typing import List, Dict, Any
 from .base import BaseScanner
 
+
 class PoutineScanner(BaseScanner):
     def run(self, target: str) -> List[Dict[str, Any]]:
+        # Basic input validation
+        if any(c in target for c in [';', '|', '&', '`', '$', '\n', '\r']):
+            raise ValueError("Target contains invalid characters.")
         with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
             outfile = tmp.name
         try:
-            subprocess.run(['poutine', 'scan', target, '--format', 'json', '--output', outfile], check=True)
+            subprocess.run(
+                ['poutine', 'scan', target, '--format', 'json', '--output', outfile],
+                check=True,
+            )
             return self.parse(outfile)
         finally:
             if os.path.exists(outfile):

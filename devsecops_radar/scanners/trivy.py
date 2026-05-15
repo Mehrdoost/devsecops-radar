@@ -7,6 +7,9 @@ from .base import BaseScanner
 
 class TrivyScanner(BaseScanner):
     def run(self, target: str) -> List[Dict[str, Any]]:
+        # Basic input validation
+        if any(c in target for c in [';', '|', '&', '`', '$', '\n', '\r']):
+            raise ValueError("Target contains invalid characters.")
         with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
             outfile = tmp.name
         try:

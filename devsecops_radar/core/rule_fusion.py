@@ -2,13 +2,14 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 
 class RuleFusion:
     """
     A hybrid rule engine that loads custom rules from local directories
     and can optionally pull community-curated rules from a git repository.
+    Also supports policy-as-code evaluation.
     """
 
     def __init__(
@@ -80,6 +81,37 @@ class RuleFusion:
         }
         return json.dumps(template, indent=2)
 
+    # ── policy engine ─────────────────────────────────────────
+
+    @staticmethod
+    def evaluate_policy(findings: List[Dict[str, Any]], policy_file: str) -> Tuple[bool, str]:
+        """
+        Evaluate a policy file against the findings.
+        Returns (pass, message).
+        The policy file is a JSON object with conditions.
+        Example: {"max_critical": 5, "on_violation": "fail"}
+        """
+        if not os.path.exists(policy_file):
+            return True, f"Policy file '{policy_file}' not found. Skipping evaluation."
+
+        with open(policy_file, "r") as f:
+            policy = json.load(f)
+
+        critical_count = sum(1 for f in findings if f.get("severity") == "CRITICAL")
+        max_critical = policy.get("max_critical")
+        if max_critical is not None and critical_count > max_critical:
+            action = policy.get("on_violation", "fail")
+            msg = (
+                f"Policy violation: CRITICAL findings ({critical_count}) "
+                f"exceeds maximum allowed ({max_critical})."
+            )
+            if action == "fail":
+                return False, msg
+            else:
+                return True, f"WARNING: {msg}"
+
+        return True, "Policy checks passed."
+
     # ── internal helpers ────────────────────────────────────────
 
     def _load_from_directory(self, directory: Path) -> None:
@@ -103,9 +135,17 @@ class RuleFusion:
             print(f"📄 Loaded {len(parsed)} findings from {json_file.name}")
 
     def _validate_json(self, data: Any, filename: str) -> bool:
-        """Quick structural validation – is this likely a findings file?"""
+        """Structural validation with better list handling."""
         if isinstance(data, list):
-            return True
+            if len(data) == 0:
+                print(f"[WARNING] {filename}: empty list, skipping")
+                return False
+            # at least one item must be a dict with finding keys
+            for item in data:
+                if isinstance(item, dict) and self._is_finding(item):
+                    return True
+            print(f"[WARNING] {filename}: list items do not look like findings, skipping")
+            return False
         if isinstance(data, dict):
             known_keys = {"Results", "results", "findings"}
             if any(k in data for k in known_keys):

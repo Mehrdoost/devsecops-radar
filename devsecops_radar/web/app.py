@@ -6,9 +6,10 @@ from devsecops_radar.core.database import get_all_scans
 app = Flask(__name__)
 
 FINDINGS_FILE = os.environ.get('FINDINGS_FILE', 'findings.json')
+AI_SUMMARY_FILE = os.environ.get('AI_SUMMARY_FILE', 'findings_ai_summary.json')
 
 # ------------------------------------------
-# Embedded HTML template – offline dashboard
+# Embedded HTML template – professional dashboard
 # ------------------------------------------
 DASHBOARD_HTML = r"""
 <!DOCTYPE html>
@@ -31,6 +32,7 @@ DASHBOARD_HTML = r"""
         .badge { font-size: 0.8rem; padding: 0.4em 0.6em; }
         code { color: #38bdf8; }
         #attack-graph { background: #1e293b; border-radius: 10px; }
+        .pipeline-badge { background: #6f42c1; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -38,7 +40,7 @@ DASHBOARD_HTML = r"""
 <body class="bg-dark text-light">
     <nav class="navbar navbar-dark border-bottom border-secondary mb-4">
         <div class="container-fluid">
-            <span class="navbar-brand mb-0 h1">🛡️ DevSecOps Radar</span>
+            <span class="navbar-brand mb-0 h1">🛡️ Pipeline Sentinel</span>
         </div>
     </nav>
     <div class="container">
@@ -62,13 +64,52 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
+        <!-- Pipeline Security Summary (Poutine + Zizmor) -->
+        <div class="row mb-4" id="pipeline-summary-row">
+            <div class="col-12">
+                <div class="card bg-secondary text-white shadow">
+                    <div class="card-body">
+                        <h5 class="card-title">Pipeline Security (Poutine & Zizmor)</h5>
+                        <div id="pipeline-summary" class="d-flex gap-3">
+                            <div class="p-2 bg-dark rounded">
+                                <span id="pipeline-critical" class="fs-4 text-danger">0</span> Critical
+                            </div>
+                            <div class="p-2 bg-dark rounded">
+                                <span id="pipeline-high" class="fs-4 text-warning">0</span> High
+                            </div>
+                            <div class="p-2 bg-dark rounded">
+                                <span id="pipeline-medium" class="fs-4 text-info">0</span> Medium
+                            </div>
+                            <div class="p-2 bg-dark rounded">
+                                <span id="pipeline-low" class="fs-4 text-primary">0</span> Low
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Attack Path Visualization -->
-        <div class="row mb-4">
+        <div class="row mb-4" id="attack-path-row">
             <div class="col-12">
                 <div class="card bg-secondary text-white shadow">
                     <div class="card-body">
                         <h5 class="card-title">Attack Paths (AI-Generated)</h5>
                         <div id="attack-graph" style="width:100%; height:400px;"></div>
+                        <div id="attack-error" class="text-warning mt-2" style="display:none;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Management Report Card -->
+        <div class="row mb-4" id="summary-row">
+            <div class="col-12">
+                <div class="card bg-secondary text-white shadow">
+                    <div class="card-body">
+                        <h5 class="card-title">AI Executive Summary</h5>
+                        <div id="exec-summary" class="text-muted">No AI analysis available. Run with --analyze to generate one.</div>
+                        <div id="risk-score" class="mt-2"></div>
                     </div>
                 </div>
             </div>
@@ -200,6 +241,18 @@ DASHBOARD_HTML = r"""
                     options: { plugins: { legend: { labels: { color: 'white' } } } }
                 });
 
+                // Pipeline-specific stats (Poutine + Zizmor)
+                const pipeline = data.filter(f => f.tool === 'Poutine' || f.tool === 'Zizmor');
+                const pCounts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
+                pipeline.forEach(f => {
+                    const sev = f.severity.toUpperCase();
+                    pCounts[sev] = (pCounts[sev] || 0) + 1;
+                });
+                document.getElementById('pipeline-critical').textContent = pCounts.CRITICAL;
+                document.getElementById('pipeline-high').textContent = pCounts.HIGH;
+                document.getElementById('pipeline-medium').textContent = pCounts.MEDIUM;
+                document.getElementById('pipeline-low').textContent = pCounts.LOW;
+
                 document.getElementById('searchInput').addEventListener('input', applyFilters);
                 document.getElementById('toolFilter').addEventListener('change', applyFilters);
                 document.getElementById('severityFilter').addEventListener('change', applyFilters);
@@ -233,6 +286,11 @@ DASHBOARD_HTML = r"""
         fetch('/api/attack-paths')
             .then(res => res.json())
             .then(data => {
+                if (data.error) {
+                    document.getElementById('attack-error').style.display = 'block';
+                    document.getElementById('attack-error').textContent = data.error;
+                    return;
+                }
                 if (!data.nodes || data.nodes.length === 0) return;
                 const container = document.getElementById('attack-graph');
                 const width = container.clientWidth;
@@ -289,6 +347,25 @@ DASHBOARD_HTML = r"""
                     node.attr('cx', d => d.x).attr('cy', d => d.y);
                     label.attr('x', d => d.x).attr('y', d => d.y);
                 });
+            })
+            .catch(err => {
+                document.getElementById('attack-error').style.display = 'block';
+                document.getElementById('attack-error').textContent = 'Could not load attack graph: ' + err.message;
+            });
+
+        // AI Summary
+        fetch('/api/summary')
+            .then(res => res.json())
+            .then(data => {
+                if (data.executive_summary) {
+                    document.getElementById('exec-summary').textContent = data.executive_summary;
+                    if (data.risk_score) {
+                        document.getElementById('risk-score').innerHTML = `
+                            <span class="badge bg-${data.risk_score > 70 ? 'danger' : data.risk_score > 40 ? 'warning text-dark' : 'success'} fs-6">
+                                Risk Score: ${data.risk_score}/100
+                            </span>`;
+                    }
+                }
             });
     </script>
 </body>
@@ -299,6 +376,12 @@ def load_findings():
     if not os.path.exists(FINDINGS_FILE):
         return []
     with open(FINDINGS_FILE) as f:
+        return json.load(f)
+
+def load_ai_summary():
+    if not os.path.exists(AI_SUMMARY_FILE):
+        return {}
+    with open(AI_SUMMARY_FILE) as f:
         return json.load(f)
 
 @app.route('/')
@@ -314,9 +397,13 @@ def api_findings():
 def api_history():
     return jsonify(get_all_scans())
 
+@app.route('/api/summary')
+def api_summary():
+    return jsonify(load_ai_summary())
+
 @app.route('/api/attack-paths')
 def api_attack_paths():
-    """Return LLM-generated attack paths for the latest scan."""
+    """Return LLM-generated attack paths for the latest scan, gracefully handle missing Ollama."""
     findings = load_findings()
     if not findings:
         return jsonify({"attack_paths": [], "nodes": [], "links": []})
@@ -326,7 +413,6 @@ def api_attack_paths():
         analysis = analyzer.analyze(findings)
         attack_paths = analysis.get("attack_paths", [])
         
-        # Build nodes and links for D3.js force graph
         nodes = []
         links = []
         node_ids = set()
@@ -343,7 +429,6 @@ def api_attack_paths():
                         "title": finding.get("title", "")[:50] if finding else ""
                     })
                     node_ids.add(fid)
-            # Link nodes in order
             for i in range(len(involved) - 1):
                 links.append({
                     "source": involved[i],
@@ -351,13 +436,13 @@ def api_attack_paths():
                     "description": path.get("description", "")
                 })
         
-        return jsonify({
-            "attack_paths": attack_paths,
-            "nodes": nodes,
-            "links": links
-        })
+        return jsonify({"attack_paths": attack_paths, "nodes": nodes, "links": links})
     except Exception as e:
-        return jsonify({"error": str(e), "attack_paths": [], "nodes": [], "links": []})
+        return jsonify({"error": f"AI analysis unavailable: {str(e)}. Run with --analyze to generate.", "attack_paths": [], "nodes": [], "links": []})
+
+@app.route('/api/scans')
+def api_scans():
+    return jsonify(get_all_scans())
 
 def start_server(host='0.0.0.0', port=8080):
     app.run(host=host, port=port, debug=True)

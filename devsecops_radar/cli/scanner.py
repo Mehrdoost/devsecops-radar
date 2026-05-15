@@ -46,10 +46,11 @@ def main():
     parser.add_argument('--zizmor', type=str, help='Zizmor JSON file or repository path')
     parser.add_argument('--rules', type=str, help='Path to directory with custom JSON rule files')
     parser.add_argument('--output', type=str, default='findings.json', help='Output file for merged findings')
-    parser.add_argument('--analyze', action='store_true', help='Enable LLM analysis (requires Ollama running locally)')
+    parser.add_argument('--analyze', action='store_true', help='Enable LLM analysis')
     parser.add_argument('--llm-backend', type=str, default='ollama', choices=['ollama', 'litellm'],
-                        help='LLM backend to use (default: ollama)')
-    parser.add_argument('--llm-model', type=str, help='LLM model name (overrides default)')
+                        help='LLM backend')
+    parser.add_argument('--llm-model', type=str, help='LLM model name')
+    parser.add_argument('--policy', type=str, help='Path to policy JSON file')
     args = parser.parse_args()
 
     all_findings = []
@@ -77,6 +78,14 @@ def main():
 
     if not all_findings:
         print("[WARNING] No findings were loaded. The dashboard will be empty.")
+
+    # Evaluate policy (if provided)
+    if args.policy:
+        passed, msg = RuleFusion.evaluate_policy(all_findings, args.policy)
+        print(f"[POLICY] {msg}")
+        if not passed:
+            print("[FATAL] Policy check failed. Use '--no-policy' or fix the violations.")
+            sys.exit(1)
 
     try:
         with open(args.output, 'w') as f:
