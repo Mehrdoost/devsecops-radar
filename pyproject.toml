@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devsecops-radar"
-version = "0.2.2"
+version = "0.2.3"
 description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
 readme = "README.md"
 license = {text = "MIT"}
@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.12",
 ]
-ependencies = [
+dependencies = [
     "flask>=3.0",
     "semgrep>=1.0",
     "pyyaml>=6.0",
