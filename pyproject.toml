@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devsecops-radar"
-version = "0.2.4"
+version = "0.2.5"
 description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 authors = [
     {name = "Mehrdoost", email = "70381337+Mehrdoost@users.noreply.github.com"}
 ]
@@ -15,7 +15,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Topic :: Security",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.12",
 ]
