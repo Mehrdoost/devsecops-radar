@@ -1,0 +1,2 @@
+recursive-include devsecops_radar/web/templates *
+recursive-include devsecops_radar/web/static *

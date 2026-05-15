@@ -9,7 +9,7 @@ description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Mehrdoost", email = "mehrdoost@users.noreply.github.com"}
+    {name = "Mehrdoost", email = "70381337+Mehrdoost@users.noreply.github.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -32,6 +32,10 @@ Source = "https://github.com/Mehrdoost/devsecops-radar"
 
 [tool.setuptools]
 packages = ["devsecops_radar", "devsecops_radar.core", "devsecops_radar.cli", "devsecops_radar.web", "devsecops_radar.scanners"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"devsecops_radar.web" = ["templates/*", "static/css/*", "static/js/*"]
 
 [project.scripts]
 devsecops-radar = "devsecops_radar.cli.scanner:main"
