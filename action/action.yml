@@ -1,5 +1,5 @@
 name: 'Pipeline Sentinel CI/CD Scan'
-description: 'Aggregate security findings from Trivy, Semgrep, and Poutine'
+description: 'Aggregate security findings from Trivy, Semgrep, Poutine, and Zizmor'
 author: 'Mehrdoost'
 branding:
   icon: 'shield'
@@ -16,6 +16,10 @@ inputs:
     default: ''
   poutine_report:
     description: 'Path to Poutine JSON report'
+    required: false
+    default: ''
+  zizmor_report:
+    description: 'Path to Zizmor JSON report'
     required: false
     default: ''
   findings_file:
@@ -51,6 +55,7 @@ runs:
           --trivy "${{ inputs.trivy_report }}" \
           --semgrep "${{ inputs.semgrep_report }}" \
           --poutine "${{ inputs.poutine_report }}" \
+          --zizmor "${{ inputs.zizmor_report }}" \
           --output "${{ inputs.findings_file }}"
 
     - name: Generate summary
