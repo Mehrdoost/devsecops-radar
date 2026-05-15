@@ -61,7 +61,7 @@ Pipeline Sentinel unifies container scanning, static analysis, and pipeline secu
 
 ---
 
-## ✨ What's New in v0.3.0
+## ✨ What's New in v0.2.0
 
 | Capability | Description |
 | :--- | :--- |
