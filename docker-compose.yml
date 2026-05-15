@@ -5,7 +5,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./sample_findings.json:/data/findings.json
+      - ./findings.json:/data/findings.json
       - radar_data:/data
 
 volumes:
