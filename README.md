@@ -81,8 +81,8 @@ Pipeline Sentinel is designed to be **flexible** — you decide where it fits be
 [Gitleaks scan] ┘
 ```
 
-> **📌 Diagram Placeholder:** Add your network flow diagram here as `docs/network_flow.png`.  
-> `![Network Flow Diagram](docs/network_flow.png)`
+> **📌 Diagram Placeholder:**  
+> `![Network Flow Diagram](docs/architecture.png)`
 
 ---
 
