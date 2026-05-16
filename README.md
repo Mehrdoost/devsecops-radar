@@ -82,7 +82,7 @@ Pipeline Sentinel is designed to be **flexible** — you decide where it fits be
 ```
 
 > **📌 Diagram Placeholder:**  
-> `![Network Flow Diagram](docs/architecture.png)`
+![Network Flow Diagram](docs/architecture.png)
 
 ---
 
