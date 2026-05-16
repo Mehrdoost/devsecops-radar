@@ -20,7 +20,8 @@ class RuleFusion:
         self.local_rules_path = (
             Path(local_rules_path) if local_rules_path else None
         )
-        self.community_repo = community_repo or (
+        self.community_repo = community_repo or os.environ.get(
+            "COMMUNITY_RULES_REPO",
             "https://github.com/Mehrdoost/devsecops-radar-rules.git"
         )
         self.findings: List[Dict[str, Any]] = []
@@ -84,7 +85,9 @@ class RuleFusion:
     # ── policy engine ─────────────────────────────────────────
 
     @staticmethod
-    def evaluate_policy(findings: List[Dict[str, Any]], policy_file: str) -> Tuple[bool, str]:
+    def evaluate_policy(
+        findings: List[Dict[str, Any]], policy_file: str
+    ) -> Tuple[bool, str]:
         """
         Evaluate a policy file against the findings.
         Returns (pass, message).
@@ -92,12 +95,17 @@ class RuleFusion:
         Example: {"max_critical": 5, "on_violation": "fail"}
         """
         if not os.path.exists(policy_file):
-            return True, f"Policy file '{policy_file}' not found. Skipping evaluation."
+            return True, (
+                f"Policy file '{policy_file}' not found. "
+                "Skipping evaluation."
+            )
 
         with open(policy_file, "r") as f:
             policy = json.load(f)
 
-        critical_count = sum(1 for f in findings if f.get("severity") == "CRITICAL")
+        critical_count = sum(
+            1 for f in findings if f.get("severity") == "CRITICAL"
+        )
         max_critical = policy.get("max_critical")
         if max_critical is not None and critical_count > max_critical:
             action = policy.get("on_violation", "fail")
@@ -140,18 +148,21 @@ class RuleFusion:
             if len(data) == 0:
                 print(f"[WARNING] {filename}: empty list, skipping")
                 return False
-            # at least one item must be a dict with finding keys
             for item in data:
                 if isinstance(item, dict) and self._is_finding(item):
                     return True
-            print(f"[WARNING] {filename}: list items do not look like findings, skipping")
+            print(
+                f"[WARNING] {filename}: list items do not look like "
+                "findings, skipping"
+            )
             return False
         if isinstance(data, dict):
             known_keys = {"Results", "results", "findings"}
             if any(k in data for k in known_keys):
                 return True
             print(
-                f"[WARNING] {filename}: unrecognised JSON structure, skipping"
+                f"[WARNING] {filename}: unrecognised JSON structure, "
+                "skipping"
             )
             return False
         print(f"[WARNING] {filename}: unexpected JSON type, skipping")
@@ -185,7 +196,9 @@ class RuleFusion:
                         "title": vuln.get("Title", ""),
                         "description": vuln.get("Description", ""),
                         "package": vuln.get("PkgName", ""),
-                        "installed_version": vuln.get("InstalledVersion", ""),
+                        "installed_version": vuln.get(
+                            "InstalledVersion", ""
+                        ),
                         "fixed_version": vuln.get("FixedVersion", ""),
                     }
                 )
@@ -198,10 +211,13 @@ class RuleFusion:
                     "target": result.get("path", filename),
                     "id": result.get("check_id", ""),
                     "severity": (
-                        result.get("extra", {}).get("severity", "WARNING")
+                        result.get("extra", {})
+                        .get("severity", "WARNING")
                     ).upper(),
                     "title": result.get("check_id", ""),
-                    "description": result.get("extra", {}).get("message", ""),
+                    "description": result.get("extra", {}).get(
+                        "message", ""
+                    ),
                     "line": (result.get("start", {}) or {}).get("line", 0),
                 }
             )

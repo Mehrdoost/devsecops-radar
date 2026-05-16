@@ -29,6 +29,7 @@ DASHBOARD_HTML = r"""
         .badge { font-size: 0.8rem; padding: 0.4em 0.6em; }
         code { color: #38bdf8; }
         #attack-graph, #topology-graph { background: #1e293b; border-radius: 10px; }
+        #attack-detail { background: #1e293b; border-radius: 10px; padding: 1rem; margin-top: 1rem; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
@@ -37,7 +38,7 @@ DASHBOARD_HTML = r"""
     <nav class="navbar navbar-dark border-bottom border-secondary mb-4" style="background:#1e293b;">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h1">🛡️ Pipeline Sentinel</span>
-            <span class="text-muted">v0.3.0</span>
+            <span class="text-muted">v0.3.2</span>
         </div>
     </nav>
 
@@ -83,6 +84,7 @@ DASHBOARD_HTML = r"""
                     <div class="card-body">
                         <h5 class="card-title">Attack Paths (AI-Generated)</h5>
                         <div id="attack-graph" style="width:100%; height:400px;"></div>
+                        <div id="attack-detail" style="display:none;"></div>
                         <div id="attack-error" class="text-warning mt-2" style="display:none;"></div>
                     </div>
                 </div>
@@ -128,6 +130,7 @@ DASHBOARD_HTML = r"""
                                     <option value="Semgrep">Semgrep</option>
                                     <option value="Poutine">Poutine</option>
                                     <option value="Zizmor">Zizmor</option>
+                                    <option value="Gitleaks">Gitleaks</option>
                                 </select>
                             </div>
                             <div class="col">
@@ -221,10 +224,10 @@ DASHBOARD_HTML = r"""
         fetch('/api/findings', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
-                allFindings = data;
-                renderTable(data);
+                allFindings = data.items;
+                renderTable(allFindings);
                 const counts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
-                data.forEach(f => {
+                allFindings.forEach(f => {
                     const sev = f.severity.toUpperCase();
                     counts[sev] = (counts[sev] || 0) + 1;
                 });
@@ -239,7 +242,7 @@ DASHBOARD_HTML = r"""
                     },
                     options: { plugins: { legend: { labels: { color: 'white' } } } }
                 });
-                const pipeline = data.filter(f => f.tool === 'Poutine' || f.tool === 'Zizmor');
+                const pipeline = allFindings.filter(f => f.tool === 'Poutine' || f.tool === 'Zizmor');
                 const pCounts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
                 pipeline.forEach(f => {
                     const sev = f.severity.toUpperCase();
@@ -316,6 +319,11 @@ DASHBOARD_HTML = r"""
                             case 'LOW': return '#0d6efd';
                             default: return '#6c757d';
                         }
+                    })
+                    .on('click', (event, d) => {
+                        const detail = document.getElementById('attack-detail');
+                        detail.innerHTML = `<strong>${d.id}</strong><br>Severity: ${d.severity}<br>${d.title}`;
+                        detail.style.display = 'block';
                     })
                     .call(d3.drag()
                         .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
@@ -409,7 +417,7 @@ DASHBOARD_HTML = r"""
     </script>
 </body>
 </html>
-"""  
+"""
 
 def load_findings():
     if not os.path.exists(FINDINGS_FILE):

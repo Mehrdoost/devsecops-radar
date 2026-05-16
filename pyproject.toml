@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devsecops-radar"
-version = "0.2.6"
+version = "0.2.7"
 description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
 readme = "README.md"
 license = "MIT"
@@ -39,6 +39,7 @@ trivy = "devsecops_radar.scanners.trivy:TrivyScanner"
 semgrep = "devsecops_radar.scanners.semgrep:SemgrepScanner"
 poutine = "devsecops_radar.scanners.poutine:PoutineScanner"
 zizmor = "devsecops_radar.scanners.zizmor:ZizmorScanner"
+gitleaks = "devsecops_radar.scanners.gitleaks:GitleaksScanner"
 
 [tool.setuptools]
 packages = [

@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument('--semgrep', type=str)
     parser.add_argument('--poutine', type=str)
     parser.add_argument('--zizmor', type=str)
+    parser.add_argument('--gitleaks', type=str)
     parser.add_argument('--rules', type=str)
     parser.add_argument('--output', type=str, default='findings.json')
     parser.add_argument('--analyze', action='store_true')
@@ -32,9 +33,11 @@ def parse_args():
     parser.add_argument('--llm-model', type=str)
     parser.add_argument('--policy', type=str)
     parser.add_argument('--fix', action='store_true')
+    parser.add_argument('--review', action='store_true', help='Review each AI fix before applying')
     parser.add_argument('--report', type=str)
     parser.add_argument('--topology', type=str)
     parser.add_argument('--compliance', type=str, choices=['CIS', 'PCI-DSS', 'ISO27001'])
+    parser.add_argument('--wizard', action='store_true', help='Interactive first-time setup wizard')
     return parser.parse_args()
 
 def run_scans(args, plugins):
@@ -44,6 +47,7 @@ def run_scans(args, plugins):
         'semgrep': args.semgrep,
         'poutine': args.poutine,
         'zizmor': args.zizmor,
+        'gitleaks': getattr(args, 'gitleaks', None),
     }
     for name, target in scanner_targets.items():
         if target:
@@ -102,8 +106,36 @@ def run_analysis(args, findings, topology=None):
     logger.success(f"AI summary saved to {summary_file}")
     return analysis
 
+def wizard():
+    """Interactive setup wizard for first-time users."""
+    print("🛡️  Welcome to Pipeline Sentinel – Quick Setup Wizard")
+    print("This will guide you through scanning a sample project.\n")
+    # 1. Ollama check
+    import subprocess
+    try:
+        subprocess.run(['ollama', '--version'], capture_output=True, check=True)
+    except:
+        print("[!] Ollama not found. Installing...")
+        subprocess.run(['curl', '-fsSL', 'https://ollama.com/install.sh', '|', 'sh'], shell=True)
+    # 2. Pull model
+    print("📥 Pulling AI model llama3.2 ...")
+    subprocess.run(['ollama', 'pull', 'llama3.2:latest'])
+    # 3. Scan current directory with Semgrep and Trivy if available
+    print("🔍 Scanning current directory with Semgrep...")
+    if subprocess.run(['which', 'semgrep'], capture_output=True).returncode == 0:
+        subprocess.run(['semgrep', '--config=auto', '--json', '--output', 'semgrep.json', '.'], check=False)
+    print("🐳 Scanning with Trivy (if Docker installed)...")
+    if subprocess.run(['which', 'docker'], capture_output=True).returncode == 0:
+        subprocess.run(['trivy', 'image', '--format', 'json', '--output', 'trivy.json', 'alpine:latest'], check=False)
+    # 4. Merge and start dashboard
+    os.system('devsecops-radar --trivy trivy.json --semgrep semgrep.json')
+    os.system('devsecops-radar-web')
+
 def main():
     args = parse_args()
+    if args.wizard:
+        wizard()
+        return
     logger.remove()
     logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
 
@@ -125,12 +157,20 @@ def main():
 
     ai_summary = run_analysis(args, findings, topology)
 
-    # Compute dynamic risk scores
     if findings and topology:
         for f in findings:
             f['dynamic_risk_score'] = compute_dynamic_risk_score(f, topology)
 
     if args.fix and ai_summary:
+        if args.review:
+            # Human-in-the-loop: show diff and ask confirmation
+            from devsecops_radar.core.remediation import generate_fix_commands
+            cmds = generate_fix_commands(findings, ai_summary)
+            print("Proposed fixes:\n", cmds)
+            confirm = input("Apply these fixes? (y/N): ")
+            if confirm.lower() != 'y':
+                logger.info("Fixes skipped.")
+                return
         fixed = auto_fix(findings, ai_summary)
         if fixed:
             logger.success(f"Applied fixes: {fixed}")
