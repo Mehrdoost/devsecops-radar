@@ -15,70 +15,74 @@
 ---
 
 ## 📖 Table of Contents
-1. [What Is Pipeline Sentinel?](#-what-is-pipeline-sentinel)
-2. [Roadmap](#️-roadmap)
-3. [Quick Start](#-quick-start)
-4. [Installation](#-installation)
-5. [How to Use](#-how-to-use)
-6. [Complete Command Reference](#-complete-command-reference)
-7. [Core Capabilities](#-core-capabilities)
-8. [Architecture](#️-architecture)
-9. [Security](#-security)
-10. [GitHub Action](#-github-action)
-11. [Contributing](#-contributing)
-12. [Author](#-author)
-13. [License](#-license)
+1. [What Is Pipeline Sentinel? (Simple Explanation)](#-what-is-pipeline-sentinel-simple-explanation)
+2. [Why You Need It](#-why-you-need-it)
+3. [Where to Run It in Your Network](#-where-to-run-it-in-your-network)
+4. [Dashboard Preview](#-dashboard-preview)
+5. [Quick Start](#-quick-start)
+6. [Installation](#-installation)
+7. [Complete Command Reference](#-complete-command-reference)
+8. [Core Capabilities](#-core-capabilities)
+9. [Architecture](#️-architecture)
+10. [Roadmap](#️-roadmap)
+11. [GitHub Action](#-github-action)
+12. [Contributing](#-contributing)
+13. [Author](#-author)
+14. [License](#-license)
 
 ---
 
-## 📸 What Is Pipeline Sentinel?
+## 👨‍👩‍👧 What Is Pipeline Sentinel? (Simple Explanation)
 
-**Pipeline Sentinel** is a security observability platform built for **CI/CD pipelines**. It takes the fragmented JSON output from popular open‑source scanners — **Trivy** (containers), **Semgrep** (SAST), **Poutine** (GitLab CI), and **Zizmor** (GitHub Actions) — and merges them into a **single, beautiful, offline‑ready dashboard**.
+Imagine you have several security guards, each watching a different door of a building. They all shout their findings in different languages, and you have to run around to understand what’s going on.
 
-> Think of it as **Nuclei for CI/CD security**: define your own rules, feed it JSON, and let it map your attack surface.
+**Pipeline Sentinel** puts them all in one room, translates their reports, and shows you a single, clear screen with the full picture. It connects to tools like **Trivy** (checks your containers), **Semgrep** (scans your code), **Poutine** (audits your GitLab pipelines), and **Zizmor** (secures your GitHub Actions). Instead of digging through multiple JSON files, you get a **beautiful, dark‑mode dashboard** that tells you what’s critical, how risks are trending, and even how an attacker might chain several small issues into a big problem.
 
-### 🎯 Who Is This For?
+Think of it as a **security camera system for your entire CI/CD pipeline** — it watches everything, alerts you, and even suggests fixes, all without needing internet access if you want.
 
-| Persona | How Pipeline Sentinel Helps |
+---
+
+## 💥 Why You Need It
+
+In 2026, **supply chain attacks** have become the #1 threat. Tools like Trivy themselves were compromised, and attackers now inject malicious code directly into build pipelines. **You can no longer just scan your code; you must scan your pipeline.**
+
+Pipeline Sentinel gives you:
+*   **One screen for all scanners** – stop juggling log files.
+*   **AI that understands attack chains** – “A leaked secret + an old library = a disaster.”
+*   **Automatic fixes** – with a single flag, it patches files and opens a pull request.
+*   **Compliance reports** – generate a PDF for your boss or auditor.
+*   **100% offline capable** – works in air‑gapped environments where security matters most.
+
+---
+
+## 📍 Where to Run It in Your Network
+
+Pipeline Sentinel is designed to be **flexible** — you decide where it fits best:
+
+| Deployment | Description |
 | :--- | :--- |
-| **DevSecOps Engineers** | One dashboard instead of four. Merge scanner reports and see the full picture instantly. |
-| **Penetration Testers** | Feed custom tool JSON, generate AI‑powered attack graphs with MITRE ATT&CK. |
-| **Security Teams (air‑gapped)** | Works 100% offline. No CDN, no external API calls. |
-| **Compliance Officers** | Generate PDF reports aligned to CIS, PCI‑DSS, or ISO 27001. |
-| **CI/CD Pipeline Owners** | Integrate via GitHub Action to get a security summary on every PR. |
+| 🖥️ **Local Developer Machine** | Run the CLI and dashboard right on your laptop. Perfect for individual pentesters or developers who want instant feedback. |
+| 🔧 **CI/CD Runner** | Use the GitHub Action or call `devsecops-radar` directly in your Jenkins/GitLab CI scripts. It can fail the build if critical vulnerabilities exceed your policy (`--policy`). |
+| 🏢 **Central Security Server** | Install on a dedicated server (via Docker or pip) that collects scan results from multiple teams. The dashboard becomes a shared security operations console. |
+| 🌐 **Air‑Gapped Networks** | Copy the Docker image and sample data to an offline server. The dashboard works with zero external calls — all assets are embedded. |
 
-### 📊 Dashboard Preview
+### Typical Network Flow
 
-![Dashboard Demo](docs/Demo.gif)
+```text
+[Trivy scan] ──┐
+[Semgrep scan] ─┤
+[Poutine scan] ─┼──> devsecops-radar (CLI) ──> findings.json ──> Dashboard (Flask) ──> Browser
+[Zizmor scan] ─┘
+```
+
+*(Note: You can add a diagram image here. Place your `network_flow.png` inside `docs/` and reference it as: `![Network Flow Diagram](docs/network_flow.png)`)*
 
 ---
 
-## 🗺️ Roadmap
+## 📸 Dashboard Preview
 
-Pipeline Sentinel evolves rapidly. Here is the public roadmap:
-
-| Phase | Feature | Status |
-| :--- | :--- | :--- |
-| ✅ **Phase 1** | Multi‑scanner plugin engine (Trivy, Semgrep, Poutine, Zizmor) | Done |
-| ✅ **Phase 1** | LLM‑powered analysis (Ollama + LiteLLM) | Done |
-| ✅ **Phase 1** | Scan history, trend chart, scan diff | Done |
-| ✅ **Phase 1** | GitHub Action (composite) | Done |
-| ✅ **Phase 1** | Docker image (multi‑stage, non‑root) | Done |
-| ✅ **Phase 2** | Attack‑path visualisation with MITRE ATT&CK & topology | Done |
-| ✅ **Phase 2** | Policy‑as‑Code engine (`--policy`) | Done |
-| ✅ **Phase 2** | Auto‑remediation engine (`--fix`) | Done |
-| ✅ **Phase 2** | Compliance reports (PDF) | Done |
-| ✅ **Phase 2** | Hybrid RuleFusion engine (local + community rules) | Done |
-| ✅ **Phase 3** | Web dashboard Blueprint refactor (modular Flask) | Done |
-| ✅ **Phase 3** | Real scanner plugin system with entry points | Done |
-| ✅ **Phase 3** | SQLAlchemy ORM for scan history | Done |
-| ✅ **Phase 3** | SBOM health reports | Done |
-| ✅ **Phase 3** | Pipeline Sentry (live webhook agent) | Done |
-| 🔲 **Phase 4** | Jira / Slack integration | Planned |
-| 🔲 **Phase 4** | SARIF & CycloneDX support | Planned |
-| 🔲 **Phase 4** | Rule Marketplace (community YAML rules) | Planned |
-
-> See the [open issues](https://github.com/Mehrdoost/devsecops-radar/issues) for a full list of proposed features.
+![Pipeline Sentinel Dashboard](docs/Demo.gif)
+*(Severity doughnut, trend line chart, attack‑path graph, topology view, executive summary — all fully offline.)*
 
 ---
 
@@ -130,76 +134,6 @@ docker compose up
 
 ---
 
-## 🧭 How to Use
-
-### Step 1 — Run Your Security Scanners
-Generate JSON output from your tools:
-
-```bash
-trivy image --format json -o trivy.json nginx:latest
-semgrep --config=auto --json --output semgrep.json .
-poutine scan ./repo --format json --output poutine.json
-zizmor scan ./repo --output zizmor.json --format json
-```
-
-### Step 2 — Merge Findings with the CLI
-```bash
-devsecops-radar --trivy trivy.json --semgrep semgrep.json --poutine poutine.json --zizmor zizmor.json
-```
-This produces a single `findings.json` file with all findings merged and normalised.
-
-### Step 3 — View the Dashboard
-```bash
-devsecops-radar-web
-```
-The dashboard shows:
-*   **Severity Breakdown** — Doughnut chart of CRITICAL, HIGH, MEDIUM, LOW counts
-*   **Trend Over Time** — Line chart showing how severity counts evolve across scans
-*   **Pipeline Security** — Dedicated Poutine + Zizmor statistics card
-*   **Attack Path Graph** — Interactive D3.js force graph (when AI analysis is enabled)
-*   **Executive Summary** — Risk score and AI‑generated summary
-*   **Findings Table** — Searchable, filterable table of all findings
-
-### Step 4 — Enable AI Analysis (Optional)
-```bash
-ollama pull llama3.2:latest
-devsecops-radar --trivy trivy.json --analyze
-devsecops-radar-web
-```
-The LLM generates `findings_ai_summary.json` containing:
-*   `executive_summary`, `risk_score`
-*   `attack_paths` with MITRE ATT&CK tactics
-*   `top_remediations` (some with `fix_diff`)
-*   `false_positives_likely`
-
-### Step 5 — Auto‑Remediation
-```bash
-devsecops-radar --trivy trivy.json --analyze --fix
-```
-The tool will apply AI‑suggested fixes, create a new git branch `auto-fix`, and push it for review.
-
-### Step 6 — Policy Enforcement
-Create a `policy.json` file:
-```json
-{
-  "max_critical": 5, 
-  "on_violation": "fail"
-}
-```
-
-```bash
-devsecops-radar --trivy trivy.json --policy policy.json
-```
-If critical findings exceed 5, the command exits with code 1 — suitable for CI/CD gates.
-
-### Step 7 — Generate Compliance Reports
-```bash
-devsecops-radar --trivy trivy.json --analyze --compliance CIS --report cis-report.pdf
-```
-A PDF report is created with an executive summary, risk score, findings table, and compliance mapping.
-
----
-
 ## 📋 Complete Command Reference
 
 ### `devsecops-radar` — CLI Flags
@@ -215,7 +149,7 @@ A PDF report is created with an executive summary, risk score, findings table, a
 | `--analyze` | Enable LLM analysis (Ollama required) | `--analyze` |
 | `--llm-backend` | `ollama` (default) or `litellm` | `--llm-backend litellm` |
 | `--llm-model` | Model name | `--llm-model gpt-4o-mini` |
-| `--fix` | Auto‑apply AI‑suggested fixes | `--fix` |
+| `--fix` | Auto‑apply AI‑suggested fixes and create a git branch | `--fix` |
 | `--topology` | Path to topology JSON file | `--topology topology.json` |
 | `--compliance` | Framework: `CIS`, `PCI-DSS`, `ISO27001` | `--compliance CIS` |
 | `--report` | Generate PDF report (output filename) | `--report security_report.pdf` |
@@ -260,7 +194,7 @@ devsecops-radar-web    # Trend chart now shows multiple data points
 ## ✨ Core Capabilities
 
 ### 🔌 Multi‑Scanner Plugin Architecture
-Built‑in support for four scanners with a real plugin system based on `ScannerPlugin` abstract class. Third‑party scanners can be installed as separate packages and discovered automatically via Python entry points.
+Built‑in support for Trivy, Semgrep, Poutine, and Zizmor, with a real plugin system based on `ScannerPlugin` abstract class. Third‑party scanners can be installed separately and discovered automatically via Python entry points. An adapter pattern validates all findings with Pydantic before processing, ensuring data integrity.
 
 | Scanner | What It Scans | Flag |
 | :--- | :--- | :--- |
@@ -270,37 +204,57 @@ Built‑in support for four scanners with a real plugin system based on `Scanner
 | **Zizmor** | GitHub Actions workflow security | `--zizmor` |
 
 ### 🧩 Hybrid RuleFusion Engine
-*   **Offline** — Load custom JSON rules from any local directory (`--rules ~/my-rules/`)
-*   **Online** — Pull community‑curated rules with `--update-rules`
+*   **Offline**: load custom JSON rules from any local directory (`--rules ~/my-rules/`)
+*   **Online**: pull community‑curated rules with `--update-rules`
 *   Auto‑detects Trivy, Semgrep, Poutine, Zizmor, and plain‑list formats
 *   Policy evaluation built directly into the engine
 
-### 🧠 LLM‑Powered Analysis
-*   Ollama (local, offline) and LiteLLM (OpenAI, Anthropic, etc.) support
-*   Engineered few‑shot prompts with structured JSON output
-*   Token‑aware finding selection for large datasets
-*   Produces executive summaries, risk scores, attack paths with MITRE ATT&CK mapping, and remediation guidance
+### 🧠 LLM‑Powered Analysis (with Retries & Few‑Shot Examples)
+*   Retry logic with exponential backoff for unstable LLM endpoints (handles network glitches gracefully).
+*   Maximum findings token limit configurable via `ANALYZER_MAX_FINDINGS` env variable.
+*   Updated Few‑Shot Examples covering real‑world supply chain attack chains.
+*   Produces structured JSON with `executive_summary`, `risk_score`, `attack_paths` (with MITRE ATT&CK), `top_remediations`, and `false_positives_likely`.
+*   Supports Ollama (local, offline) and LiteLLM (OpenAI, Anthropic, etc.).
 
-### 🕸️ Attack Path Visualization
-Interactive D3.js force graph showing how separate vulnerabilities can be chained into an attack scenario. Accepts a topology file to map findings onto your actual infrastructure.
+### 🕸️ Multi‑Step Attack Path Visualization
+Interactive D3.js force graph that chains multiple findings into a realistic attack scenario. Uses LLM‑generated `attack_paths` with MITRE techniques. Accepts a topology file to map findings onto your actual infrastructure, showing lateral movement across servers and subnets.
 
 ### 🛡️ Policy‑as‑Code
-Define security gates as JSON:
+Define security gates as simple JSON:
 ```json
 {
   "max_critical": 5, 
   "on_violation": "fail"
 }
 ```
+*If critical findings exceed the threshold, the CLI exits with code 1 — perfect for failing CI/CD pipelines.*
 
-### 🛠️ Auto‑Remediation
-AI‑suggested fixes are applied automatically. The tool creates a new git branch and pushes it for review.
+### 🛠️ Auto‑Remediation (`--fix`)
+AI‑suggested fixes are automatically applied to vulnerable files. The tool creates a new git branch (`auto-fix`) and pushes it for review. Also generates a `fix.sh` script with manual commands where automatic patching is not possible.
 
-### 📊 Compliance Reports
-Generate PDF reports with executive summary, risk score, findings table, and mapping to CIS, PCI‑DSS, or ISO 27001 controls.
+### 📊 Compliance & Executive Reports
+Generate professional PDF reports with `--report report.pdf`. Reports include executive summary, risk score, findings table, and compliance mapping (CIS, PCI‑DSS, ISO 27001). Sensitive data (passwords, tokens, JWTs) can be automatically redacted.
 
-### 📈 Scan History & Trends
-SQLite‑backed (with SQLAlchemy ORM) history with trend line chart and scan diff API.
+### 📈 Scan History & Trends (with Pagination)
+SQLAlchemy‑backed database with server‑side pagination for the web dashboard (`/api/findings?page=1&per_page=50`). Scan history is stored efficiently with indexed severity columns, enabling fast trend charts and historical comparisons.
+
+### 🧪 SBOM & Dependency Confusion Detection
+Generate a CycloneDX SBOM from your project using `syft` (via `--sbom`). Detect dependency confusion risks — internal packages that could be impersonated by public registries — by analyzing `package.json` and `requirements.txt`.
+
+### 🔍 RAG‑Powered Security Search
+Ask natural language questions about your scan history: *“When was the last Log4j vulnerability found?”* The built‑in RAG (Retrieval‑Augmented Generation) endpoint (`/api/rag?q=...`) searches through stored findings and returns relevant matches.
+
+### ⚔️ Attack Simulation (Sandbox)
+Generate a simple proof‑of‑concept script for any finding and execute it inside a disposable Docker container to demonstrate the risk without harming your system.
+
+### 📉 Dynamic Risk Scoring
+Beyond CVSS, each finding gets a dynamic risk score based on asset exposure (from topology) and exploit availability. This helps prioritise what to fix first.
+
+### 🔒 Privacy & Offline‑First
+*   All assets (CSS, JS) are embedded — zero CDN calls.
+*   LLM analysis runs locally with Ollama; no data leaves your network.
+*   Optional API key authentication for the dashboard.
+*   Docker image runs as non‑root user.
 
 ---
 
@@ -308,10 +262,10 @@ SQLite‑backed (with SQLAlchemy ORM) history with trend line chart and scan dif
 
 ```text
 devsecops_radar/
-├── cli/            # CLI entry point — plugin discovery, policy, remediation
+├── cli/            # CLI entry point – plugin discovery, policy, remediation
 ├── core/           # RuleFusion engine, DB (SQLAlchemy), LLM analysers
 ├── scanners/       # Pluggable scanner classes (extend ScannerPlugin)
-├── plugins/        # ScannerPlugin abstract base class
+├── plugins/        # ScannerPlugin abstract base class & entry points
 └── web/            # Flask dashboard (modular Blueprints)
     ├── dashboard/  # Main dashboard routes & embedded HTML
     ├── attack_paths/
@@ -320,16 +274,37 @@ devsecops_radar/
     └── sentry/     # Live webhook agent for CI/CD
 ```
 
+*(Note: If you want to add an architecture diagram, place your `architecture.png` inside `docs/` and reference it here: `![Architecture Diagram](docs/architecture.png)`)*
+
 ---
 
-## 🔒 Security
+## 🗺️ Roadmap
 
-*   **Input validation** — All scanner targets are sanitised against command injection.
-*   **Offline‑first** — No data leaves your network.
-*   **LLM privacy** — Ollama runs locally; optional LiteLLM for cloud models.
-*   **API authentication** — Optional API key for dashboard access.
-*   **Non‑root Docker** — Container runs as unprivileged user.
-*   **Policy‑as‑Code** — Enforce gates before deployment.
+| Phase | Feature | Status |
+| :--- | :--- | :--- |
+| ✅ **Phase 1** | Multi‑scanner engine (Trivy, Semgrep, Poutine, Zizmor) | Done |
+| ✅ **Phase 1** | LLM analysis (Ollama + LiteLLM) | Done |
+| ✅ **Phase 1** | Scan history, trend chart, scan diff | Done |
+| ✅ **Phase 1** | GitHub Action (composite) | Done |
+| ✅ **Phase 1** | Docker image (multi‑stage, non‑root) | Done |
+| ✅ **Phase 2** | Attack‑path visualization with MITRE ATT&CK & topology | Done |
+| ✅ **Phase 2** | Policy‑as‑Code engine (`--policy`) | Done |
+| ✅ **Phase 2** | Auto‑remediation engine (`--fix`) | Done |
+| ✅ **Phase 2** | Compliance reports (PDF) | Done |
+| ✅ **Phase 2** | Hybrid RuleFusion engine (local + community rules) | Done |
+| ✅ **Phase 3** | Web dashboard Blueprint refactor (modular Flask) | Done |
+| ✅ **Phase 3** | Real scanner plugin system with entry points | Done |
+| ✅ **Phase 3** | SQLAlchemy ORM with pagination | Done |
+| ✅ **Phase 3** | SBOM & Dependency Confusion Detection | Done |
+| ✅ **Phase 3** | RAG‑powered security search | Done |
+| ✅ **Phase 3** | Attack Simulation (sandbox) | Done |
+| ✅ **Phase 3** | Dynamic Risk Scoring | Done |
+| 🔲 **Phase 4** | Jira / Slack integration | Planned |
+| 🔲 **Phase 4** | SARIF & CycloneDX support | Planned |
+| 🔲 **Phase 4** | Rule Marketplace (community YAML rules) | Planned |
+| 🔲 **Phase 4** | Pull Request assistant (GitHub App) | Planned |
+
+> See the [open issues](https://github.com/Mehrdoost/devsecops-radar/issues) for a full list of proposed features.
 
 ---
 
@@ -358,9 +333,10 @@ For permanent scanner plugins, extend the `ScannerPlugin` class and register it 
 
 ## 👨‍💻 Author
 
-**Mehrdoost**  
+**Mehrdoost** 
 
 [![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost)
+
 
 ---
 
