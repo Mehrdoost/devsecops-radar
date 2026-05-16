@@ -4,11 +4,13 @@ import os
 import sys
 from importlib.metadata import entry_points
 from loguru import logger
+from devsecops_radar.scanners.adapter import ScannerAdapter
 from devsecops_radar.core.analyzer import get_analyzer
 from devsecops_radar.core.database import save_scan
 from devsecops_radar.core.rule_fusion import RuleFusion
 from devsecops_radar.core.remediation import auto_fix, generate_pr
 from devsecops_radar.core.reporting import generate_pdf_report
+from devsecops_radar.core.valuation import compute_dynamic_risk_score
 
 def discover_plugins():
     plugins = {}
@@ -47,13 +49,15 @@ def run_scans(args, plugins):
         if target:
             scanner = plugins.get(name)
             if scanner:
+                adapter = ScannerAdapter(scanner)
                 try:
                     if os.path.isfile(target):
                         logger.info(f"Parsing {name} JSON file: {target}")
-                        all_findings.extend(scanner.parse(target))
+                        validated = adapter.parse(target)
                     else:
                         logger.info(f"Running {name} on: {target}")
-                        all_findings.extend(scanner.run(target))
+                        validated = adapter.run(target)
+                    all_findings.extend([v.dict() for v in validated])
                 except Exception as e:
                     logger.error(f"{name} failed: {e}")
     return all_findings
@@ -120,6 +124,11 @@ def main():
             topology = json.load(f)
 
     ai_summary = run_analysis(args, findings, topology)
+
+    # Compute dynamic risk scores
+    if findings and topology:
+        for f in findings:
+            f['dynamic_risk_score'] = compute_dynamic_risk_score(f, topology)
 
     if args.fix and ai_summary:
         fixed = auto_fix(findings, ai_summary)

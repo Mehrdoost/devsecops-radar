@@ -1,7 +1,8 @@
-from flask import Blueprint, jsonify, render_template_string
+from flask import Blueprint, jsonify, render_template_string, request
 import json
 import os
-from devsecops_radar.core.database import get_all_scans
+from devsecops_radar.core.database import get_all_scans, get_findings_paginated
+from devsecops_radar.core.rag import rag_search
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -408,7 +409,7 @@ DASHBOARD_HTML = r"""
     </script>
 </body>
 </html>
-"""
+"""  
 
 def load_findings():
     if not os.path.exists(FINDINGS_FILE):
@@ -427,8 +428,17 @@ def index():
 
 @dashboard_bp.route('/api/findings')
 def api_findings():
-    return jsonify(load_findings())
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    return jsonify(get_findings_paginated(page, per_page))
 
 @dashboard_bp.route('/api/history')
 def api_history():
     return jsonify(get_all_scans())
+
+@dashboard_bp.route('/api/rag')
+def api_rag():
+    q = request.args.get('q', '')
+    if not q:
+        return jsonify([])
+    return jsonify(rag_search(q))

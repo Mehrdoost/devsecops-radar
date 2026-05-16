@@ -1,44 +1,60 @@
-import json
-import os
-from datetime import datetime
+import re
+import datetime
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 from typing import List, Dict, Any
 
-def generate_pdf_report(findings: List[Dict[str, Any]], ai_summary: Dict[str, Any], output_file: str = "report.pdf"):
+def redact_sensitive(text: str, patterns: List[str] = None) -> str:
+    if patterns is None:
+        patterns = [
+            r'(?i)(password|secret|token|key)\s*[:=]\s*\S+',
+            r'ghp_[a-zA-Z0-9]{36}',
+            r'eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+'
+        ]
+    for pat in patterns:
+        text = re.sub(pat, '***REDACTED***', text)
+    return text
+
+def generate_pdf_report(findings: List[Dict[str, Any]], ai_summary: Dict[str, Any], output_file: str = "report.pdf", redact: bool = True):
     try:
-        from reportlab.lib.pagesizes import A4
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-        from reportlab.lib.styles import getSampleStyleSheet
-        from reportlab.lib import colors
     except ImportError:
-        print("[ERROR] reportlab not installed. Install with 'pip install reportlab'")
+        print("[ERROR] reportlab not installed.")
         return
 
     doc = SimpleDocTemplate(output_file, pagesize=A4)
     elements = []
     styles = getSampleStyleSheet()
+    title = "Pipeline Sentinel Security Report"
+    if redact:
+        title += " (Sensitive Data Redacted)"
+    elements.append(Paragraph(title, styles['Title']))
+    elements.append(Paragraph(f"Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
 
-    # Title
-    elements.append(Paragraph("Pipeline Sentinel Security Report", styles['Title']))
-    elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles['Normal']))
-
-    # Executive Summary
     if ai_summary.get("executive_summary"):
+        summary = ai_summary['executive_summary']
+        if redact:
+            summary = redact_sensitive(summary)
         elements.append(Paragraph("Executive Summary", styles['Heading2']))
-        elements.append(Paragraph(ai_summary['executive_summary'], styles['Normal']))
+        elements.append(Paragraph(summary, styles['Normal']))
         if ai_summary.get("risk_score"):
             elements.append(Paragraph(f"Risk Score: {ai_summary['risk_score']}/100", styles['Normal']))
 
-    # Findings Table
     if findings:
         elements.append(Paragraph("Findings", styles['Heading2']))
         table_data = [["Tool", "ID", "Severity", "Target", "Title"]]
-        for f in findings[:50]:  # limit rows
+        for f in findings[:50]:
+            title = f.get('title', '')
+            if redact:
+                title = redact_sensitive(title)
             table_data.append([
                 f.get('tool',''),
                 f.get('id',''),
                 f.get('severity',''),
-                f.get('target',''),
-                f.get('title','')[:80]
+                redact_sensitive(f.get('target','')) if redact else f.get('target',''),
+                title[:80]
             ])
         t = Table(table_data)
         t.setStyle(TableStyle([

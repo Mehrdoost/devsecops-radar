@@ -2,28 +2,50 @@ import json
 import os
 import re
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import List, Dict, Any, Optional
 
+# --- Retry logic for LLM calls ---
+def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]):
+    session = requests.Session()
+    retries = Retry(
+        total=total,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+        allowed_methods=["POST"]
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    return session
+
+# Default maximum findings sent to LLM (configurable via env)
+MAX_ANALYZER_FINDINGS = int(os.environ.get("ANALYZER_MAX_FINDINGS", "100"))
+
 FEW_SHOT_EXAMPLE = {
-    "executive_summary": "The pipeline shows a critical vulnerability in the web server...",
-    "risk_score": 85,
+    "executive_summary": "A leaked CI/CD credential combined with an unpatched container image creates a critical supply chain attack path. Immediate action is required.",
+    "risk_score": 92,
     "attack_paths": [
         {
-            "name": "Example Attack Path",
-            "description": "...",
-            "involved_findings": ["CVE-2026-1234"],
-            "mitre_tactics": ["TA0001"],
-            "mitre_techniques": ["T1190"]
+            "name": "Supply Chain Compromise via Credential Leak",
+            "description": "An exposed GitHub Actions secret (ID: SECRET-001) allows an attacker to push malicious images to the container registry. Combined with a known RCE vulnerability in the web server (CVE-2026-1234), this chain grants full control over the production environment.",
+            "involved_findings": ["SECRET-001", "CVE-2026-1234"],
+            "mitre_tactics": ["TA0001", "TA0042"],
+            "mitre_techniques": ["T1078", "T1578"],
+            "potential_impact": "Full compromise of production services",
+            "difficulty": "medium"
         }
     ],
     "top_remediations": [
         {
             "priority": 1,
-            "finding_id": "CVE-2026-1234",
-            "action": "Upgrade package X to version Y",
-            "fix_diff": "--- a/requirements.txt\n+++ b/requirements.txt\n-package==1.0\n+package==1.1"
+            "finding_id": "SECRET-001",
+            "action": "Rotate the exposed secret and remove it from the workflow log. Use GitHub's masked variables.",
+            "fix_diff": "--- a/.github/workflows/deploy.yml\n+++ b/.github/workflows/deploy.yml\n- run: echo ${{ secrets.DEPLOY_KEY }}\n+ run: echo '**redacted**'"
         }
-    ]
+    ],
+    "false_positives_likely": []
 }
 
 class BaseAnalyzer:
@@ -42,7 +64,7 @@ def extract_json(text: str) -> Dict[str, Any]:
                 pass
     return {"executive_summary": text, "attack_paths": [], "top_remediations": []}
 
-def select_findings_for_llm(findings: List[Dict], max_items: int = 100) -> List[Dict]:
+def select_findings_for_llm(findings: List[Dict], max_items: int = MAX_ANALYZER_FINDINGS) -> List[Dict]:
     if len(findings) <= max_items:
         return findings
     critical_high = [f for f in findings if f.get('severity') in ('CRITICAL', 'HIGH')]
@@ -57,6 +79,7 @@ class OllamaAnalyzer(BaseAnalyzer):
     def __init__(self, model: str = None, endpoint: str = None):
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "llama3.2:latest")
         self.endpoint = endpoint or os.environ.get("OPENAI_API_BASE", "http://localhost:11434/api/generate")
+        self.session = _session_with_retries()
 
     def analyze(self, findings: List[Dict[str, Any]], topology: Dict[str, Any] = None) -> Dict[str, Any]:
         if not findings:
@@ -71,7 +94,7 @@ class OllamaAnalyzer(BaseAnalyzer):
 Example output structure:
 {json.dumps(FEW_SHOT_EXAMPLE, indent=2)}
 
-IMPORTANT: Each remediation must reference the exact 'id' of the finding.
+IMPORTANT: Each remediation must reference the exact 'id' of the finding. Identify multi-step attack chains.
 
 Findings:
 {json.dumps(selected, indent=2)}
@@ -80,7 +103,7 @@ Findings:
 Respond ONLY with valid JSON in the same format as the example."""
 
         try:
-            resp = requests.post(
+            resp = self.session.post(
                 self.endpoint,
                 json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
                 timeout=180

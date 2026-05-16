@@ -1,7 +1,20 @@
+from contextlib import contextmanager
 from devsecops_radar.core.models import (
     init_db, SessionLocal, Scan, Finding
 )
 from typing import List, Dict, Any, Optional
+
+@contextmanager
+def get_session():
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 def save_scan(findings: List[Dict[str, Any]]):
     from devsecops_radar.core.models import save_scan_to_db
@@ -9,51 +22,48 @@ def save_scan(findings: List[Dict[str, Any]]):
 
 def get_all_scans() -> List[Dict[str, Any]]:
     init_db()
-    session = SessionLocal()
-    scans = []
-    for scan in session.query(Scan).order_by(Scan.timestamp.asc()).all():
-        findings = session.query(Finding).filter(Finding.scan_id == scan.id).all()
-        counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-        for f in findings:
-            sev = f.severity.upper() if f.severity else "UNKNOWN"
-            counts[sev] = counts.get(sev, 0) + 1
-        scans.append({
-            "id": scan.id,
-            "timestamp": scan.timestamp.isoformat(),
-            "total": len(findings),
-            "critical": counts["CRITICAL"],
-            "high": counts["HIGH"],
-            "medium": counts["MEDIUM"],
-            "low": counts["LOW"],
-        })
-    session.close()
+    with get_session() as session:
+        scans = []
+        for scan in session.query(Scan).order_by(Scan.timestamp.asc()).all():
+            findings = session.query(Finding).filter(Finding.scan_id == scan.id).all()
+            counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            for f in findings:
+                sev = f.severity.upper() if f.severity else "UNKNOWN"
+                counts[sev] = counts.get(sev, 0) + 1
+            scans.append({
+                "id": scan.id,
+                "timestamp": scan.timestamp.isoformat(),
+                "total": len(findings),
+                "critical": counts["CRITICAL"],
+                "high": counts["HIGH"],
+                "medium": counts["MEDIUM"],
+                "low": counts["LOW"],
+            })
     return scans
 
 def get_scan_by_id(scan_id: int) -> Optional[Dict[str, Any]]:
-    session = SessionLocal()
-    scan = session.query(Scan).filter(Scan.id == scan_id).first()
-    if not scan:
-        session.close()
-        return None
-    findings = session.query(Finding).filter(Finding.scan_id == scan_id).all()
-    findings_list = []
-    for f in findings:
-        findings_list.append({
-            "tool": f.tool,
-            "id": f.id,
-            "severity": f.severity,
-            "target": f.target,
-            "title": f.title,
-            "description": f.description,
-            "line": f.line
-        })
-    session.close()
-    return {
-        "id": scan.id,
-        "timestamp": scan.timestamp.isoformat(),
-        "findings": findings_list,
-        "total": len(findings_list)
-    }
+    with get_session() as session:
+        scan = session.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            return None
+        findings = session.query(Finding).filter(Finding.scan_id == scan_id).all()
+        findings_list = []
+        for f in findings:
+            findings_list.append({
+                "tool": f.tool,
+                "id": f.id,
+                "severity": f.severity,
+                "target": f.target,
+                "title": f.title,
+                "description": f.description,
+                "line": f.line
+            })
+        return {
+            "id": scan.id,
+            "timestamp": scan.timestamp.isoformat(),
+            "findings": findings_list,
+            "total": len(findings_list)
+        }
 
 def compare_scans(scan_id_1: int, scan_id_2: int) -> Dict[str, Any]:
     scan1 = get_scan_by_id(scan_id_1)
@@ -74,19 +84,21 @@ def compare_scans(scan_id_1: int, scan_id_2: int) -> Dict[str, Any]:
         "removed_findings": removed,
     }
 
-def get_findings_by_severity(severity: str, limit: int = 100) -> List[Dict[str, Any]]:
-    session = SessionLocal()
-    findings = session.query(Finding).filter(Finding.severity == severity.upper()).limit(limit).all()
-    result = []
-    for f in findings:
-        result.append({
-            "tool": f.tool,
-            "id": f.id,
-            "severity": f.severity,
-            "target": f.target,
-            "title": f.title,
-            "description": f.description,
-            "line": f.line
-        })
-    session.close()
-    return result
+def get_findings_paginated(page: int = 1, per_page: int = 50) -> Dict[str, Any]:
+    with get_session() as session:
+        total = session.query(Finding).count()
+        findings = session.query(Finding).order_by(Finding.id.desc()).offset(
+            (page - 1) * per_page
+        ).limit(per_page).all()
+        items = []
+        for f in findings:
+            items.append({
+                "tool": f.tool,
+                "id": f.id,
+                "severity": f.severity,
+                "target": f.target,
+                "title": f.title,
+                "description": f.description,
+                "line": f.line
+            })
+        return {"items": items, "total": total, "page": page, "per_page": per_page}

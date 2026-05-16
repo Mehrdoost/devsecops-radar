@@ -1,10 +1,20 @@
-def compute_fix_value(finding: dict, topology: dict = None) -> float:
-    weights = {'CRITICAL': 100, 'HIGH': 70, 'MEDIUM': 40, 'LOW': 10}
-    score = weights.get(finding.get('severity', 'LOW'), 10)
+from typing import Dict, Any, Optional
+
+def compute_dynamic_risk_score(finding: Dict[str, Any], topology: Optional[Dict[str, Any]] = None) -> float:
+    severity_weights = {'CRITICAL': 10.0, 'HIGH': 7.0, 'MEDIUM': 4.0, 'LOW': 1.0}
+    base = severity_weights.get(finding.get('severity', 'LOW'), 1.0)
+    exposure_mult = 1.0
     if topology:
         target = finding.get('target', '')
         for server in topology.get('servers', []):
-            if target in server.get('name', ''):
-                score *= (1 + server.get('importance', 0.5))
+            if server.get('name') in target:
+                if server.get('exposed', False):
+                    exposure_mult = 2.5
+                if server.get('data_classification') == 'sensitive':
+                    exposure_mult *= 1.5
                 break
-    return round(score, 2)
+    likelihood_mult = 1.0
+    if finding.get('exploit_available', False):
+        likelihood_mult *= 2.0
+    score = base * exposure_mult * likelihood_mult
+    return round(min(10.0, score), 1)
