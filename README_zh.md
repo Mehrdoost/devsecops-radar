@@ -363,7 +363,7 @@ devsecops_radar/
 ```
 
 > **📌 图表占位符：** 
-> `![Architecture Diagram](docs/architecture.png)`
+![Architecture Diagram](docs/architecture.png)
 
 ---
 

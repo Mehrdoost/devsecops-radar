@@ -363,7 +363,7 @@ devsecops_radar/
 ```
 
 > **📌 Место для диаграммы:** 
-> `![Architecture Diagram](docs/architecture.png)`
+[Architecture Diagram](docs/architecture.png)
 
 ---
 

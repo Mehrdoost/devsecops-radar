@@ -363,7 +363,7 @@ devsecops_radar/
 ```
 
 > **📌 Diagram Placeholder:**  
-> `![Architecture Diagram](docs/architecture.png)`
+![Architecture Diagram](docs/architecture.png)
 
 ---
 

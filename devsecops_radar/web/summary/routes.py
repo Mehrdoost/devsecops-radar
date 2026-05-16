@@ -1,3 +1,18 @@
+from flask import Blueprint, jsonify
+import json
+import os
+
+summary_bp = Blueprint('summary', __name__)
+
+AI_SUMMARY_FILE = os.environ.get('AI_SUMMARY_FILE', 'findings_ai_summary.json')
+
+@summary_bp.route('/api/summary')
+def api_summary():
+    if os.path.exists(AI_SUMMARY_FILE):
+        with open(AI_SUMMARY_FILE) as f:
+            return jsonify(json.load(f))
+    return jsonify({})
+
 @summary_bp.route('/badge/<int:scan_id>.svg')
 def security_badge(scan_id):
     from devsecops_radar.core.database import get_scan_by_id
