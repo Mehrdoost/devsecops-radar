@@ -221,11 +221,14 @@ DASHBOARD_HTML = r"""
             renderTable(filtered);
         }
 
+        // ✅ FIX: use data.items for the array, and use allFindings for charts & stats
         fetch('/api/findings', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
                 allFindings = data.items;
                 renderTable(allFindings);
+
+                // Doughnut chart counts
                 const counts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
                 allFindings.forEach(f => {
                     const sev = f.severity.toUpperCase();
@@ -242,6 +245,8 @@ DASHBOARD_HTML = r"""
                     },
                     options: { plugins: { legend: { labels: { color: 'white' } } } }
                 });
+
+                // Pipeline stats (Poutine + Zizmor)
                 const pipeline = allFindings.filter(f => f.tool === 'Poutine' || f.tool === 'Zizmor');
                 const pCounts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
                 pipeline.forEach(f => {
@@ -252,6 +257,8 @@ DASHBOARD_HTML = r"""
                 document.getElementById('pipeline-high').textContent = pCounts.HIGH;
                 document.getElementById('pipeline-medium').textContent = pCounts.MEDIUM;
                 document.getElementById('pipeline-low').textContent = pCounts.LOW;
+
+                // Attach filter events
                 document.getElementById('searchInput').addEventListener('input', applyFilters);
                 document.getElementById('toolFilter').addEventListener('change', applyFilters);
                 document.getElementById('severityFilter').addEventListener('change', applyFilters);
@@ -290,6 +297,8 @@ DASHBOARD_HTML = r"""
                 }
                 if (!data.nodes || data.nodes.length === 0) return;
                 const container = document.getElementById('attack-graph');
+                // ✅ Clean previous SVG before drawing new one
+                container.innerHTML = '';
                 const width = container.clientWidth;
                 const height = container.clientHeight;
                 const svg = d3.select('#attack-graph')
@@ -372,6 +381,7 @@ DASHBOARD_HTML = r"""
                 const nodes = topo.servers.map(s => ({ id: s.name, group: s.ip }));
                 const links = topo.connections.map(c => ({ source: c.source, target: c.target, label: c.protocol }));
                 const container = document.getElementById('topology-graph');
+                container.innerHTML = '';
                 const width = container.clientWidth;
                 const height = container.clientHeight;
                 const svg = d3.select('#topology-graph')
