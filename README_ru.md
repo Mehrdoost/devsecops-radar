@@ -23,14 +23,14 @@
 3. [Где его запускать в вашей сети](#-где-его-запускать-в-вашей-сети)
 4. [Превью дашборда](#-превью-дашборда)
 5. [Быстрый старт](#-быстрый-старт)
-6. [Требования (Prerequisites)](#-требования)
+6. [Требования (Prerequisites)](#-требования-prerequisites)
 7. [Установка](#-установка)
 8. [Как использовать (Шаг за шагом)](#-как-использовать-шаг-за-шагом)
 9. [Полный справочник команд](#-полный-справочник-команд)
 10. [Основные возможности](#-основные-возможности)
 11. [Правила сообщества и онлайн-обновления](#-правила-сообщества--онлайн-обновления)
-12. [Архитектура](#-архитектура)
-13. [Дорожная карта](#-дорожная-карта)
+12. [Архитектура](#️-архитектура)
+13. [Дорожная карта](#️-дорожная-карта)
 14. [Тестирование и CI](#-тестирование-и-ci)
 15. [Участие в разработке](#-участие-в-разработке)
 16. [Автор](#-автор)
@@ -70,7 +70,7 @@ Pipeline Sentinel гибок — вы сами решаете, где он лу�
 | Развертывание | Описание |
 | :--- | :--- |
 | 🖥️ **Локальная машина разработчика** | Запускайте CLI и дашборд прямо на ноутбуке. Идеально для пентестеров или разработчиков, которым нужна мгновенная обратная связь. |
-| 🔧 **CI/CD Runner** | Используйте GitHub Action или вызывайте `devsecops-radar` в скриптах Jenkins/GitLab CI. Он может остановить сборку, если превышен лимит критических уязвимостей (`--policy`). |
+| 🔧 **CI/CD Runner** | Используйте GitHub Action или вызывайте `devsecops-radar` прямо в скриптах Jenkins/GitLab CI. Он может остановить сборку, если превышен лимит критических уязвимостей (`--policy`). |
 | 🏢 **Центральный сервер безопасности** | Установите на выделенный сервер (через Docker или pip), который собирает результаты сканирования от нескольких команд. Дашборд становится общей консолью безопасности. |
 | 🌐 **Изолированные сети (Air-Gapped)** | Скопируйте Docker-образ и данные на офлайн-сервер. Дашборд работает без внешних вызовов — все ассеты встроены. |
 
@@ -205,7 +205,7 @@ devsecops-radar-web
 * **Разбивка по критичности** – Кольцевая диаграмма
 * **Тренды во времени** – Линейный график из истории сканирований
 * **Безопасность пайплайна** – Статистика Poutine + Zizmor
-* **Граф путей атак** – Интерактивный D3.js граф
+* **Граф путей атак** – Интерактивный D3.js граф (нажмите на узлы для подробностей)
 * **Резюме для руководства** – Оценка риска и ИИ-резюме
 * **Таблица результатов** – Поиск, фильтрация, пагинация
 
@@ -253,6 +253,8 @@ devsecops-radar --trivy trivy.json --analyze --compliance CIS --report cis-repor
 Создается PDF-отчет с резюме, оценкой риска, таблицей результатов и соответствием стандартам. Чувствительные данные скрываются автоматически.
 
 ### 8. Бейдж безопасности для вашего проекта
+После сканирования вы можете добавить динамический бейдж в ваш `README`:
+
 ```markdown
 [![Security Status](https://your-server/badge/1.svg)](https://github.com/Mehrdoost/devsecops-radar)
 ```
@@ -267,30 +269,30 @@ devsecops-radar --trivy trivy.json --analyze --compliance CIS --report cis-repor
 
 | Флаг | Описание | Пример |
 | :--- | :--- | :--- |
-| `--trivy` | JSON файл Trivy или имя образа | `--trivy results.json` |
-| `--semgrep` | JSON файл Semgrep или директория | `--semgrep results.json` |
-| `--poutine` | JSON файл Poutine или путь к репозиторию | `--poutine results.json` |
-| `--zizmor` | JSON файл Zizmor или путь к репозиторию | `--zizmor results.json` |
-| `--gitleaks` | JSON файл Gitleaks или путь к репозиторию | `--gitleaks results.json` |
+| `--trivy` | JSON файл Trivy или имя образа | `--trivy results.json` или `--trivy nginx:latest` |
+| `--semgrep` | JSON файл Semgrep или директория | `--semgrep results.json` или `--semgrep ./src` |
+| `--poutine` | JSON файл Poutine или путь к репо | `--poutine results.json` или `--poutine ./repo` |
+| `--zizmor` | JSON файл Zizmor или путь к репо | `--zizmor results.json` или `--zizmor ./repo` |
+| `--gitleaks` | JSON файл Gitleaks или путь к репо | `--gitleaks results.json` или `--gitleaks ./repo` |
 | `--rules` | Директория с JSON правилами | `--rules ~/my-security-rules/` |
 | `--policy` | JSON файл политики для блокировки | `--policy policy.json` |
 | `--analyze` | Включить ИИ-анализ | `--analyze` |
 | `--llm-backend` | `ollama` или `litellm` | `--llm-backend litellm` |
 | `--llm-model` | Имя модели | `--llm-model gpt-4o-mini` |
 | `--fix` | Авто-применение исправлений от ИИ | `--fix` |
-| `--review` | Ревью каждого исправления перед применением | `--review` |
+| `--review` | Ревью каждого исправления | `--review` |
 | `--topology` | Путь к JSON файлу топологии | `--topology topology.json` |
 | `--compliance` | Стандарты: `CIS`, `PCI-DSS`, `ISO27001` | `--compliance CIS` |
 | `--report` | Сгенерировать PDF отчет | `--report security_report.pdf` |
 | `--output` | Выходной JSON файл | `--output merged.json` |
-| `--wizard` | Мастер настройки | `--wizard` |
+| `--wizard` | Интерактивный мастер | `--wizard` |
 
 ### `devsecops-radar-web` — Веб-сервер
 
 ```bash
 devsecops-radar-web                       # Запуск на http://localhost:8080
 FINDINGS_FILE=my.json devsecops-radar-web # Пользовательский файл
-PIPELINE_API_KEY=secret devsecops-radar-web  # API-ключ аутентификации
+PIPELINE_API_KEY=secret devsecops-radar-web  # API-ключ аутентификации (поддержка JWT)
 ```
 
 ---
@@ -298,6 +300,8 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # API-ключ аутентифик
 ## ✨ Основные возможности
 
 ### 🔌 Плагинная архитектура для сканеров
+Встроенная поддержка пяти сканеров с реальной системой плагинов. Сторонние сканеры могут быть установлены отдельно.
+
 | Сканер | Что сканирует | Флаг |
 | :--- | :--- | :--- |
 | **Trivy** | Образы контейнеров и зависимости | `--trivy` |
@@ -307,7 +311,7 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # API-ключ аутентифик
 | **Gitleaks**| Обнаружение секретов | `--gitleaks` |
 
 ### 🧩 Гибридный движок RuleFusion
-* **Офлайн** – Загрузка пользовательских JSON правил из любой локальной директории
+* **Офлайн** – Загрузка пользовательских JSON правил из любой локальной директории (`--rules ~/my-rules/`)
 * **Онлайн** – Загрузка правил сообщества из Git-репозитория (`--update-rules`)
 * Репозиторий правил сообщества: `devsecops-radar-rules`
 
@@ -356,7 +360,7 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # API-ключ аутентифик
 В Pipeline Sentinel есть маркетплейс правил, управляемый сообществом, который находится в отдельном репозитории: `devsecops-radar-rules`.
 
 ### Как это работает
-Репозиторий содержит тщательно отобранные JSON-файлы правил для всех поддерживаемых сканеров. Вы можете получить последние правила с помощью команды:
+Репозиторий содержит тщательно отобранные JSON-файлы правил для всех поддерживаемых сканеров. Пользователи могут получить последние правила с помощью одной команды:
 
 ```bash
 devsecops-radar --update-rules
@@ -394,7 +398,7 @@ devsecops_radar/
 ```
 
 > **📌 Место для диаграммы:** 
-![Architecture Diagram](docs/architecture.png)`
+![Architecture Diagram](docs/architecture.png)
 
 ---
 
@@ -454,12 +458,11 @@ ruff check .
 
 ## 👨‍💻 Автор
 
-**ReverseForge** — ( Mehrdoost And Mi0r4 )   [cite: 77]
+**ReverseForge** — ( Mehrdoost And Mi0r4 ) 
 
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/ReverseForge) [cite: 79]
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost) [cite: 79]
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/miora-sora) [cite: 79]
-
+[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/ReverseForge) 
+[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost) 
+[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/miora-sora) 
 
 ---
 

@@ -23,14 +23,14 @@
 3. [应该部署在网络中的什么位置](#-应该部署在网络中的什么位置)
 4. [仪表盘预览](#-仪表盘预览)
 5. [快速开始](#-快速开始)
-6. [先决条件 (Prerequisites)](#-先决条件)
+6. [先决条件 (Prerequisites)](#-先决条件-prerequisites)
 7. [安装](#-安装)
 8. [使用指南（分步说明）](#-使用指南分步说明)
 9. [完整命令参考](#-完整命令参考)
 10. [核心功能](#-核心功能)
 11. [社区规则与在线更新](#-社区规则与在线更新)
-12. [架构](#-架构)
-13. [路线图](#-路线图)
+12. [架构](#️-架构)
+13. [路线图](#️-路线图)
 14. [测试与 CI](#-测试与-ci)
 15. [参与贡献](#-参与贡献)
 16. [作者](#-作者)
@@ -253,9 +253,12 @@ devsecops-radar --trivy trivy.json --analyze --compliance CIS --report cis-repor
 将创建一份包含执行摘要、风险评分、结果表格和合规性映射的 PDF 报告。敏感数据将自动被脱敏。
 
 ### 8. 为项目添加安全徽章
+运行扫描后，你可以在 `README` 中嵌入一个动态安全徽章：
+
 ```markdown
 [![Security Status](https://your-server/badge/1.svg)](https://github.com/Mehrdoost/devsecops-radar)
 ```
+
 徽章颜色将根据严重漏洞的数量而变化（绿色/黄色/红色）。
 
 ---
@@ -266,30 +269,30 @@ devsecops-radar --trivy trivy.json --analyze --compliance CIS --report cis-repor
 
 | 标志 | 描述 | 示例 |
 | :--- | :--- | :--- |
-| `--trivy` | Trivy JSON 文件或镜像名称 | `--trivy results.json` |
-| `--semgrep` | Semgrep JSON 文件或目录 | `--semgrep results.json` |
-| `--poutine` | Poutine JSON 文件或仓库路径 | `--poutine results.json` |
-| `--zizmor` | Zizmor JSON 文件或仓库路径 | `--zizmor results.json` |
-| `--gitleaks` | Gitleaks JSON 文件或仓库路径 | `--gitleaks results.json` |
+| `--trivy` | Trivy JSON 文件或镜像名称 | `--trivy results.json` 或 `--trivy nginx:latest` |
+| `--semgrep` | Semgrep JSON 文件或目录 | `--semgrep results.json` 或 `--semgrep ./src` |
+| `--poutine` | Poutine JSON 文件或仓库路径 | `--poutine results.json` 或 `--poutine ./repo` |
+| `--zizmor` | Zizmor JSON 文件或仓库路径 | `--zizmor results.json` 或 `--zizmor ./repo` |
+| `--gitleaks` | Gitleaks JSON 文件或仓库路径 | `--gitleaks results.json` 或 `--gitleaks ./repo` |
 | `--rules` | 包含自定义 JSON 规则文件的目录 | `--rules ~/my-security-rules/` |
 | `--policy` | 用于 CI 门禁的策略 JSON 文件 | `--policy policy.json` |
-| `--analyze` | 启用 LLM 分析 | `--analyze` |
-| `--llm-backend` | `ollama` 或 `litellm` | `--llm-backend litellm` |
+| `--analyze` | 启用 LLM 分析（需要 Ollama） | `--analyze` |
+| `--llm-backend` | `ollama`（默认）或 `litellm` | `--llm-backend litellm` |
 | `--llm-model` | 模型名称 | `--llm-model gpt-4o-mini` |
 | `--fix` | 自动应用 AI 建议的修复 | `--fix` |
 | `--review` | 在应用之前审查每个 AI 修复 | `--review` |
 | `--topology` | 拓扑 JSON 文件的路径 | `--topology topology.json` |
 | `--compliance` | 框架：`CIS`, `PCI-DSS`, `ISO27001` | `--compliance CIS` |
-| `--report` | 生成 PDF 报告 | `--report security_report.pdf` |
+| `--report` | 生成 PDF 报告（输出文件名） | `--report security_report.pdf` |
 | `--output` | 输出 JSON 文件 | `--output merged.json` |
-| `--wizard` | 交互式设置向导 | `--wizard` |
+| `--wizard` | 交互式首次设置向导 | `--wizard` |
 
 ### `devsecops-radar-web` — Web 服务器
 
 ```bash
 devsecops-radar-web                          # 在 http://localhost:8080 上启动
 FINDINGS_FILE=my.json devsecops-radar-web    # 使用自定义文件
-PIPELINE_API_KEY=secret devsecops-radar-web  # 启用 API 身份验证
+PIPELINE_API_KEY=secret devsecops-radar-web  # 启用 API 身份验证（支持 JWT）
 ```
 
 ---
@@ -297,6 +300,8 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # 启用 API 身份验证
 ## ✨ 核心功能
 
 ### 🔌 多扫描器插件架构
+内置支持五种扫描器，拥有真正的插件系统。第三方扫描器可以作为单独的包安装，并通过 Python entry points 自动发现。适配器模式通过 Pydantic 验证所有结果数据。
+
 | 扫描器 | 扫描内容 | 标志 |
 | :--- | :--- | :--- |
 | **Trivy** | 容器镜像和依赖项 | `--trivy` |
@@ -306,14 +311,14 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # 启用 API 身份验证
 | **Gitleaks**| 密钥硬编码检测 | `--gitleaks` |
 
 ### 🧩 混合 RuleFusion 引擎
-* **离线** – 从任何本地目录加载自定义 JSON 规则
+* **离线** – 从任何本地目录加载自定义 JSON 规则 (`--rules ~/my-rules/`)
 * **在线** – 从可配置的 Git 仓库提取社区策划的规则 (`--update-rules`)
 * 社区规则仓库：`devsecops-radar-rules`
 
 ### 🧠 LLM 驱动的分析
 * 为不稳定的端点提供带指数退避的重试逻辑
 * 感知 Token 的结果选择
-* 支持 Ollama（本地）和 LiteLLM（OpenAI、Anthropic 等）
+* 支持 Ollama（本地、离线）和 LiteLLM（OpenAI、Anthropic 等）
 
 ### 🕸️ 多步攻击路径可视化
 交互式 D3.js 物理图，接受拓扑文件，将结果映射到你的实际基础设施上。
@@ -322,20 +327,20 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # 启用 API 身份验证
 非常适合用于阻断 CI/CD 流水线。
 
 ### 🛠️ 带有人工循环的自动修复
-该工具会创建一个新的 git 分支，并生成 `fix.sh` 脚本。
+该工具会创建一个新的 git 分支并生成 `fix.sh` 脚本。
 
 ### 📊 合规性与执行报告（带脱敏功能）
 生成 PDF 报告，自动脱敏密码、Token、JWT。
 
-### 📈 扫描历史记录和趋势
-支持服务器端分页的 SQLAlchemy 数据库 (`/api/findings?page=1&per_page=50`)。
+### 📈 扫描历史记录和趋势（带分页）
+支持服务器端分页的 SQLAlchemy 后端数据库 (`/api/findings?page=1&per_page=50`)。
 
 ### 🧪 SBOM & 依赖混淆检测
-* 生成 CycloneDX SBOM
+* 使用 `syft` 从你的项目生成 CycloneDX SBOM
 * 检测 `package.json` 和 `requirements.txt` 中的依赖混淆风险
 
 ### 🔍 RAG 驱动的安全搜索
-内置 RAG 端点 (`/api/rag?q=...`) 用于自然语言搜索。
+内置的 RAG 端点 (`/api/rag?q=...`) 用于自然语言搜索。
 
 ### ⚔️ 攻击模拟（沙盒）
 在一次性 Docker 容器中执行简单的 PoC 脚本。
@@ -344,8 +349,8 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # 启用 API 身份验证
 基于资产暴露情况和漏洞利用可用性进行评分。
 
 ### 🔒 隐私与离线优先
-* 所有资源已嵌入 — 无需 CDN 调用
-* LLM 分析在本地运行
+* 所有资源均已嵌入 — 无需 CDN 调用
+* LLM 分析通过 Ollama 在本地运行
 * Docker 镜像以非 root 身份运行
 
 ---
@@ -355,7 +360,7 @@ PIPELINE_API_KEY=secret devsecops-radar-web  # 启用 API 身份验证
 Pipeline Sentinel 具有一个社区驱动的规则市场，位于一个独立的仓库中：`devsecops-radar-rules`。
 
 ### 它是如何工作的
-该仓库包含所有受支持扫描器的精选 JSON 规则文件。任何人都可以通过提交 Pull Request 来贡献规则。用户只需一个命令即可拉取最新规则：
+该仓库包含精选的 JSON 规则文件。用户只需一个命令即可拉取最新规则：
 
 ```bash
 devsecops-radar --update-rules
@@ -393,7 +398,7 @@ devsecops_radar/
 ```
 
 > **📌 图表占位符：** 
-![Architecture Diagram](docs/architecture.png)`
+![Architecture Diagram](docs/architecture.png)
 
 ---
 
@@ -447,18 +452,17 @@ ruff check .
 
 ## 🤝 参与贡献
 
-热烈欢迎各种形式的贡献！请阅读我们的 `CONTRIBUTING.md`，获取有关如何设置项目、添加新扫描器或提交规则更改的详细指南。
+热烈欢迎提交 Pull requests 和 issues！请阅读我们的 `CONTRIBUTING.md`，获取有关如何设置项目、添加新扫描器或提交规则更改的详细指南。
 
 ---
 
 ## 👨‍💻 作者
 
-**ReverseForge** — ( Mehrdoost And Mi0r4 )   [cite: 77]
+**ReverseForge** — ( Mehrdoost And Mi0r4 ) 
 
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/ReverseForge) [cite: 79]
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost) [cite: 79]
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/miora-sora) [cite: 79]
-
+[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/ReverseForge) 
+[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost) 
+[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/miora-sora) 
 
 ---
 
