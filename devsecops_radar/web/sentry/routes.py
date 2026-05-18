@@ -1,6 +1,4 @@
 from flask import Blueprint, request, jsonify
-import json
-import os
 
 sentry_bp = Blueprint('sentry', __name__)
 

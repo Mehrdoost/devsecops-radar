@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import patch, MagicMock
 from devsecops_radar.core.analyzer import OllamaAnalyzer, extract_json, select_findings_for_llm
 
@@ -9,13 +8,12 @@ def test_extract_json_plain():
 
 def test_extract_json_malformed():
     result = extract_json("some text {invalid")
-    assert "executive_summary" in result  # falls back to wrapping the text
+    assert "executive_summary" in result
 
 def test_select_findings_for_llm():
     findings = [{"severity": "CRITICAL"}] * 120 + [{"severity": "LOW"}] * 50
     selected = select_findings_for_llm(findings, max_items=100)
     assert len(selected) == 100
-    # All criticals should be included
     criticals = [f for f in selected if f["severity"] == "CRITICAL"]
     assert len(criticals) == 100
 

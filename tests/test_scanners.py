@@ -1,7 +1,6 @@
 import json
 import tempfile
 import os
-import pytest
 from devsecops_radar.scanners.trivy import TrivyScanner
 from devsecops_radar.scanners.semgrep import SemgrepScanner
 from devsecops_radar.scanners.poutine import PoutineScanner

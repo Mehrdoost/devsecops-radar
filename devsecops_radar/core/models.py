@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, validator
 from typing import List, Optional
 import datetime
 import os
@@ -19,11 +19,6 @@ class FindingSchema(BaseModel):
     @validator('severity')
     def severity_upper(cls, v):
         return v.upper()
-
-class ScanMetadata(BaseModel):
-    findings: List[FindingSchema]
-    scan_id: Optional[int] = None
-    timestamp: Optional[str] = None
 
 class Scan(Base):
     __tablename__ = 'scans'
@@ -52,7 +47,6 @@ def init_db():
     Base.metadata.create_all(engine)
 
 def save_scan_to_db(findings: list):
-    # Validate with Pydantic before storing
     validated = [FindingSchema(**f) for f in findings]
     init_db()
     session = SessionLocal()

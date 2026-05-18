@@ -1,6 +1,5 @@
 import pytest
 from devsecops_radar.web.app import create_app
-import os
 
 @pytest.fixture
 def app():

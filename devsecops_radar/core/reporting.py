@@ -1,6 +1,6 @@
 import re
 import datetime
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
+from reportlab.platypus import Table, TableStyle, Paragraph
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
@@ -18,12 +18,6 @@ def redact_sensitive(text: str, patterns: List[str] = None) -> str:
     return text
 
 def generate_pdf_report(findings: List[Dict[str, Any]], ai_summary: Dict[str, Any], output_file: str = "report.pdf", redact: bool = True):
-    try:
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
-    except ImportError:
-        print("[ERROR] reportlab not installed.")
-        return
-
     doc = SimpleDocTemplate(output_file, pagesize=A4)
     elements = []
     styles = getSampleStyleSheet()

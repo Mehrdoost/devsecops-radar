@@ -1,7 +1,6 @@
 import subprocess
 import json
-import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 
 def generate_sbom(target_dir: str, output_file: str = "sbom.json") -> Optional[Dict]:
     try:

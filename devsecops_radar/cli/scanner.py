@@ -123,17 +123,16 @@ def wizard():
     print("🛡️  Welcome to Pipeline Sentinel – Quick Setup Wizard")
     print("This will install necessary components.\n")
     import subprocess
-    # 1. Ollama check
     try:
         subprocess.run(['ollama', '--version'], capture_output=True, check=True)
         print("[✔] Ollama found.")
-    except:
+    except FileNotFoundError:
         print("[!] Ollama not found. Installing...")
         subprocess.run('curl -fsSL https://ollama.com/install.sh | sh', shell=True)
-    # 2. Pull AI model
+    except Exception:
+        print("[!] Could not verify Ollama. Please install manually.")
     print("📥 Pulling AI model (llama3.2)...")
     subprocess.run(['ollama', 'pull', 'llama3.2:latest'])
-    # 3. Suggestions for optional tools
     if subprocess.run(['which', 'semgrep'], capture_output=True).returncode == 0:
         print("[✔] Semgrep available.")
     else:
@@ -142,7 +141,6 @@ def wizard():
         print("[✔] Docker available.")
     else:
         print("[ ] Docker not found (optional).")
-    # 4. Final instructions
     print("\n✅ Setup complete! You can now run:")
     print("   devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json")
     print("   devsecops-radar-web")

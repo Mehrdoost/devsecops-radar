@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Tuple
 
 
 class RuleFusion:
@@ -26,10 +26,7 @@ class RuleFusion:
         )
         self.findings: List[Dict[str, Any]] = []
 
-    # ── public API ──────────────────────────────────────────────
-
     def load_all_rules(self) -> List[Dict[str, Any]]:
-        """Load rules from both local and community sources."""
         if self.local_rules_path and self.local_rules_path.exists():
             self._load_from_directory(self.local_rules_path)
 
@@ -40,7 +37,6 @@ class RuleFusion:
         return self.findings
 
     def update_community_rules(self) -> None:
-        """Clone or pull the latest community rules repository."""
         target_dir = Path.home() / ".devsecops-radar" / "community-rules"
         target_dir.parent.mkdir(parents=True, exist_ok=True)
 
@@ -63,7 +59,6 @@ class RuleFusion:
         )
 
     def generate_template(self, scanner_name: str) -> str:
-        """Generate a sample rule file for the user to start with."""
         template = {
             "findings": [
                 {
@@ -82,18 +77,10 @@ class RuleFusion:
         }
         return json.dumps(template, indent=2)
 
-    # ── policy engine ─────────────────────────────────────────
-
     @staticmethod
     def evaluate_policy(
         findings: List[Dict[str, Any]], policy_file: str
     ) -> Tuple[bool, str]:
-        """
-        Evaluate a policy file against the findings.
-        Returns (pass, message).
-        The policy file is a JSON object with conditions.
-        Example: {"max_critical": 5, "on_violation": "fail"}
-        """
         if not os.path.exists(policy_file):
             return True, (
                 f"Policy file '{policy_file}' not found. "
@@ -120,10 +107,7 @@ class RuleFusion:
 
         return True, "Policy checks passed."
 
-    # ── internal helpers ────────────────────────────────────────
-
     def _load_from_directory(self, directory: Path) -> None:
-        """Recursively load all JSON files from a directory."""
         for json_file in sorted(directory.rglob("*.json")):
             try:
                 with open(json_file, "r", encoding="utf-8") as f:
@@ -143,7 +127,6 @@ class RuleFusion:
             print(f"📄 Loaded {len(parsed)} findings from {json_file.name}")
 
     def _validate_json(self, data: Any, filename: str) -> bool:
-        """Structural validation with better list handling."""
         if isinstance(data, list):
             if len(data) == 0:
                 print(f"[WARNING] {filename}: empty list, skipping")
@@ -171,10 +154,8 @@ class RuleFusion:
     def _parse_scanner_output(
         self, data: Any, filename: str
     ) -> List[Dict[str, Any]]:
-        """Parse any known scanner format."""
         findings: List[Dict[str, Any]] = []
 
-        # Already a plain list of findings
         if isinstance(data, list):
             for item in data:
                 if isinstance(item, dict) and self._is_finding(item):
@@ -184,7 +165,6 @@ class RuleFusion:
         if not isinstance(data, dict):
             return findings
 
-        # Trivy format
         for result in data.get("Results", []):
             for vuln in result.get("Vulnerabilities", []):
                 findings.append(
@@ -203,7 +183,6 @@ class RuleFusion:
                     }
                 )
 
-        # Semgrep format
         for result in data.get("results", []):
             findings.append(
                 {
@@ -222,7 +201,6 @@ class RuleFusion:
                 }
             )
 
-        # Poutine / Zizmor / Generic format
         for item in data.get("findings", []):
             if isinstance(item, dict):
                 findings.append(self._normalize(item, filename))

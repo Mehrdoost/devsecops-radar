@@ -4,9 +4,8 @@ import re
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
-# --- Retry logic for LLM calls ---
 def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]):
     session = requests.Session()
     retries = Retry(
@@ -20,7 +19,6 @@ def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=[429, 50
     session.mount('https://', adapter)
     return session
 
-# Default maximum findings sent to LLM (configurable via env)
 MAX_ANALYZER_FINDINGS = int(os.environ.get("ANALYZER_MAX_FINDINGS", "100"))
 
 FEW_SHOT_EXAMPLE = {
@@ -60,7 +58,7 @@ def extract_json(text: str) -> Dict[str, Any]:
         if match:
             try:
                 return json.loads(match.group(0))
-            except:
+            except json.JSONDecodeError:
                 pass
     return {"executive_summary": text, "attack_paths": [], "top_remediations": []}
 
