@@ -84,8 +84,8 @@ Pipeline Sentinel is designed to be **flexible** — you decide where it fits be
 [Gitleaks scan] ┘
 ```
 
-> **📌 Diagram Placeholder:** Add your network flow diagram here as `docs/network_flow.png`.  
-> `![Network Flow Diagram](docs/network_flow.png)`
+> **📌 Diagram Placeholder:**  
+![Network Flow Diagram](docs/architecture.png)
 
 ---
 
@@ -471,9 +471,9 @@ We welcome contributions of all kinds! Please read our `CONTRIBUTING.md` for det
 
 **ReverseForge** — ( Mehrdoost And Mi0r4 ) 
 
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/ReverseForge) 
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost) 
-[cite_start][![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/miora-sora) 
+[![GitHub](https://img.shields.io/badge/GitHub-ReverseForge-181717?logo=github)](https://github.com/ReverseForge) 
+[![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost) 
+[![GitHub](https://img.shields.io/badge/GitHub-miora-sora-181717?logo=github)](https://github.com/miora-sora) 
 
 
 ---
