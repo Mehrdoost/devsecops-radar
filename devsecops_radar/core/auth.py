@@ -1,3 +1,4 @@
+import os
 import jwt
 import datetime
 from functools import wraps
@@ -18,11 +19,11 @@ def verify_token(token: str) -> dict:
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        # Only enforce authentication if the admin has configured an API key.
-        if settings.PIPELINE_API_KEY != "disabled":
+        # Read directly from os.environ to support test patching
+        api_key = os.environ.get("PIPELINE_API_KEY", "disabled")
+        if api_key != "disabled":
             key = request.headers.get("X-API-Key")
-            if key != settings.PIPELINE_API_KEY:
+            if key != api_key:
                 return jsonify({"error": "API key required"}), 401
-        # Without an API key, all requests are permitted (default for local use).
         return f(*args, **kwargs)
     return decorated
