@@ -39,7 +39,7 @@ DASHBOARD_HTML = r"""
     <nav class="navbar navbar-dark border-bottom border-secondary mb-4" style="background:#1e293b;">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h1">🛡️ Pipeline Sentinel</span>
-            <span class="text-muted">v0.3.2</span>
+            <span class="text-muted">v0.3.3</span>
         </div>
     </nav>
 
