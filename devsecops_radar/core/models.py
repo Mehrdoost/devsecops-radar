@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from pydantic import BaseModel, validator
-from typing import List, Optional
+from typing import Optional
 import datetime
 import os
 

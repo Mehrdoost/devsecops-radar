@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devsecops-radar"
-version = "0.3.4"
+version = "0.3.5"
 description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
 readme = "README.md"
 license = "MIT"
