@@ -3,6 +3,7 @@ import json
 import os
 from devsecops_radar.core.database import get_all_scans, get_findings_paginated
 from devsecops_radar.core.rag import rag_search
+from devsecops_radar.core.auth import login_required
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -174,10 +175,16 @@ DASHBOARD_HTML = r"""
     <script>
         const API_KEY = "{{ api_key }}";
         function getHeaders() {
+            const headers = {};
             if (API_KEY && API_KEY !== 'disabled') {
-                return { 'X-API-Key': API_KEY };
+                headers['X-API-Key'] = API_KEY;
             }
-            return {};
+            // Optionally add JWT token if stored
+            const token = localStorage.getItem('jwt_token');
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            return headers;
         }
 
         let allFindings = [];
@@ -221,14 +228,12 @@ DASHBOARD_HTML = r"""
             renderTable(filtered);
         }
 
-        // ✅ FIX: use data.items for the array, and use allFindings for charts & stats
         fetch('/api/findings', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
                 allFindings = data.items;
                 renderTable(allFindings);
 
-                // Doughnut chart counts
                 const counts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
                 allFindings.forEach(f => {
                     const sev = f.severity.toUpperCase();
@@ -246,7 +251,6 @@ DASHBOARD_HTML = r"""
                     options: { plugins: { legend: { labels: { color: 'white' } } } }
                 });
 
-                // Pipeline stats (Poutine + Zizmor)
                 const pipeline = allFindings.filter(f => f.tool === 'Poutine' || f.tool === 'Zizmor');
                 const pCounts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
                 pipeline.forEach(f => {
@@ -258,7 +262,6 @@ DASHBOARD_HTML = r"""
                 document.getElementById('pipeline-medium').textContent = pCounts.MEDIUM;
                 document.getElementById('pipeline-low').textContent = pCounts.LOW;
 
-                // Attach filter events
                 document.getElementById('searchInput').addEventListener('input', applyFilters);
                 document.getElementById('toolFilter').addEventListener('change', applyFilters);
                 document.getElementById('severityFilter').addEventListener('change', applyFilters);
@@ -297,7 +300,6 @@ DASHBOARD_HTML = r"""
                 }
                 if (!data.nodes || data.nodes.length === 0) return;
                 const container = document.getElementById('attack-graph');
-                // ✅ Clean previous SVG before drawing new one
                 container.innerHTML = '';
                 const width = container.clientWidth;
                 const height = container.clientHeight;
@@ -445,16 +447,19 @@ def index():
     )
 
 @dashboard_bp.route('/api/findings')
+@login_required
 def api_findings():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     return jsonify(get_findings_paginated(page, per_page))
 
 @dashboard_bp.route('/api/history')
+@login_required
 def api_history():
     return jsonify(get_all_scans())
 
 @dashboard_bp.route('/api/rag')
+@login_required
 def api_rag():
     q = request.args.get('q', '')
     if not q:

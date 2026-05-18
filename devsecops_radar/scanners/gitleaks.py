@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import os
 from typing import List, Dict, Any
+from loguru import logger
 from devsecops_radar.plugins import ScannerPlugin
 
 class GitleaksScanner(ScannerPlugin):
@@ -15,17 +16,24 @@ class GitleaksScanner(ScannerPlugin):
         with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
             outfile = tmp.name
         try:
-            subprocess.run(['gitleaks', 'detect', '--source', target, '--report-format', 'json', '--report-path', outfile], check=True)
+            subprocess.run(
+                ['gitleaks', 'detect', '--source', target, '--report-format', 'json', '--report-path', outfile],
+                check=True
+            )
             return self.parse(outfile)
         finally:
             if os.path.exists(outfile):
                 os.unlink(outfile)
 
     def parse(self, file_path: str) -> List[Dict[str, Any]]:
-        with open(file_path) as f:
-            data = json.load(f)
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Could not parse Gitleaks output: {e}")
+            return []
         findings = []
-        for item in data:
+        for item in data if isinstance(data, list) else data.get("Findings", []):
             findings.append({
                 "tool": "Gitleaks",
                 "target": item.get("file", ""),

@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -40,8 +41,20 @@ def parse_args():
     parser.add_argument('--wizard', action='store_true', help='Interactive first-time setup wizard')
     return parser.parse_args()
 
-def run_scans(args, plugins):
-    all_findings = []
+async def run_scanner_async(name, target, adapter):
+    try:
+        if os.path.isfile(target):
+            logger.info(f"Parsing {name} JSON file: {target}")
+            validated = await asyncio.to_thread(adapter.parse, target)
+        else:
+            logger.info(f"Running {name} on: {target}")
+            validated = await asyncio.to_thread(adapter.run, target)
+        return [v.dict() for v in validated]
+    except Exception as e:
+        logger.error(f"{name} failed: {e}")
+        return []
+
+async def run_scans(args, plugins):
     scanner_targets = {
         'trivy': args.trivy,
         'semgrep': args.semgrep,
@@ -49,21 +62,20 @@ def run_scans(args, plugins):
         'zizmor': args.zizmor,
         'gitleaks': getattr(args, 'gitleaks', None),
     }
+    tasks = []
     for name, target in scanner_targets.items():
         if target:
-            scanner = plugins.get(name)
-            if scanner:
-                adapter = ScannerAdapter(scanner)
-                try:
-                    if os.path.isfile(target):
-                        logger.info(f"Parsing {name} JSON file: {target}")
-                        validated = adapter.parse(target)
-                    else:
-                        logger.info(f"Running {name} on: {target}")
-                        validated = adapter.run(target)
-                    all_findings.extend([v.dict() for v in validated])
-                except Exception as e:
-                    logger.error(f"{name} failed: {e}")
+            plugin = plugins.get(name)
+            if plugin:
+                adapter = ScannerAdapter(plugin)
+                tasks.append(run_scanner_async(name, target, adapter))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    all_findings = []
+    for res in results:
+        if isinstance(res, list):
+            all_findings.extend(res)
+        elif isinstance(res, Exception):
+            logger.error(f"Scan task failed with exception: {res}")
     return all_findings
 
 def load_custom_rules(args):
@@ -109,27 +121,32 @@ def run_analysis(args, findings, topology=None):
 def wizard():
     """Interactive setup wizard for first-time users."""
     print("🛡️  Welcome to Pipeline Sentinel – Quick Setup Wizard")
-    print("This will guide you through scanning a sample project.\n")
-    # 1. Ollama check
+    print("This will install necessary components.\n")
     import subprocess
+    # 1. Ollama check
     try:
         subprocess.run(['ollama', '--version'], capture_output=True, check=True)
+        print("[✔] Ollama found.")
     except:
         print("[!] Ollama not found. Installing...")
-        subprocess.run(['curl', '-fsSL', 'https://ollama.com/install.sh', '|', 'sh'], shell=True)
-    # 2. Pull model
-    print("📥 Pulling AI model llama3.2 ...")
+        subprocess.run('curl -fsSL https://ollama.com/install.sh | sh', shell=True)
+    # 2. Pull AI model
+    print("📥 Pulling AI model (llama3.2)...")
     subprocess.run(['ollama', 'pull', 'llama3.2:latest'])
-    # 3. Scan current directory with Semgrep and Trivy if available
-    print("🔍 Scanning current directory with Semgrep...")
+    # 3. Suggestions for optional tools
     if subprocess.run(['which', 'semgrep'], capture_output=True).returncode == 0:
-        subprocess.run(['semgrep', '--config=auto', '--json', '--output', 'semgrep.json', '.'], check=False)
-    print("🐳 Scanning with Trivy (if Docker installed)...")
+        print("[✔] Semgrep available.")
+    else:
+        print("[ ] Semgrep not found (optional).")
     if subprocess.run(['which', 'docker'], capture_output=True).returncode == 0:
-        subprocess.run(['trivy', 'image', '--format', 'json', '--output', 'trivy.json', 'alpine:latest'], check=False)
-    # 4. Merge and start dashboard
-    os.system('devsecops-radar --trivy trivy.json --semgrep semgrep.json')
-    os.system('devsecops-radar-web')
+        print("[✔] Docker available.")
+    else:
+        print("[ ] Docker not found (optional).")
+    # 4. Final instructions
+    print("\n✅ Setup complete! You can now run:")
+    print("   devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json")
+    print("   devsecops-radar-web")
+    print("\nThen open http://localhost:8080 in your browser.")
 
 def main():
     args = parse_args()
@@ -140,8 +157,7 @@ def main():
     logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
 
     plugins = discover_plugins()
-    findings = []
-    findings.extend(run_scans(args, plugins))
+    findings = asyncio.run(run_scans(args, plugins))
     findings.extend(load_custom_rules(args))
 
     if not findings:
@@ -163,7 +179,6 @@ def main():
 
     if args.fix and ai_summary:
         if args.review:
-            # Human-in-the-loop: show diff and ask confirmation
             from devsecops_radar.core.remediation import generate_fix_commands
             cmds = generate_fix_commands(findings, ai_summary)
             print("Proposed fixes:\n", cmds)

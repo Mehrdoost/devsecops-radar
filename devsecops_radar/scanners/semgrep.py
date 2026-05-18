@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import os
 from typing import List, Dict, Any
+from loguru import logger
 from devsecops_radar.plugins import ScannerPlugin
 
 class SemgrepScanner(ScannerPlugin):
@@ -25,15 +26,19 @@ class SemgrepScanner(ScannerPlugin):
                 os.unlink(outfile)
 
     def parse(self, file_path: str) -> List[Dict[str, Any]]:
-        with open(file_path) as f:
-            data = json.load(f)
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Could not parse Semgrep output: {e}")
+            return []
         findings = []
         for result in data.get("results", []):
             findings.append({
                 "tool": "Semgrep",
                 "target": result.get("path", ""),
                 "id": result.get("check_id", ""),
-                "severity": result.get("extra", {}).get("severity", "WARNING").upper(),
+                "severity": (result.get("extra", {}).get("severity", "WARNING") or "WARNING").upper(),
                 "title": result.get("check_id", ""),
                 "description": result.get("extra", {}).get("message", ""),
                 "line": result.get("start", {}).get("line", 0)

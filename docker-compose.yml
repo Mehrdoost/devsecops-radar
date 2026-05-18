@@ -3,10 +3,13 @@ services:
   radar:
     build: .
     ports:
-      - "8080:8080"
+      - "${PORT:-8080}:8080"
     volumes:
       - ./findings.json:/data/findings.json
       - radar_data:/data
-
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-}
+      - PIPELINE_API_KEY=${PIPELINE_API_KEY:-disabled}
+      - FINDINGS_FILE=/data/findings.json
 volumes:
   radar_data:

@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import os
 from typing import List, Dict, Any
+from loguru import logger
 from devsecops_radar.plugins import ScannerPlugin
 
 class TrivyScanner(ScannerPlugin):
@@ -25,8 +26,12 @@ class TrivyScanner(ScannerPlugin):
                 os.unlink(outfile)
 
     def parse(self, file_path: str) -> List[Dict[str, Any]]:
-        with open(file_path) as f:
-            data = json.load(f)
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Could not parse Trivy output: {e}")
+            return []
         findings = []
         for result in data.get("Results", []):
             target_name = result.get("Target", "Unknown")
@@ -34,8 +39,8 @@ class TrivyScanner(ScannerPlugin):
                 findings.append({
                     "tool": "Trivy",
                     "target": target_name,
-                    "id": vuln.get("VulnerabilityID"),
-                    "severity": vuln.get("Severity", "UNKNOWN").upper(),
+                    "id": vuln.get("VulnerabilityID", ""),
+                    "severity": (vuln.get("Severity", "UNKNOWN") or "UNKNOWN").upper(),
                     "title": vuln.get("Title", ""),
                     "description": vuln.get("Description", ""),
                     "package": vuln.get("PkgName", ""),

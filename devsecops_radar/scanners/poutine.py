@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import os
 from typing import List, Dict, Any
+from loguru import logger
 from devsecops_radar.plugins import ScannerPlugin
 
 class PoutineScanner(ScannerPlugin):
@@ -25,15 +26,19 @@ class PoutineScanner(ScannerPlugin):
                 os.unlink(outfile)
 
     def parse(self, file_path: str) -> List[Dict[str, Any]]:
-        with open(file_path) as f:
-            data = json.load(f)
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Could not parse Poutine output: {e}")
+            return []
         findings = []
         for result in data.get("findings", []):
             findings.append({
                 "tool": "Poutine",
                 "target": result.get("location", {}).get("file", ""),
                 "id": result.get("rule_id", ""),
-                "severity": result.get("severity", "UNKNOWN").upper(),
+                "severity": (result.get("severity", "UNKNOWN") or "UNKNOWN").upper(),
                 "title": result.get("message", ""),
                 "description": result.get("description", ""),
                 "line": result.get("location", {}).get("line", 0)
