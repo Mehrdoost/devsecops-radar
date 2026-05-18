@@ -1,6 +1,6 @@
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 from typing import Optional
 import datetime
 import os
@@ -16,14 +16,15 @@ class FindingSchema(BaseModel):
     description: Optional[str] = ""
     line: Optional[int] = None
 
-    @validator('severity')
-    def severity_upper(cls, v):
+    @field_validator('severity')
+    @classmethod
+    def severity_upper(cls, v: str) -> str:
         return v.upper()
 
 class Scan(Base):
     __tablename__ = 'scans'
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.UTC))
     findings_json = Column(JSON)
     findings = relationship("Finding", back_populates="scan", cascade="all, delete-orphan")
 

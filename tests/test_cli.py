@@ -26,5 +26,6 @@ def test_cli_merge_sample_files():
         capture_output=True, text=True
     )
     assert result.returncode == 0
-    assert 'Merged' in result.stdout
+    # CLI logs to stderr, so check there
+    assert 'Merged' in result.stderr
     os.unlink(outpath)
