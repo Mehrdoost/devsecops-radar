@@ -1,7 +1,9 @@
-from devsecops_radar.core.models import SessionLocal, Finding
-from typing import List, Dict, Any
+from typing import Any
 
-def rag_search(query: str, limit: int = 5) -> List[Dict[str, Any]]:
+from devsecops_radar.core.models import Finding, SessionLocal
+
+
+def rag_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
     session = SessionLocal()
     results = session.query(Finding).filter(
         Finding.title.ilike(f'%{query}%') | Finding.description.ilike(f'%{query}%')

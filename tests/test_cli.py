@@ -1,7 +1,9 @@
-import subprocess
 import os
+import subprocess
 import tempfile
+
 import pytest
+
 
 def test_cli_help():
     result = subprocess.run(['devsecops-radar', '--help'], capture_output=True, text=True)

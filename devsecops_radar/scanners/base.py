@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import Any
+
 
 class BaseScanner(ABC):
     @abstractmethod
-    def run(self, target: str) -> List[Dict[str, Any]]:
+    def run(self, target: str) -> list[dict[str, Any]]:
         pass
 
     @abstractmethod
-    def parse(self, file_path: str) -> List[Dict[str, Any]]:
+    def parse(self, file_path: str) -> list[dict[str, Any]]:
         pass

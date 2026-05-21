@@ -1,6 +1,6 @@
 import json
 import warnings
-from typing import List, Dict, Any
+from typing import Any
 
 warnings.warn(
     "devsecops_radar.core.parser is deprecated and will be removed in v0.3.0. "
@@ -9,7 +9,7 @@ warnings.warn(
     stacklevel=2,
 )
 
-def parse_trivy_json(file_path: str) -> List[Dict[str, Any]]:
+def parse_trivy_json(file_path: str) -> list[dict[str, Any]]:
     with open(file_path) as f:
         data = json.load(f)
     findings = []
@@ -32,7 +32,7 @@ def parse_trivy_json(file_path: str) -> List[Dict[str, Any]]:
     return findings
 
 
-def parse_semgrep_json(file_path: str) -> List[Dict[str, Any]]:
+def parse_semgrep_json(file_path: str) -> list[dict[str, Any]]:
     with open(file_path) as f:
         data = json.load(f)
     findings = []
@@ -53,7 +53,7 @@ def parse_semgrep_json(file_path: str) -> List[Dict[str, Any]]:
     return findings
 
 
-def merge_findings(*finding_lists) -> List[Dict[str, Any]]:
+def merge_findings(*finding_lists) -> list[dict[str, Any]]:
     merged = []
     for lst in finding_lists:
         merged.extend(lst)

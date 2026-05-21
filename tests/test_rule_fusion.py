@@ -30,4 +30,3 @@ class TestPolicyEvaluation:
     def test_policy_file_not_found(self):
         passed, msg = RuleFusion.evaluate_policy([], "/nonexistent/policy.json")
         assert passed
-        

@@ -1,6 +1,7 @@
 import os
 import secrets
 
+
 class Settings:
     JWT_SECRET: str = os.environ.get("JWT_SECRET", "")
     JWT_ALGORITHM: str = "HS256"

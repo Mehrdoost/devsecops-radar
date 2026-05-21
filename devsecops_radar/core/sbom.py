@@ -1,9 +1,9 @@
-import subprocess
 import json
 import os
-from typing import List, Dict, Optional
+import subprocess
 
-def generate_sbom(target_dir: str, output_file: str = "sbom.json") -> Optional[Dict]:
+
+def generate_sbom(target_dir: str, output_file: str = "sbom.json") -> dict | None:
     try:
         subprocess.run(['syft', 'scan', target_dir, '-o', 'cyclonedx-json', '--output', output_file], check=True)
         with open(output_file) as f:
@@ -12,7 +12,7 @@ def generate_sbom(target_dir: str, output_file: str = "sbom.json") -> Optional[D
         print(f"SBOM generation failed: {e}")
         return None
 
-def detect_dependency_confusion(manifest_path: str, internal_prefixes: List[str] = None) -> List[Dict]:
+def detect_dependency_confusion(manifest_path: str, internal_prefixes: list[str] = None) -> list[dict]:
     findings = []
     if not internal_prefixes:
         internal_prefixes = ['mycompany-', 'internal-']
@@ -36,7 +36,7 @@ def detect_dependency_confusion(manifest_path: str, internal_prefixes: List[str]
         pass
     return findings
 
-def apply_vex_filter(findings: List[Dict], vex_file: str) -> List[Dict]:
+def apply_vex_filter(findings: list[dict], vex_file: str) -> list[dict]:
     """Filter findings based on a CycloneDX VEX document."""
     if not os.path.exists(vex_file):
         return findings

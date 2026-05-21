@@ -1,8 +1,8 @@
 from contextlib import contextmanager
-from devsecops_radar.core.models import (
-    init_db, SessionLocal, Scan, Finding
-)
-from typing import List, Dict, Any, Optional
+from typing import Any
+
+from devsecops_radar.core.models import Finding, Scan, SessionLocal, init_db
+
 
 @contextmanager
 def get_session():
@@ -16,11 +16,11 @@ def get_session():
     finally:
         session.close()
 
-def save_scan(findings: List[Dict[str, Any]]):
+def save_scan(findings: list[dict[str, Any]]):
     from devsecops_radar.core.models import save_scan_to_db
     save_scan_to_db(findings)
 
-def get_all_scans() -> List[Dict[str, Any]]:
+def get_all_scans() -> list[dict[str, Any]]:
     init_db()
     with get_session() as session:
         scans = []
@@ -41,7 +41,7 @@ def get_all_scans() -> List[Dict[str, Any]]:
             })
     return scans
 
-def get_scan_by_id(scan_id: int) -> Optional[Dict[str, Any]]:
+def get_scan_by_id(scan_id: int) -> dict[str, Any] | None:
     with get_session() as session:
         scan = session.query(Scan).filter(Scan.id == scan_id).first()
         if not scan:
@@ -65,7 +65,7 @@ def get_scan_by_id(scan_id: int) -> Optional[Dict[str, Any]]:
             "total": len(findings_list)
         }
 
-def compare_scans(scan_id_1: int, scan_id_2: int) -> Dict[str, Any]:
+def compare_scans(scan_id_1: int, scan_id_2: int) -> dict[str, Any]:
     scan1 = get_scan_by_id(scan_id_1)
     scan2 = get_scan_by_id(scan_id_2)
     if not scan1 or not scan2:
@@ -84,7 +84,7 @@ def compare_scans(scan_id_1: int, scan_id_2: int) -> Dict[str, Any]:
         "removed_findings": removed,
     }
 
-def get_findings_paginated(page: int = 1, per_page: int = 50) -> Dict[str, Any]:
+def get_findings_paginated(page: int = 1, per_page: int = 50) -> dict[str, Any]:
     with get_session() as session:
         total = session.query(Finding).count()
         findings = session.query(Finding).order_by(Finding.id.desc()).offset(

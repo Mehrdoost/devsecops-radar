@@ -1,9 +1,12 @@
-import os
-import jwt
 import datetime
+import os
 from functools import wraps
-from flask import request, jsonify
+
+import jwt
+from flask import jsonify, request
+
 from devsecops_radar.core.settings import settings
+
 
 def create_token(user: str = "admin") -> str:
     payload = {

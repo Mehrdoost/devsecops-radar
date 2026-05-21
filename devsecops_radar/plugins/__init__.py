@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from typing import Any
+
 
 class ScannerPlugin(ABC):
     @property
@@ -13,8 +14,8 @@ class ScannerPlugin(ABC):
         ...
 
     @abstractmethod
-    def parse(self, file_path: str) -> List[Dict[str, Any]]:
+    def parse(self, file_path: str) -> list[dict[str, Any]]:
         ...
 
-    def run(self, target: str) -> List[Dict[str, Any]]:
+    def run(self, target: str) -> list[dict[str, Any]]:
         raise NotImplementedError("Direct run not supported for this plugin.")

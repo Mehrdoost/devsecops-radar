@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, jsonify, request
 
 sentry_bp = Blueprint('sentry', __name__)
 

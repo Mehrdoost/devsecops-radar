@@ -1,9 +1,9 @@
 import json
 import os
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import Any
 
 
 class RuleFusion:
@@ -25,11 +25,11 @@ class RuleFusion:
             "COMMUNITY_RULES_REPO",
             "https://github.com/Mehrdoost/devsecops-radar-rules.git"
         )
-        self.findings: List[Dict[str, Any]] = []
+        self.findings: list[dict[str, Any]] = []
 
     # ── public API ──────────────────────────────────────────────
 
-    def load_all_rules(self) -> List[Dict[str, Any]]:
+    def load_all_rules(self) -> list[dict[str, Any]]:
         if self.local_rules_path and self.local_rules_path.exists():
             self._load_from_directory(self.local_rules_path)
 
@@ -84,15 +84,15 @@ class RuleFusion:
 
     @staticmethod
     def evaluate_policy(
-        findings: List[Dict[str, Any]], policy_file: str
-    ) -> Tuple[bool, str]:
+        findings: list[dict[str, Any]], policy_file: str
+    ) -> tuple[bool, str]:
         if not os.path.exists(policy_file):
             return True, (
                 f"Policy file '{policy_file}' not found. "
                 "Skipping evaluation."
             )
 
-        with open(policy_file, "r") as f:
+        with open(policy_file) as f:
             policy = json.load(f)
 
         critical_count = sum(
@@ -114,8 +114,8 @@ class RuleFusion:
 
     @staticmethod
     def evaluate_rego_policy(
-        findings: List[Dict[str, Any]], rego_policy_file: str
-    ) -> Tuple[bool, str]:
+        findings: list[dict[str, Any]], rego_policy_file: str
+    ) -> tuple[bool, str]:
         """Evaluate findings using an OPA Rego policy file."""
         if not shutil.which("opa"):
             return True, "OPA not installed; skipping Rego evaluation."
@@ -139,7 +139,7 @@ class RuleFusion:
     def _load_from_directory(self, directory: Path) -> None:
         for json_file in sorted(directory.rglob("*.json")):
             try:
-                with open(json_file, "r", encoding="utf-8") as f:
+                with open(json_file, encoding="utf-8") as f:
                     data = json.load(f)
             except json.JSONDecodeError:
                 print(f"⚠️ Skipping invalid JSON: {json_file.name}")
@@ -182,8 +182,8 @@ class RuleFusion:
 
     def _parse_scanner_output(
         self, data: Any, filename: str
-    ) -> List[Dict[str, Any]]:
-        findings: List[Dict[str, Any]] = []
+    ) -> list[dict[str, Any]]:
+        findings: list[dict[str, Any]] = []
 
         if isinstance(data, list):
             for item in data:
@@ -243,7 +243,7 @@ class RuleFusion:
             )
         )
 
-    def _normalize(self, raw: dict, filename: str) -> Dict[str, Any]:
+    def _normalize(self, raw: dict, filename: str) -> dict[str, Any]:
         return {
             "tool": raw.get("tool", "Custom Rule"),
             "target": (

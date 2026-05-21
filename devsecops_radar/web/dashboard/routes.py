@@ -1,6 +1,8 @@
-from flask import Blueprint, jsonify, render_template_string, request
 import json
 import os
+
+from flask import Blueprint, jsonify, render_template_string, request
+
 from devsecops_radar.core.database import get_all_scans, get_findings_paginated
 from devsecops_radar.core.rag import rag_search
 
@@ -208,7 +210,8 @@ DASHBOARD_HTML = r"""
                 <h5 class="card-title" style="color:var(--accent)">Findings</h5>
                 <div>
                     <input type="text" id="searchInput" class="form-control" placeholder="Search..."
-                           style="background:var(--bg-primary); color:white; border:1px solid rgba(255,255,255,0.1);">
+                           style="background:var(--bg-primary); color:white;
+                                  border:1px solid rgba(255,255,255,0.1);">
                 </div>
             </div>
             <div class="table-responsive">
@@ -252,8 +255,10 @@ DASHBOARD_HTML = r"""
 
         <footer class="text-center text-muted py-3 border-top border-secondary mt-4">
             <small>🛡️ <strong>Pipeline Sentinel</strong> · crafted by
-                <a href="https://github.com/Mehrdoost" class="text-decoration-none text-info" target="_blank">Mehrdoost</a> ·
-                <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none text-info" target="_blank">View on GitHub</a>
+                <a href="https://github.com/Mehrdoost"
+                   class="text-decoration-none text-info" target="_blank">Mehrdoost</a> ·
+                <a href="https://github.com/Mehrdoost/devsecops-radar"
+                   class="text-decoration-none text-info" target="_blank">View on GitHub</a>
             </small>
         </footer>
     </div>
@@ -271,6 +276,11 @@ DASHBOARD_HTML = r"""
         let allFindings = [];
         let selectedFindings = new Set();
 
+        function truncate(text, maxLen) {
+            if (!text) return text;
+            return text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
+        }
+
         function renderTable(data) {
             const tbody = document.getElementById('tableBody');
             tbody.innerHTML = '';
@@ -283,7 +293,7 @@ DASHBOARD_HTML = r"""
                     <td><code style="color:var(--accent)">${f.id}</code></td>
                     <td><span class="badge bg-${getSeverityColor(f.severity)}">${f.severity}</span></td>
                     <td>${f.target}</td>
-                    <td>${f.description && f.description.length > 80 ? f.description.substring(0,80)+'...' : f.description}</td>
+                    <td>${truncate(f.description, 80)}</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -293,7 +303,8 @@ DASHBOARD_HTML = r"""
                     const fid = this.dataset.id;
                     if (this.checked) selectedFindings.add(fid);
                     else selectedFindings.delete(fid);
-                    document.getElementById('simulate-selected-btn').disabled = selectedFindings.size === 0;
+                    document.getElementById('simulate-selected-btn').disabled =
+                        selectedFindings.size === 0;
                 });
             });
         }
@@ -311,7 +322,8 @@ DASHBOARD_HTML = r"""
         function applyFilters() {
             const search = document.getElementById('searchInput').value.toLowerCase();
             const filtered = allFindings.filter(f =>
-                (f.id.toLowerCase().includes(search) || (f.description && f.description.toLowerCase().includes(search)))
+                (f.id.toLowerCase().includes(search) ||
+                 (f.description && f.description.toLowerCase().includes(search)))
             );
             renderTable(filtered);
         }
@@ -323,7 +335,8 @@ DASHBOARD_HTML = r"""
                 if (this.checked) selectedFindings.add(cb.dataset.id);
                 else selectedFindings.delete(cb.dataset.id);
             });
-            document.getElementById('simulate-selected-btn').disabled = selectedFindings.size === 0;
+            document.getElementById('simulate-selected-btn').disabled =
+                selectedFindings.size === 0;
         });
 
         fetch('/api/findings', { headers: getHeaders() })
@@ -371,10 +384,30 @@ DASHBOARD_HTML = r"""
                     data: {
                         labels,
                         datasets: [
-                            { label: 'CRITICAL', data: scans.map(s => s.critical), borderColor: '#FF4D6D', tension: 0.3 },
-                            { label: 'HIGH', data: scans.map(s => s.high), borderColor: '#FFB100', tension: 0.3 },
-                            { label: 'MEDIUM', data: scans.map(s => s.medium), borderColor: '#00B4D8', tension: 0.3 },
-                            { label: 'LOW', data: scans.map(s => s.low), borderColor: '#06D6A0', tension: 0.3 }
+                            {
+                                label: 'CRITICAL',
+                                data: scans.map(s => s.critical),
+                                borderColor: '#FF4D6D',
+                                tension: 0.3
+                            },
+                            {
+                                label: 'HIGH',
+                                data: scans.map(s => s.high),
+                                borderColor: '#FFB100',
+                                tension: 0.3
+                            },
+                            {
+                                label: 'MEDIUM',
+                                data: scans.map(s => s.medium),
+                                borderColor: '#00B4D8',
+                                tension: 0.3
+                            },
+                            {
+                                label: 'LOW',
+                                data: scans.map(s => s.low),
+                                borderColor: '#06D6A0',
+                                tension: 0.3
+                            }
                         ]
                     },
                     options: {
@@ -431,8 +464,11 @@ DASHBOARD_HTML = r"""
                     .style('cursor', 'pointer')
                     .on('click', (event, d) => {
                         const detail = document.getElementById('attack-detail');
-                        detail.innerHTML = `<strong>${d.id}</strong><br>Severity: ${d.severity}<br>${d.title}<br>
-                            <button class="btn-accent mt-2" onclick="simulateAttack(['${d.id}'])">Simulate this attack</button>`;
+                        detail.innerHTML = (
+                            `<strong>${d.id}</strong><br>Severity: ${d.severity}<br>${d.title}<br>` +
+                                                        `<button class="btn-accent mt-2" ` +
+                            `onclick="simulateAttack(['${d.id}'])">Simulate this attack</button>`
+                        );
                         detail.style.display = 'block';
                     })
                     .call(d3.drag()
@@ -468,12 +504,15 @@ DASHBOARD_HTML = r"""
                 if (!topo || !topo.servers || topo.servers.length === 0) return;
                 document.getElementById('topology-row')?.style?.display = 'block';
                 const nodes = topo.servers.map(s => ({ id: s.name, group: s.ip }));
-                const links = topo.connections.map(c => ({ source: c.source, target: c.target, label: c.protocol }));
+                const links = topo.connections.map(
+                    c => ({ source: c.source, target: c.target, label: c.protocol })
+                );
                 const container = document.getElementById('topology-graph');
                 container.innerHTML = '';
                 const width = container.clientWidth;
                 const height = container.clientHeight;
-                const svg = d3.select('#topology-graph').append('svg').attr('width', width).attr('height', height);
+                const svg = d3.select('#topology-graph')
+                    .append('svg').attr('width', width).attr('height', height);
                 const simulation = d3.forceSimulation(nodes)
                     .force('link', d3.forceLink(links).id(d => d.id).distance(80))
                     .force('charge', d3.forceManyBody().strength(-300))
@@ -493,7 +532,8 @@ DASHBOARD_HTML = r"""
                             d.fx = null; d.fy = null;
                         }));
                 const label = svg.append('g').selectAll('text').data(nodes).enter().append('text')
-                    .text(d => d.id).attr('font-size', '10px').attr('dx', 15).attr('dy', 4).attr('fill', 'white');
+                    .text(d => d.id).attr('font-size', '10px').attr('dx', 15).attr('dy', 4)
+                    .attr('fill', 'white');
                 simulation.on('tick', () => {
                     link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
                         .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
@@ -502,17 +542,23 @@ DASHBOARD_HTML = r"""
                 });
             });
 
-        document.getElementById('simulate-selected-btn').addEventListener('click', () => {
-            const ids = Array.from(selectedFindings);
-            if (ids.length === 0) return;
-            simulateAttack(ids);
-        });
+        document.getElementById('simulate-selected-btn')
+            .addEventListener('click', () => {
+                const ids = Array.from(selectedFindings);
+                if (ids.length === 0) return;
+                simulateAttack(ids);
+            });
 
         async function simulateAttack(findingIds) {
             const modal = new bootstrap.Modal(document.getElementById('simulationModal'));
             modal.show();
             const resultDiv = document.getElementById('simulation-result');
-            resultDiv.innerHTML = '<div class="text-center"><div class="spinner-border" style="color:var(--accent)"></div><p class="mt-2">Simulating attack chain...</p></div>';
+            const loadingHtml = (
+                '<div class="text-center">' +
+                '<div class="spinner-border" style="color:var(--accent)"></div>' +
+                '<p class="mt-2">Simulating attack chain...</p></div>'
+            );
+            resultDiv.innerHTML = loadingHtml;
             try {
                 const resp = await fetch('/api/simulate', {
                     method: 'POST',
@@ -520,11 +566,14 @@ DASHBOARD_HTML = r"""
                     body: JSON.stringify({ finding_ids: findingIds })
                 });
                 const data = await resp.json();
+                const preStyle = 'color:var(--text); max-height:300px; overflow-y:auto;';
                 resultDiv.innerHTML = `
                     <h6 style="color:var(--accent)">Simulation Results</h6>
-                    <pre class="bg-dark p-3 rounded" style="color:var(--text); max-height:300px; overflow-y:auto;">${escapeHtml(data.script)}</pre>
+                    <pre class="bg-dark p-3 rounded" style="${preStyle}">${escapeHtml(data.script)}</pre>
                     <p class="mt-2"><strong>Description:</strong> ${escapeHtml(data.description)}</p>
-                    ${data.sandbox_output ? `<p><strong>Sandbox Output:</strong><br><pre>${escapeHtml(data.sandbox_output)}</pre></p>` : ''}
+                    ${data.sandbox_output
+                        ? `<p><strong>Sandbox Output:</strong><br><pre>${escapeHtml(data.sandbox_output)}</pre></p>`
+                        : ''}
                 `;
             } catch (err) {
                 resultDiv.innerHTML = `<div class="alert alert-danger">Simulation failed: ${err.message}</div>`;
@@ -532,7 +581,8 @@ DASHBOARD_HTML = r"""
         }
 
         function escapeHtml(text) {
-            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
     </script>
 </body>
@@ -584,7 +634,7 @@ def api_simulate():
     if not selected:
         return jsonify({"error": "No matching findings found"}), 404
 
-    from devsecops_radar.core.attack_simulation import simulate_attack, run_sandboxed_poc
+    from devsecops_radar.core.attack_simulation import run_sandboxed_poc, simulate_attack
     script_parts = []
     descriptions = []
     for f in selected:

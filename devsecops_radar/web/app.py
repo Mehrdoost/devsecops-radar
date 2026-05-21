@@ -1,11 +1,13 @@
 from flask import Flask, jsonify, request
-from devsecops_radar.web.dashboard.routes import dashboard_bp
-from devsecops_radar.web.attack_paths.routes import attack_paths_bp
-from devsecops_radar.web.topology.routes import topology_bp
-from devsecops_radar.web.summary.routes import summary_bp
-from devsecops_radar.web.sentry.routes import sentry_bp
+
 from devsecops_radar.core.auth import create_token
 from devsecops_radar.core.settings import settings
+from devsecops_radar.web.attack_paths.routes import attack_paths_bp
+from devsecops_radar.web.dashboard.routes import dashboard_bp
+from devsecops_radar.web.sentry.routes import sentry_bp
+from devsecops_radar.web.summary.routes import summary_bp
+from devsecops_radar.web.topology.routes import topology_bp
+
 
 def create_app():
     app = Flask(__name__)

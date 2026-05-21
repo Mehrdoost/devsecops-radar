@@ -1,6 +1,7 @@
+import os
 import subprocess
 import tempfile
-import os
+
 
 def simulate_attack(finding: dict) -> str:
     script = f"#!/bin/bash\n# PoC for {finding.get('id')}\necho 'Simulating {finding.get('title')}'"

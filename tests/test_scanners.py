@@ -121,4 +121,3 @@ class TestGitleaksScanner:
         os.unlink(path)
         assert len(findings) == 1
         assert findings[0]["severity"] == "HIGH"
-        

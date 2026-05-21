@@ -1,9 +1,10 @@
-from typing import Dict, Any, Optional
+from typing import Any
+
 
 def compute_dynamic_risk_score(
-    finding: Dict[str, Any],
-    topology: Optional[Dict[str, Any]] = None,
-    threat_intel: Optional[Dict[str, Any]] = None
+    finding: dict[str, Any],
+    topology: dict[str, Any] | None = None,
+    threat_intel: dict[str, Any] | None = None
 ) -> float:
     severity_weights = {'CRITICAL': 10.0, 'HIGH': 7.0, 'MEDIUM': 4.0, 'LOW': 1.0}
     base = severity_weights.get(finding.get('severity', 'LOW'), 1.0)

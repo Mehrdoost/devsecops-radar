@@ -1,9 +1,9 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, ForeignKey
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from pydantic import BaseModel, field_validator
-from typing import Optional
 import datetime
 import os
+
+from pydantic import BaseModel, field_validator
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, create_engine
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 Base = declarative_base()
 
@@ -13,8 +13,8 @@ class FindingSchema(BaseModel):
     severity: str
     target: str
     title: str
-    description: Optional[str] = ""
-    line: Optional[int] = None
+    description: str | None = ""
+    line: int | None = None
 
     @field_validator('severity')
     @classmethod

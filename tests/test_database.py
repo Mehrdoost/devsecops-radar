@@ -11,7 +11,7 @@ def temp_db():
     old_val = os.environ.get("DATABASE_URL")
     os.environ["DATABASE_URL"] = f"sqlite:///{tmpfile}"
 
-    from devsecops_radar.core.database import save_scan, get_all_scans, get_findings_paginated  # noqa: E402
+    from devsecops_radar.core.database import get_all_scans, get_findings_paginated, save_scan  # noqa: E402
 
     yield tmpfile, save_scan, get_all_scans, get_findings_paginated
 
@@ -39,4 +39,3 @@ def test_save_and_retrieve(temp_db):
     assert len(scans) > 0
     paginated = get_findings_paginated(1, 10)
     assert paginated["total"] >= 1
-    

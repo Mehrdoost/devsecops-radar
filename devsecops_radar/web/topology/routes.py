@@ -1,6 +1,7 @@
-from flask import Blueprint, jsonify
 import json
 import os
+
+from flask import Blueprint, jsonify
 
 topology_bp = Blueprint('topology', __name__)
 
