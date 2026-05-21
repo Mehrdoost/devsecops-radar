@@ -1,10 +1,8 @@
-# Stage 1: Build dependencies
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 RUN pip install --upgrade pip
-COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
+COPY pyproject.toml .
+RUN pip install --user --no-cache-dir -e .
 
-# Stage 2: Production image
 FROM python:3.12-slim
 RUN useradd -m -u 1000 pipeline && mkdir /app && chown pipeline /app
 WORKDIR /app

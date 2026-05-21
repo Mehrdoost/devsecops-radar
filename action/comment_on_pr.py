@@ -2,6 +2,7 @@ import json
 import os
 import sys
 
+
 def main():
     file_path = sys.argv[1]
     if not os.path.exists(file_path):
@@ -16,7 +17,6 @@ def main():
     mediums = [f for f in data if f.get('severity') == 'MEDIUM']
     lows = [f for f in data if f.get('severity') == 'LOW']
 
-    # Build markdown summary
     lines = [
         "## 🛡️ Pipeline Sentinel Scan Results",
         "",
@@ -33,17 +33,16 @@ def main():
         for f in criticals:
             lines.append(f"- **[{f['tool']}]** {f['id']}: {f.get('title','')} (`{f.get('target','')}`)")
 
-    # Write to GitHub step summary
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
     if summary:
         with open(summary, 'a') as s:
             s.write('\n'.join(lines))
 
-    # Set outputs
     if 'GITHUB_OUTPUT' in os.environ:
         with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
             out.write(f"critical_count={len(criticals)}\n")
             out.write(f"high_count={len(highs)}\n")
+
 
 if __name__ == '__main__':
     main()

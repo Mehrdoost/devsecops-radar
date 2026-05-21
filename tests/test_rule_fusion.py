@@ -1,7 +1,9 @@
 import json
-import tempfile
 import os
+import tempfile
+
 from devsecops_radar.core.rule_fusion import RuleFusion
+
 
 class TestPolicyEvaluation:
     def test_policy_pass(self):

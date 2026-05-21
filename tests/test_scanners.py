@@ -1,17 +1,20 @@
 import json
-import tempfile
 import os
-from devsecops_radar.scanners.trivy import TrivyScanner
-from devsecops_radar.scanners.semgrep import SemgrepScanner
-from devsecops_radar.scanners.poutine import PoutineScanner
-from devsecops_radar.scanners.zizmor import ZizmorScanner
+import tempfile
+
 from devsecops_radar.scanners.gitleaks import GitleaksScanner
+from devsecops_radar.scanners.poutine import PoutineScanner
+from devsecops_radar.scanners.semgrep import SemgrepScanner
+from devsecops_radar.scanners.trivy import TrivyScanner
+from devsecops_radar.scanners.zizmor import ZizmorScanner
+
 
 def write_temp_json(data):
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
     json.dump(data, tmp)
     tmp.close()
     return tmp.name
+
 
 class TestTrivyScanner:
     def test_valid_json(self):
@@ -37,6 +40,7 @@ class TestTrivyScanner:
         os.unlink(path)
         assert findings == []
 
+
 class TestSemgrepScanner:
     def test_valid(self):
         data = {"results": [{"path": "a.py", "check_id": "x", "extra": {"severity": "ERROR", "message": "bad"}}]}
@@ -54,6 +58,7 @@ class TestSemgrepScanner:
         os.unlink(path)
         assert findings == []
 
+
 class TestPoutineScanner:
     def test_valid(self):
         data = {"findings": [{"rule_id": "x", "severity": "HIGH", "message": "bad", "location": {"file": "f", "line": 1}}]}
@@ -62,6 +67,7 @@ class TestPoutineScanner:
         os.unlink(path)
         assert findings[0]["severity"] == "HIGH"
 
+
 class TestZizmorScanner:
     def test_valid(self):
         data = {"findings": [{"rule_id": "z1", "severity": "LOW", "message": "m", "path": "p", "location": {"line": 2}}]}
@@ -69,6 +75,7 @@ class TestZizmorScanner:
         findings = ZizmorScanner().parse(path)
         os.unlink(path)
         assert findings[0]["severity"] == "LOW"
+
 
 class TestGitleaksScanner:
     def test_valid_list(self):

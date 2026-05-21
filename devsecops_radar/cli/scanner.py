@@ -4,14 +4,17 @@ import json
 import os
 import sys
 from importlib.metadata import entry_points
+
 from loguru import logger
-from devsecops_radar.scanners.adapter import ScannerAdapter
+
 from devsecops_radar.core.analyzer import get_analyzer
 from devsecops_radar.core.database import save_scan
-from devsecops_radar.core.rule_fusion import RuleFusion
 from devsecops_radar.core.remediation import auto_fix, generate_pr
 from devsecops_radar.core.reporting import generate_pdf_report
+from devsecops_radar.core.rule_fusion import RuleFusion
 from devsecops_radar.core.valuation import compute_dynamic_risk_score
+from devsecops_radar.scanners.adapter import ScannerAdapter
+
 
 def discover_plugins():
     plugins = {}
@@ -19,6 +22,7 @@ def discover_plugins():
         cls = ep.load()
         plugins[cls.name] = cls()
     return plugins
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Pipeline Sentinel - Unified CI/CD Security Dashboard')
@@ -42,6 +46,7 @@ def parse_args():
     parser.add_argument('--wizard', action='store_true', help='Interactive first-time setup wizard')
     return parser.parse_args()
 
+
 async def run_scanner_async(name, target, adapter):
     try:
         if os.path.isfile(target):
@@ -54,6 +59,7 @@ async def run_scanner_async(name, target, adapter):
     except Exception as e:
         logger.error(f"{name} failed: {e}")
         return []
+
 
 async def run_scans(args, plugins):
     scanner_targets = {
@@ -79,6 +85,7 @@ async def run_scans(args, plugins):
             logger.error(f"Scan task failed with exception: {res}")
     return all_findings
 
+
 def load_custom_rules(args):
     if args.rules:
         try:
@@ -89,6 +96,7 @@ def load_custom_rules(args):
         except Exception as e:
             logger.error(f"Failed to load rules: {e}")
     return []
+
 
 def run_policy_check(args, findings):
     if args.policy:
@@ -104,6 +112,7 @@ def run_policy_check(args, findings):
             logger.error("Rego policy check failed.")
             sys.exit(1)
 
+
 def save_results(args, findings):
     with open(args.output, 'w') as f:
         json.dump(findings, f, indent=2)
@@ -112,6 +121,7 @@ def save_results(args, findings):
         save_scan(findings)
     except Exception as e:
         logger.warning(f"Could not save scan history: {e}")
+
 
 def run_analysis(args, findings, topology=None):
     if not args.analyze:
@@ -124,6 +134,7 @@ def run_analysis(args, findings, topology=None):
         json.dump(analysis, f, indent=2)
     logger.success(f"AI summary saved to {summary_file}")
     return analysis
+
 
 def wizard():
     print("🛡️  Welcome to Pipeline Sentinel – Quick Setup Wizard")
@@ -151,6 +162,7 @@ def wizard():
     print("   devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json")
     print("   devsecops-radar-web")
     print("\nThen open http://localhost:8080 in your browser.")
+
 
 def main():
     args = parse_args()
@@ -197,6 +209,7 @@ def main():
 
     if args.report:
         generate_pdf_report(findings, ai_summary, args.report)
+
 
 if __name__ == '__main__':
     main()
