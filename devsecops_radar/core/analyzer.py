@@ -181,3 +181,4 @@ def get_analyzer(backend: str = "ollama", model: str | None = None) -> BaseAnaly
     if backend == "litellm":
         return LiteLLMAnalyzer(model=model)
     return OllamaAnalyzer(model=model)
+    

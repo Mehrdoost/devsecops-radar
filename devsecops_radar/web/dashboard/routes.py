@@ -187,7 +187,7 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
-        <!-- Attack Path & Topology -->
+        <!-- Attack Path -->
         <div class="row g-3 mb-4">
             <div class="col-12">
                 <div class="card p-3">
@@ -202,12 +202,13 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
-        <!-- Findings Table with checkboxes for simulation -->
+        <!-- Findings Table -->
         <div class="card p-3 mb-4">
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h5 class="card-title" style="color:var(--accent)">Findings</h5>
                 <div>
-                    <input type="text" id="searchInput" class="form-control" placeholder="Search..." style="background:var(--bg-primary); color:white; border:1px solid rgba(255,255,255,0.1);">
+                    <input type="text" id="searchInput" class="form-control" placeholder="Search..."
+                           style="background:var(--bg-primary); color:white; border:1px solid rgba(255,255,255,0.1);">
                 </div>
             </div>
             <div class="table-responsive">
@@ -227,7 +228,7 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
-        <!-- What‑If Simulation Modal -->
+        <!-- Simulation Modal -->
         <div class="modal fade" id="simulationModal" tabindex="-1" aria-hidden="true">
             <div class="modal-dialog modal-lg modal-dialog-centered">
                 <div class="modal-content">
@@ -250,7 +251,10 @@ DASHBOARD_HTML = r"""
         </div>
 
         <footer class="text-center text-muted py-3 border-top border-secondary mt-4">
-            <small>🛡️ <strong>Pipeline Sentinel</strong> · crafted by <a href="https://github.com/Mehrdoost" class="text-decoration-none text-info" target="_blank">Mehrdoost</a> · <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none text-info" target="_blank">View on GitHub</a></small>
+            <small>🛡️ <strong>Pipeline Sentinel</strong> · crafted by
+                <a href="https://github.com/Mehrdoost" class="text-decoration-none text-info" target="_blank">Mehrdoost</a> ·
+                <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none text-info" target="_blank">View on GitHub</a>
+            </small>
         </footer>
     </div>
 
@@ -273,7 +277,8 @@ DASHBOARD_HTML = r"""
             data.forEach(f => {
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td><input type="checkbox" class="finding-checkbox" data-id="${f.id}" ${selectedFindings.has(f.id) ? 'checked' : ''}></td>
+                    <td><input type="checkbox" class="finding-checkbox" data-id="${f.id}"
+                        ${selectedFindings.has(f.id) ? 'checked' : ''}></td>
                     <td>${f.tool}</td>
                     <td><code style="color:var(--accent)">${f.id}</code></td>
                     <td><span class="badge bg-${getSeverityColor(f.severity)}">${f.severity}</span></td>
@@ -283,7 +288,6 @@ DASHBOARD_HTML = r"""
                 tbody.appendChild(row);
             });
 
-            // Attach checkbox events
             document.querySelectorAll('.finding-checkbox').forEach(cb => {
                 cb.addEventListener('change', function() {
                     const fid = this.dataset.id;
@@ -312,7 +316,6 @@ DASHBOARD_HTML = r"""
             renderTable(filtered);
         }
 
-        // Select all checkbox
         document.getElementById('select-all').addEventListener('change', function() {
             const checkboxes = document.querySelectorAll('.finding-checkbox');
             checkboxes.forEach(cb => {
@@ -323,7 +326,6 @@ DASHBOARD_HTML = r"""
             document.getElementById('simulate-selected-btn').disabled = selectedFindings.size === 0;
         });
 
-        // Fetch findings
         fetch('/api/findings', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
@@ -359,7 +361,6 @@ DASHBOARD_HTML = r"""
             });
         }
 
-        // Trend chart
         fetch('/api/history', { headers: getHeaders() })
             .then(res => res.json())
             .then(scans => {
@@ -377,13 +378,15 @@ DASHBOARD_HTML = r"""
                         ]
                     },
                     options: {
-                        scales: { y: { beginAtZero: true, ticks: { color: 'white' } }, x: { ticks: { color: 'white' } } },
+                        scales: {
+                            y: { beginAtZero: true, ticks: { color: 'white' } },
+                            x: { ticks: { color: 'white' } }
+                        },
                         plugins: { legend: { labels: { color: 'white' } } }
                     }
                 });
             });
 
-        // Attack Graph (same D3 code as before but with click simulation trigger)
         fetch('/api/attack-paths', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
@@ -427,16 +430,21 @@ DASHBOARD_HTML = r"""
                     })
                     .style('cursor', 'pointer')
                     .on('click', (event, d) => {
-                        // Show detail and enable simulate for this node's findings
                         const detail = document.getElementById('attack-detail');
                         detail.innerHTML = `<strong>${d.id}</strong><br>Severity: ${d.severity}<br>${d.title}<br>
                             <button class="btn-accent mt-2" onclick="simulateAttack(['${d.id}'])">Simulate this attack</button>`;
                         detail.style.display = 'block';
                     })
                     .call(d3.drag()
-                        .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+                        .on('start', (event, d) => {
+                            if (!event.active) simulation.alphaTarget(0.3).restart();
+                            d.fx = d.x; d.fy = d.y;
+                        })
                         .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
-                        .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+                        .on('end', (event, d) => {
+                            if (!event.active) simulation.alphaTarget(0);
+                            d.fx = null; d.fy = null;
+                        }));
                 const label = svg.append('g')
                     .selectAll('text')
                     .data(data.nodes)
@@ -454,14 +462,6 @@ DASHBOARD_HTML = r"""
                 });
             });
 
-        // Simulate selected button
-        document.getElementById('simulate-selected-btn').addEventListener('click', () => {
-            const ids = Array.from(selectedFindings);
-            if (ids.length === 0) return;
-            simulateAttack(ids);
-        });
-
-        // Topology fetch (unchanged)
         fetch('/api/topology', { headers: getHeaders() })
             .then(res => res.json())
             .then(topo => {
@@ -482,9 +482,16 @@ DASHBOARD_HTML = r"""
                     .attr('stroke', '#6c757d').attr('stroke-width', 2);
                 const node = svg.append('g').selectAll('circle').data(nodes).enter().append('circle')
                     .attr('r', 12).attr('fill', '#0d6efd')
-                    .call(d3.drag().on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-                    .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
-                    .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+                    .call(d3.drag()
+                        .on('start', (event, d) => {
+                            if (!event.active) simulation.alphaTarget(0.3).restart();
+                            d.fx = d.x; d.fy = d.y;
+                        })
+                        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+                        .on('end', (event, d) => {
+                            if (!event.active) simulation.alphaTarget(0);
+                            d.fx = null; d.fy = null;
+                        }));
                 const label = svg.append('g').selectAll('text').data(nodes).enter().append('text')
                     .text(d => d.id).attr('font-size', '10px').attr('dx', 15).attr('dy', 4).attr('fill', 'white');
                 simulation.on('tick', () => {
@@ -495,7 +502,12 @@ DASHBOARD_HTML = r"""
                 });
             });
 
-        // Simulate attack function
+        document.getElementById('simulate-selected-btn').addEventListener('click', () => {
+            const ids = Array.from(selectedFindings);
+            if (ids.length === 0) return;
+            simulateAttack(ids);
+        });
+
         async function simulateAttack(findingIds) {
             const modal = new bootstrap.Modal(document.getElementById('simulationModal'));
             modal.show();
@@ -530,7 +542,7 @@ DASHBOARD_HTML = r"""
 def load_findings():
     if not os.path.exists(FINDINGS_FILE):
         return []
-    with open(FINDINGS_FILE, 'r') as f:
+    with open(FINDINGS_FILE) as f:
         return json.load(f)
 
 @dashboard_bp.route('/')
@@ -567,14 +579,11 @@ def api_simulate():
     if not finding_ids:
         return jsonify({"error": "No finding IDs provided"}), 400
 
-    # Retrieve full findings from the database (or from current session)
     findings = load_findings()
     selected = [f for f in findings if f.get('id') in finding_ids]
     if not selected:
         return jsonify({"error": "No matching findings found"}), 404
 
-    # Generate a combined attack script
-    import tempfile, subprocess
     from devsecops_radar.core.attack_simulation import simulate_attack, run_sandboxed_poc
     script_parts = []
     descriptions = []
@@ -587,11 +596,10 @@ def api_simulate():
     full_script = "\n".join(script_parts)
     description = " → ".join(descriptions)
 
-    # Optionally run in sandbox (safeguarded)
     sandbox_output = None
     try:
         sandbox_output = run_sandboxed_poc(script_path) if script_path else None
-    except:
+    except Exception:
         pass
 
     return jsonify({
@@ -599,5 +607,3 @@ def api_simulate():
         "description": description,
         "sandbox_output": sandbox_output
     })
-
-# The following routes are expected to exist in other Blueprints (attack_paths, topology, summary, sentry)
