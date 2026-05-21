@@ -1,8 +1,3 @@
-Here is the fully fixed, standardized, and perfectly formatted English version of your comprehensive `README.md` file. I have corrected the Markdown syntax errors, repaired the broken code blocks, properly aligned the tables, and integrated the new features (such as OPA Rego policies, What-If simulation, Codecov, and VEX support).
-
-You can copy the entire block below using the **Copy** button and paste it directly into your file:
-
-```markdown
 <div align="center">
 
 # 🛡️ Pipeline Sentinel
@@ -95,8 +90,8 @@ Pipeline Sentinel is designed to be **flexible** — you decide where it fits be
 [Gitleaks scan] ┘
 ```
 
-> **📌 Diagram Placeholder:** Add your network flow diagram here as `docs/network_flow.png`.  
-> `![Network Flow Diagram](docs/network_flow.png)`
+> **📌 Diagram Placeholder:**  
+![Network Flow Diagram](docs/network_flow.png)
 
 ---
 
@@ -456,8 +451,8 @@ devsecops_radar/
     └── sentry/     # Live webhook agent for CI/CD
 ```
 
-> **📌 Diagram Placeholder:** Add your architecture diagram here as `docs/architecture.png`.  
-> `![Architecture Diagram](docs/architecture.png)`
+> **📌 Diagram Placeholder:**  
+![Network Flow Diagram](docs/network_flow.png)
 
 ---
 
@@ -539,7 +534,7 @@ This project adheres to the Contributor Covenant Code of Conduct. By participati
 
 [![GitHub](https://img.shields.io/badge/GitHub-ReverseForge-181717?logo=github)](https://github.com/ReverseForge) 
 [![GitHub](https://img.shields.io/badge/GitHub-Mehrdoost-181717?logo=github)](https://github.com/Mehrdoost) 
-[![GitHub](https://img.shields.io/badge/GitHub-miora-sora?logo=github)](https://github.com/miora-sora) 
+[![GitHub](https://img.shields.io/badge/GitHub-miora-soraزمس?logo=github)](https://github.com/miora-sora) 
 
 ---
 

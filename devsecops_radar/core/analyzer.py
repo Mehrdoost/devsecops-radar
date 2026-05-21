@@ -143,8 +143,8 @@ class LiteLLMAnalyzer(BaseAnalyzer):
         try:
             import litellm
             self.litellm = litellm
-        except ImportError:
-            raise ImportError("Install litellm: pip install litellm")
+        except ImportError as err:
+            raise ImportError("Install litellm: pip install litellm") from err
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "gpt-4o-mini")
 
     def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
