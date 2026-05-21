@@ -1,6 +1,8 @@
 FROM python:3.12-slim AS builder
+WORKDIR /app
 RUN pip install --upgrade pip
 COPY pyproject.toml .
+RUN mkdir devsecops_radar && touch devsecops_radar/__init__.py
 RUN pip install --user --no-cache-dir -e .
 
 FROM python:3.12-slim

@@ -1,12 +1,16 @@
 import json
 import os
 import re
+from typing import Any
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from typing import List, Dict, Any
 
-def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504]):
+
+def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=None):
+    if status_forcelist is None:
+        status_forcelist = [429, 500, 502, 503, 504]
     session = requests.Session()
     retries = Retry(
         total=total,
@@ -19,15 +23,24 @@ def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=[429, 50
     session.mount('https://', adapter)
     return session
 
+
 MAX_ANALYZER_FINDINGS = int(os.environ.get("ANALYZER_MAX_FINDINGS", "100"))
 
 FEW_SHOT_EXAMPLE = {
-    "executive_summary": "A leaked CI/CD credential combined with an unpatched container image creates a critical supply chain attack path. Immediate action is required.",
+    "executive_summary": (
+        "A leaked CI/CD credential combined with an unpatched container image "
+        "creates a critical supply chain attack path. Immediate action is required."
+    ),
     "risk_score": 92,
     "attack_paths": [
         {
             "name": "Supply Chain Compromise via Credential Leak",
-            "description": "An exposed GitHub Actions secret (ID: SECRET-001) allows an attacker to push malicious images to the container registry. Combined with a known RCE vulnerability in the web server (CVE-2026-1234), this chain grants full control over the production environment.",
+            "description": (
+                "An exposed GitHub Actions secret (ID: SECRET-001) allows an attacker "
+                "to push malicious images to the container registry. Combined with a known "
+                "RCE vulnerability in the web server (CVE-2026-1234), this chain grants "
+                "full control over the production environment."
+            ),
             "involved_findings": ["SECRET-001", "CVE-2026-1234"],
             "mitre_tactics": ["TA0001", "TA0042"],
             "mitre_techniques": ["T1078", "T1578"],
@@ -39,18 +52,28 @@ FEW_SHOT_EXAMPLE = {
         {
             "priority": 1,
             "finding_id": "SECRET-001",
-            "action": "Rotate the exposed secret and remove it from the workflow log. Use GitHub's masked variables.",
-            "fix_diff": "--- a/.github/workflows/deploy.yml\n+++ b/.github/workflows/deploy.yml\n- run: echo ${{ secrets.DEPLOY_KEY }}\n+ run: echo '**redacted**'"
+            "action": (
+                "Rotate the exposed secret and remove it from the workflow log. "
+                "Use GitHub's masked variables."
+            ),
+            "fix_diff": (
+                "--- a/.github/workflows/deploy.yml\n"
+                "+++ b/.github/workflows/deploy.yml\n"
+                "- run: echo ${{ secrets.DEPLOY_KEY }}\n"
+                "+ run: echo '**redacted**'"
+            )
         }
     ],
     "false_positives_likely": []
 }
 
+
 class BaseAnalyzer:
-    def analyze(self, findings: List[Dict[str, Any]], topology: Dict[str, Any] = None) -> Dict[str, Any]:
+    def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
         raise NotImplementedError
 
-def extract_json(text: str) -> Dict[str, Any]:
+
+def extract_json(text: str) -> dict[str, Any]:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -62,7 +85,8 @@ def extract_json(text: str) -> Dict[str, Any]:
                 pass
     return {"executive_summary": text, "attack_paths": [], "top_remediations": []}
 
-def select_findings_for_llm(findings: List[Dict], max_items: int = MAX_ANALYZER_FINDINGS) -> List[Dict]:
+
+def select_findings_for_llm(findings: list[dict], max_items: int = MAX_ANALYZER_FINDINGS) -> list[dict]:
     if len(findings) <= max_items:
         return findings
     critical_high = [f for f in findings if f.get('severity') in ('CRITICAL', 'HIGH')]
@@ -73,13 +97,14 @@ def select_findings_for_llm(findings: List[Dict], max_items: int = MAX_ANALYZER_
         selected.extend(others[:remaining])
     return selected
 
+
 class OllamaAnalyzer(BaseAnalyzer):
-    def __init__(self, model: str = None, endpoint: str = None):
+    def __init__(self, model: str | None = None, endpoint: str | None = None):
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "llama3.2:latest")
         self.endpoint = endpoint or os.environ.get("OPENAI_API_BASE", "http://localhost:11434/api/generate")
         self.session = _session_with_retries()
 
-    def analyze(self, findings: List[Dict[str, Any]], topology: Dict[str, Any] = None) -> Dict[str, Any]:
+    def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
         if not findings:
             return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
 
@@ -112,8 +137,9 @@ Respond ONLY with valid JSON in the same format as the example."""
         except Exception as e:
             return {"executive_summary": f"AI failed: {str(e)}", "attack_paths": [], "top_remediations": []}
 
+
 class LiteLLMAnalyzer(BaseAnalyzer):
-    def __init__(self, model: str = None):
+    def __init__(self, model: str | None = None):
         try:
             import litellm
             self.litellm = litellm
@@ -121,7 +147,7 @@ class LiteLLMAnalyzer(BaseAnalyzer):
             raise ImportError("Install litellm: pip install litellm")
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "gpt-4o-mini")
 
-    def analyze(self, findings: List[Dict[str, Any]], topology: Dict[str, Any] = None) -> Dict[str, Any]:
+    def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
         if not findings:
             return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
 
@@ -150,7 +176,8 @@ Respond ONLY with JSON like the example."""
         except Exception as e:
             return {"executive_summary": f"AI failed: {str(e)}", "attack_paths": [], "top_remediations": []}
 
-def get_analyzer(backend: str = "ollama", model: str = None) -> BaseAnalyzer:
+
+def get_analyzer(backend: str = "ollama", model: str | None = None) -> BaseAnalyzer:
     if backend == "litellm":
         return LiteLLMAnalyzer(model=model)
     return OllamaAnalyzer(model=model)
