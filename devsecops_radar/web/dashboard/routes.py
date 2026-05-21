@@ -1,9 +1,11 @@
-from flask import Blueprint, jsonify, render_template_string, request
 import json
 import os
+
+from flask import Blueprint, jsonify, render_template_string, request
+
+from devsecops_radar.core.auth import login_required
 from devsecops_radar.core.database import get_all_scans, get_findings_paginated
 from devsecops_radar.core.rag import rag_search
-from devsecops_radar.core.auth import login_required
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -637,7 +639,7 @@ def api_simulate():
     if not selected:
         return jsonify({"error": "No matching findings found"}), 404
 
-    from devsecops_radar.core.attack_simulation import simulate_attack, run_sandboxed_poc
+    from devsecops_radar.core.attack_simulation import run_sandboxed_poc, simulate_attack
     script_parts = []
     descriptions = []
     for f in selected:
