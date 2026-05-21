@@ -3,6 +3,7 @@ import os
 
 from flask import Blueprint, jsonify, render_template_string, request
 
+from devsecops_radar.core.auth import login_required
 from devsecops_radar.core.database import get_all_scans, get_findings_paginated
 from devsecops_radar.core.rag import rag_search
 
@@ -466,7 +467,7 @@ DASHBOARD_HTML = r"""
                         const detail = document.getElementById('attack-detail');
                         detail.innerHTML = (
                             `<strong>${d.id}</strong><br>Severity: ${d.severity}<br>${d.title}<br>` +
-                                                        `<button class="btn-accent mt-2" ` +
+                            `<button class="btn-accent mt-2" ` +
                             `onclick="simulateAttack(['${d.id}'])">Simulate this attack</button>`
                         );
                         detail.style.display = 'block';
@@ -605,16 +606,19 @@ def index():
     )
 
 @dashboard_bp.route('/api/findings')
+@login_required
 def api_findings():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     return jsonify(get_findings_paginated(page, per_page))
 
 @dashboard_bp.route('/api/history')
+@login_required
 def api_history():
     return jsonify(get_all_scans())
 
 @dashboard_bp.route('/api/rag')
+@login_required
 def api_rag():
     q = request.args.get('q', '')
     if not q:
@@ -622,6 +626,7 @@ def api_rag():
     return jsonify(rag_search(q))
 
 @dashboard_bp.route('/api/simulate', methods=['POST'])
+@login_required
 def api_simulate():
     """Simulate an attack chain based on a list of finding IDs."""
     data = request.get_json(force=True)
