@@ -91,7 +91,7 @@ Pipeline Sentinel is designed to be **flexible** — you decide where it fits be
 ```
 
 > **📌 Diagram Placeholder:**  
-![Network Flow Diagram](docs/network_flow.png)
+![Network Flow Diagram](docs/architecture.png)
 
 ---
 
@@ -452,7 +452,7 @@ devsecops_radar/
 ```
 
 > **📌 Diagram Placeholder:**  
-![Network Flow Diagram](docs/network_flow.png)
+![Network Flow Diagram](docs/network_flow.mp4)
 
 ---
 
