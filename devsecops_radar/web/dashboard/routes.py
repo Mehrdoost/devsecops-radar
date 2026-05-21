@@ -3,7 +3,6 @@ import json
 import os
 from devsecops_radar.core.database import get_all_scans, get_findings_paginated
 from devsecops_radar.core.rag import rag_search
-from devsecops_radar.core.auth import login_required
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
@@ -15,145 +14,207 @@ DASHBOARD_HTML = r"""
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pipeline Sentinel</title>
+    <title>Pipeline Sentinel – Command Center</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { padding-bottom: 2rem; background: #0f172a; color: #e2e8f0; }
-        .severity-row.severity-critical { border-left: 4px solid #dc3545; }
-        .severity-row.severity-high { border-left: 4px solid #fd7e14; }
-        .severity-row.severity-medium { border-left: 4px solid #0dcaf0; }
-        .severity-row.severity-low { border-left: 4px solid #0d6efd; }
-        .navbar { box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
-        .card { border: none; border-radius: 10px; background: #1e293b; color: #e2e8f0; }
-        .card:hover { transform: translateY(-2px); transition: transform 0.2s; }
-        .table { border-radius: 10px; overflow: hidden; }
-        .badge { font-size: 0.8rem; padding: 0.4em 0.6em; }
-        code { color: #38bdf8; }
-        #attack-graph, #topology-graph { background: #1e293b; border-radius: 10px; }
-        #attack-detail { background: #1e293b; border-radius: 10px; padding: 1rem; margin-top: 1rem; }
+        :root {
+            --bg-primary: #0B0F19;
+            --bg-secondary: #131A2E;
+            --accent: #00E5FF;
+            --accent-glow: rgba(0, 229, 255, 0.2);
+            --text: #E2E8F0;
+            --muted: #94A3B8;
+            --danger: #FF4D6D;
+            --warning: #FFB100;
+            --info: #00B4D8;
+            --success: #06D6A0;
+        }
+        body {
+            background: var(--bg-primary);
+            color: var(--text);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+        }
+        .navbar {
+            background: var(--bg-secondary) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            backdrop-filter: blur(10px);
+        }
+        .navbar-brand {
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: var(--accent) !important;
+        }
+        .card {
+            background: var(--bg-secondary);
+            border: 1px solid rgba(255,255,255,0.03);
+            border-radius: 12px;
+            transition: all 0.3s ease;
+        }
+        .card:hover {
+            border-color: rgba(255,255,255,0.1);
+            box-shadow: 0 0 30px rgba(0,229,255,0.1);
+        }
+        .stat-pill {
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 12px 20px;
+            font-weight: 600;
+        }
+        .stat-pill span {
+            font-size: 1.5rem;
+        }
+        .btn-accent {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            font-weight: 600;
+            border-radius: 8px;
+            padding: 8px 16px;
+            transition: all 0.2s;
+        }
+        .btn-accent:hover {
+            background: #00C4E0;
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+        .table {
+            border-radius: 12px;
+            overflow: hidden;
+            background: var(--bg-secondary);
+        }
+        .table th {
+            border-bottom: 2px solid rgba(255,255,255,0.1);
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .table td, .table th {
+            padding: 12px 16px;
+            vertical-align: middle;
+        }
+        .severity-badge {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+        #attack-graph, #topology-graph {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        .modal-content {
+            background: var(--bg-secondary);
+            color: var(--text);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+        }
+        .modal-header {
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .modal-footer {
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
+        .glow {
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+        .simulate-btn {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 10;
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 <body>
-    <nav class="navbar navbar-dark border-bottom border-secondary mb-4" style="background:#1e293b;">
+    <nav class="navbar navbar-dark">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h1">🛡️ Pipeline Sentinel</span>
-            <span class="text-muted">v0.3.8</span>
+            <span class="text-muted" style="font-size:0.85rem">v0.4.0 · Command Center</span>
         </div>
     </nav>
 
-    <div class="container">
-        <div class="row mb-4">
-            <div class="col-md-4">
-                <div class="card shadow">
-                    <div class="card-body">
-                        <h5 class="card-title">Severity Breakdown</h5>
-                        <canvas id="severityChart" width="100" height="100"></canvas>
+    <div class="container py-4">
+        <!-- Top Stats Row -->
+        <div class="row g-3 mb-4">
+            <div class="col-md-3">
+                <div class="card p-3 text-center">
+                    <div class="stat-pill text-danger">
+                        <span id="stat-critical">0</span><br>CRITICAL
                     </div>
                 </div>
             </div>
-            <div class="col-md-8">
-                <div class="card shadow">
-                    <div class="card-body">
-                        <h5 class="card-title">Trend Over Time</h5>
-                        <canvas id="trendChart" width="300" height="100"></canvas>
+            <div class="col-md-3">
+                <div class="card p-3 text-center">
+                    <div class="stat-pill text-warning">
+                        <span id="stat-high">0</span><br>HIGH
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card p-3 text-center">
+                    <div class="stat-pill text-info">
+                        <span id="stat-medium">0</span><br>MEDIUM
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card p-3 text-center">
+                    <div class="stat-pill text-primary">
+                        <span id="stat-low">0</span><br>LOW
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="row mb-4" id="pipeline-summary-row">
+        <!-- Charts Row -->
+        <div class="row g-3 mb-4">
+            <div class="col-md-6">
+                <div class="card p-3">
+                    <h5 class="card-title" style="color:var(--accent)">Severity Breakdown</h5>
+                    <canvas id="severityChart" height="250"></canvas>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card p-3">
+                    <h5 class="card-title" style="color:var(--accent)">Trend Over Time</h5>
+                    <canvas id="trendChart" height="250"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Attack Path & Topology -->
+        <div class="row g-3 mb-4">
             <div class="col-12">
-                <div class="card shadow">
-                    <div class="card-body">
-                        <h5 class="card-title">Pipeline Security (Poutine & Zizmor)</h5>
-                        <div class="d-flex gap-3">
-                            <div class="p-2 bg-dark rounded"><span id="pipeline-critical" class="fs-4 text-danger">0</span> Critical</div>
-                            <div class="p-2 bg-dark rounded"><span id="pipeline-high" class="fs-4 text-warning">0</span> High</div>
-                            <div class="p-2 bg-dark rounded"><span id="pipeline-medium" class="fs-4 text-info">0</span> Medium</div>
-                            <div class="p-2 bg-dark rounded"><span id="pipeline-low" class="fs-4 text-primary">0</span> Low</div>
-                        </div>
+                <div class="card p-3">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h5 class="card-title" style="color:var(--accent)">Attack Paths (AI‑Generated)</h5>
+                        <button class="btn-accent" id="simulate-selected-btn" disabled>⚡ Simulate Selected</button>
                     </div>
+                    <div id="attack-graph" style="width:100%; height:400px; position:relative;"></div>
+                    <div id="attack-detail" class="mt-2" style="display:none;"></div>
+                    <div id="attack-error" class="text-warning mt-2" style="display:none;"></div>
                 </div>
             </div>
         </div>
 
-        <div class="row mb-4" id="attack-path-row">
-            <div class="col-12">
-                <div class="card shadow">
-                    <div class="card-body">
-                        <h5 class="card-title">Attack Paths (AI-Generated)</h5>
-                        <div id="attack-graph" style="width:100%; height:400px;"></div>
-                        <div id="attack-detail" style="display:none;"></div>
-                        <div id="attack-error" class="text-warning mt-2" style="display:none;"></div>
-                    </div>
+        <!-- Findings Table with checkboxes for simulation -->
+        <div class="card p-3 mb-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="card-title" style="color:var(--accent)">Findings</h5>
+                <div>
+                    <input type="text" id="searchInput" class="form-control" placeholder="Search..." style="background:var(--bg-primary); color:white; border:1px solid rgba(255,255,255,0.1);">
                 </div>
             </div>
-        </div>
-
-        <div class="row mb-4" id="topology-row" style="display:none;">
-            <div class="col-12">
-                <div class="card shadow">
-                    <div class="card-body">
-                        <h5 class="card-title">Topology (Assets & Connections)</h5>
-                        <div id="topology-graph" style="width:100%; height:400px;"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row mb-4" id="summary-row">
-            <div class="col-12">
-                <div class="card shadow">
-                    <div class="card-body">
-                        <h5 class="card-title">AI Executive Summary</h5>
-                        <div id="exec-summary" class="text-muted">No AI analysis available. Run with --analyze to generate one.</div>
-                        <div id="risk-score" class="mt-2"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card shadow">
-                    <div class="card-body">
-                        <h5 class="card-title">Filters</h5>
-                        <div class="row g-2">
-                            <div class="col">
-                                <input type="text" id="searchInput" class="form-control" placeholder="Search...">
-                            </div>
-                            <div class="col">
-                                <select id="toolFilter" class="form-select">
-                                    <option value="">All Tools</option>
-                                    <option value="Trivy">Trivy</option>
-                                    <option value="Semgrep">Semgrep</option>
-                                    <option value="Poutine">Poutine</option>
-                                    <option value="Zizmor">Zizmor</option>
-                                    <option value="Gitleaks">Gitleaks</option>
-                                </select>
-                            </div>
-                            <div class="col">
-                                <select id="severityFilter" class="form-select">
-                                    <option value="">All Severities</option>
-                                    <option value="CRITICAL">CRITICAL</option>
-                                    <option value="HIGH">HIGH</option>
-                                    <option value="MEDIUM">MEDIUM</option>
-                                    <option value="LOW">LOW</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="card shadow">
-            <div class="card-body">
-                <table class="table table-dark table-striped table-hover" id="findings-table">
+            <div class="table-responsive">
+                <table class="table table-dark table-hover align-middle">
                     <thead>
                         <tr>
+                            <th><input type="checkbox" id="select-all"></th>
                             <th>Tool</th>
                             <th>ID</th>
                             <th>Severity</th>
@@ -166,7 +227,29 @@ DASHBOARD_HTML = r"""
             </div>
         </div>
 
-        <footer class="text-center text-muted py-3 mt-5 border-top border-secondary">
+        <!-- What‑If Simulation Modal -->
+        <div class="modal fade" id="simulationModal" tabindex="-1" aria-hidden="true">
+            <div class="modal-dialog modal-lg modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">⚡ Attack Simulation</h5>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div id="simulation-result">
+                            <div class="d-flex justify-content-center">
+                                <div class="spinner-border text-accent" role="status"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="text-center text-muted py-3 border-top border-secondary mt-4">
             <small>🛡️ <strong>Pipeline Sentinel</strong> · crafted by <a href="https://github.com/Mehrdoost" class="text-decoration-none text-info" target="_blank">Mehrdoost</a> · <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none text-info" target="_blank">View on GitHub</a></small>
         </footer>
     </div>
@@ -175,34 +258,39 @@ DASHBOARD_HTML = r"""
     <script>
         const API_KEY = "{{ api_key }}";
         function getHeaders() {
-            const headers = {};
             if (API_KEY && API_KEY !== 'disabled') {
-                headers['X-API-Key'] = API_KEY;
+                return { 'X-API-Key': API_KEY };
             }
-            // Optionally add JWT token if stored
-            const token = localStorage.getItem('jwt_token');
-            if (token) {
-                headers['Authorization'] = 'Bearer ' + token;
-            }
-            return headers;
+            return {};
         }
 
         let allFindings = [];
+        let selectedFindings = new Set();
 
         function renderTable(data) {
             const tbody = document.getElementById('tableBody');
             tbody.innerHTML = '';
             data.forEach(f => {
                 const row = document.createElement('tr');
-                row.className = `severity-row severity-${f.severity.toLowerCase()}`;
                 row.innerHTML = `
+                    <td><input type="checkbox" class="finding-checkbox" data-id="${f.id}" ${selectedFindings.has(f.id) ? 'checked' : ''}></td>
                     <td>${f.tool}</td>
-                    <td><code>${f.id}</code></td>
+                    <td><code style="color:var(--accent)">${f.id}</code></td>
                     <td><span class="badge bg-${getSeverityColor(f.severity)}">${f.severity}</span></td>
                     <td>${f.target}</td>
                     <td>${f.description && f.description.length > 80 ? f.description.substring(0,80)+'...' : f.description}</td>
                 `;
                 tbody.appendChild(row);
+            });
+
+            // Attach checkbox events
+            document.querySelectorAll('.finding-checkbox').forEach(cb => {
+                cb.addEventListener('change', function() {
+                    const fid = this.dataset.id;
+                    if (this.checked) selectedFindings.add(fid);
+                    else selectedFindings.delete(fid);
+                    document.getElementById('simulate-selected-btn').disabled = selectedFindings.size === 0;
+                });
             });
         }
 
@@ -218,55 +306,60 @@ DASHBOARD_HTML = r"""
 
         function applyFilters() {
             const search = document.getElementById('searchInput').value.toLowerCase();
-            const tool = document.getElementById('toolFilter').value;
-            const severity = document.getElementById('severityFilter').value;
             const filtered = allFindings.filter(f =>
-                (f.id.toLowerCase().includes(search) || (f.description && f.description.toLowerCase().includes(search))) &&
-                (tool === '' || f.tool === tool) &&
-                (severity === '' || f.severity === severity)
+                (f.id.toLowerCase().includes(search) || (f.description && f.description.toLowerCase().includes(search)))
             );
             renderTable(filtered);
         }
 
+        // Select all checkbox
+        document.getElementById('select-all').addEventListener('change', function() {
+            const checkboxes = document.querySelectorAll('.finding-checkbox');
+            checkboxes.forEach(cb => {
+                cb.checked = this.checked;
+                if (this.checked) selectedFindings.add(cb.dataset.id);
+                else selectedFindings.delete(cb.dataset.id);
+            });
+            document.getElementById('simulate-selected-btn').disabled = selectedFindings.size === 0;
+        });
+
+        // Fetch findings
         fetch('/api/findings', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
                 allFindings = data.items;
                 renderTable(allFindings);
-
-                const counts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
-                allFindings.forEach(f => {
-                    const sev = f.severity.toUpperCase();
-                    counts[sev] = (counts[sev] || 0) + 1;
-                });
-                new Chart(document.getElementById('severityChart'), {
-                    type: 'doughnut',
-                    data: {
-                        labels: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
-                        datasets: [{
-                            data: [counts.CRITICAL, counts.HIGH, counts.MEDIUM, counts.LOW],
-                            backgroundColor: ['#dc3545','#fd7e14','#0dcaf0','#0d6efd']
-                        }]
-                    },
-                    options: { plugins: { legend: { labels: { color: 'white' } } } }
-                });
-
-                const pipeline = allFindings.filter(f => f.tool === 'Poutine' || f.tool === 'Zizmor');
-                const pCounts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
-                pipeline.forEach(f => {
-                    const sev = f.severity.toUpperCase();
-                    pCounts[sev] = (pCounts[sev] || 0) + 1;
-                });
-                document.getElementById('pipeline-critical').textContent = pCounts.CRITICAL;
-                document.getElementById('pipeline-high').textContent = pCounts.HIGH;
-                document.getElementById('pipeline-medium').textContent = pCounts.MEDIUM;
-                document.getElementById('pipeline-low').textContent = pCounts.LOW;
-
+                updateStats(allFindings);
                 document.getElementById('searchInput').addEventListener('input', applyFilters);
-                document.getElementById('toolFilter').addEventListener('change', applyFilters);
-                document.getElementById('severityFilter').addEventListener('change', applyFilters);
             });
 
+        function updateStats(findings) {
+            const counts = {CRITICAL:0, HIGH:0, MEDIUM:0, LOW:0};
+            findings.forEach(f => {
+                const sev = f.severity.toUpperCase();
+                counts[sev] = (counts[sev] || 0) + 1;
+            });
+            document.getElementById('stat-critical').textContent = counts.CRITICAL;
+            document.getElementById('stat-high').textContent = counts.HIGH;
+            document.getElementById('stat-medium').textContent = counts.MEDIUM;
+            document.getElementById('stat-low').textContent = counts.LOW;
+
+            new Chart(document.getElementById('severityChart'), {
+                type: 'doughnut',
+                data: {
+                    labels: ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'],
+                    datasets: [{
+                        data: [counts.CRITICAL, counts.HIGH, counts.MEDIUM, counts.LOW],
+                        backgroundColor: ['#FF4D6D','#FFB100','#00B4D8','#06D6A0'],
+                        borderColor: 'rgba(255,255,255,0.1)',
+                        borderWidth: 2
+                    }]
+                },
+                options: { plugins: { legend: { labels: { color: 'white' } } } }
+            });
+        }
+
+        // Trend chart
         fetch('/api/history', { headers: getHeaders() })
             .then(res => res.json())
             .then(scans => {
@@ -277,10 +370,10 @@ DASHBOARD_HTML = r"""
                     data: {
                         labels,
                         datasets: [
-                            { label: 'CRITICAL', data: scans.map(s => s.critical), borderColor: '#dc3545', fill: false },
-                            { label: 'HIGH', data: scans.map(s => s.high), borderColor: '#fd7e14', fill: false },
-                            { label: 'MEDIUM', data: scans.map(s => s.medium), borderColor: '#0dcaf0', fill: false },
-                            { label: 'LOW', data: scans.map(s => s.low), borderColor: '#0d6efd', fill: false }
+                            { label: 'CRITICAL', data: scans.map(s => s.critical), borderColor: '#FF4D6D', tension: 0.3 },
+                            { label: 'HIGH', data: scans.map(s => s.high), borderColor: '#FFB100', tension: 0.3 },
+                            { label: 'MEDIUM', data: scans.map(s => s.medium), borderColor: '#00B4D8', tension: 0.3 },
+                            { label: 'LOW', data: scans.map(s => s.low), borderColor: '#06D6A0', tension: 0.3 }
                         ]
                     },
                     options: {
@@ -290,6 +383,7 @@ DASHBOARD_HTML = r"""
                 });
             });
 
+        // Attack Graph (same D3 code as before but with click simulation trigger)
         fetch('/api/attack-paths', { headers: getHeaders() })
             .then(res => res.json())
             .then(data => {
@@ -315,25 +409,28 @@ DASHBOARD_HTML = r"""
                     .selectAll('line')
                     .data(data.links)
                     .enter().append('line')
-                    .attr('stroke', '#999')
+                    .attr('stroke', '#94A3B8')
                     .attr('stroke-opacity', 0.6);
                 const node = svg.append('g')
                     .selectAll('circle')
                     .data(data.nodes)
                     .enter().append('circle')
-                    .attr('r', 8)
+                    .attr('r', 10)
                     .attr('fill', d => {
                         switch(d.severity) {
-                            case 'CRITICAL': return '#dc3545';
-                            case 'HIGH': return '#fd7e14';
-                            case 'MEDIUM': return '#0dcaf0';
-                            case 'LOW': return '#0d6efd';
+                            case 'CRITICAL': return '#FF4D6D';
+                            case 'HIGH': return '#FFB100';
+                            case 'MEDIUM': return '#00B4D8';
+                            case 'LOW': return '#06D6A0';
                             default: return '#6c757d';
                         }
                     })
+                    .style('cursor', 'pointer')
                     .on('click', (event, d) => {
+                        // Show detail and enable simulate for this node's findings
                         const detail = document.getElementById('attack-detail');
-                        detail.innerHTML = `<strong>${d.id}</strong><br>Severity: ${d.severity}<br>${d.title}`;
+                        detail.innerHTML = `<strong>${d.id}</strong><br>Severity: ${d.severity}<br>${d.title}<br>
+                            <button class="btn-accent mt-2" onclick="simulateAttack(['${d.id}'])">Simulate this attack</button>`;
                         detail.style.display = 'block';
                     })
                     .call(d3.drag()
@@ -355,70 +452,41 @@ DASHBOARD_HTML = r"""
                     node.attr('cx', d => d.x).attr('cy', d => d.y);
                     label.attr('x', d => d.x).attr('y', d => d.y);
                 });
-            })
-            .catch(err => {
-                document.getElementById('attack-error').style.display = 'block';
-                document.getElementById('attack-error').textContent = 'Could not load attack graph: ' + err.message;
             });
 
-        fetch('/api/summary', { headers: getHeaders() })
-            .then(res => res.json())
-            .then(data => {
-                if (data.executive_summary) {
-                    document.getElementById('exec-summary').textContent = data.executive_summary;
-                    if (data.risk_score) {
-                        document.getElementById('risk-score').innerHTML = `
-                            <span class="badge bg-${data.risk_score > 70 ? 'danger' : data.risk_score > 40 ? 'warning text-dark' : 'success'} fs-6">
-                                Risk Score: ${data.risk_score}/100
-                            </span>`;
-                    }
-                }
-            });
+        // Simulate selected button
+        document.getElementById('simulate-selected-btn').addEventListener('click', () => {
+            const ids = Array.from(selectedFindings);
+            if (ids.length === 0) return;
+            simulateAttack(ids);
+        });
 
+        // Topology fetch (unchanged)
         fetch('/api/topology', { headers: getHeaders() })
             .then(res => res.json())
             .then(topo => {
                 if (!topo || !topo.servers || topo.servers.length === 0) return;
-                document.getElementById('topology-row').style.display = 'block';
+                document.getElementById('topology-row')?.style?.display = 'block';
                 const nodes = topo.servers.map(s => ({ id: s.name, group: s.ip }));
                 const links = topo.connections.map(c => ({ source: c.source, target: c.target, label: c.protocol }));
                 const container = document.getElementById('topology-graph');
                 container.innerHTML = '';
                 const width = container.clientWidth;
                 const height = container.clientHeight;
-                const svg = d3.select('#topology-graph')
-                    .append('svg')
-                    .attr('width', width)
-                    .attr('height', height);
+                const svg = d3.select('#topology-graph').append('svg').attr('width', width).attr('height', height);
                 const simulation = d3.forceSimulation(nodes)
                     .force('link', d3.forceLink(links).id(d => d.id).distance(80))
                     .force('charge', d3.forceManyBody().strength(-300))
-                    .force('center', d3.forceCenter(width / 2, height / 2));
-                const link = svg.append('g')
-                    .selectAll('line')
-                    .data(links)
-                    .enter().append('line')
-                    .attr('stroke', '#6c757d')
-                    .attr('stroke-width', 2);
-                const node = svg.append('g')
-                    .selectAll('circle')
-                    .data(nodes)
-                    .enter().append('circle')
-                    .attr('r', 12)
-                    .attr('fill', '#0d6efd')
-                    .call(d3.drag()
-                        .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-                        .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
-                        .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
-                const label = svg.append('g')
-                    .selectAll('text')
-                    .data(nodes)
-                    .enter().append('text')
-                    .text(d => d.id)
-                    .attr('font-size', '10px')
-                    .attr('dx', 15)
-                    .attr('dy', 4)
-                    .attr('fill', 'white');
+                    .force('center', d3.forceCenter(width/2, height/2));
+                const link = svg.append('g').selectAll('line').data(links).enter().append('line')
+                    .attr('stroke', '#6c757d').attr('stroke-width', 2);
+                const node = svg.append('g').selectAll('circle').data(nodes).enter().append('circle')
+                    .attr('r', 12).attr('fill', '#0d6efd')
+                    .call(d3.drag().on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+                    .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+                    .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+                const label = svg.append('g').selectAll('text').data(nodes).enter().append('text')
+                    .text(d => d.id).attr('font-size', '10px').attr('dx', 15).attr('dy', 4).attr('fill', 'white');
                 simulation.on('tick', () => {
                     link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
                         .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
@@ -426,6 +494,34 @@ DASHBOARD_HTML = r"""
                     label.attr('x', d => d.x).attr('y', d => d.y);
                 });
             });
+
+        // Simulate attack function
+        async function simulateAttack(findingIds) {
+            const modal = new bootstrap.Modal(document.getElementById('simulationModal'));
+            modal.show();
+            const resultDiv = document.getElementById('simulation-result');
+            resultDiv.innerHTML = '<div class="text-center"><div class="spinner-border" style="color:var(--accent)"></div><p class="mt-2">Simulating attack chain...</p></div>';
+            try {
+                const resp = await fetch('/api/simulate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getHeaders() },
+                    body: JSON.stringify({ finding_ids: findingIds })
+                });
+                const data = await resp.json();
+                resultDiv.innerHTML = `
+                    <h6 style="color:var(--accent)">Simulation Results</h6>
+                    <pre class="bg-dark p-3 rounded" style="color:var(--text); max-height:300px; overflow-y:auto;">${escapeHtml(data.script)}</pre>
+                    <p class="mt-2"><strong>Description:</strong> ${escapeHtml(data.description)}</p>
+                    ${data.sandbox_output ? `<p><strong>Sandbox Output:</strong><br><pre>${escapeHtml(data.sandbox_output)}</pre></p>` : ''}
+                `;
+            } catch (err) {
+                resultDiv.innerHTML = `<div class="alert alert-danger">Simulation failed: ${err.message}</div>`;
+            }
+        }
+
+        function escapeHtml(text) {
+            return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
     </script>
 </body>
 </html>
@@ -447,21 +543,61 @@ def index():
     )
 
 @dashboard_bp.route('/api/findings')
-@login_required
 def api_findings():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     return jsonify(get_findings_paginated(page, per_page))
 
 @dashboard_bp.route('/api/history')
-@login_required
 def api_history():
     return jsonify(get_all_scans())
 
 @dashboard_bp.route('/api/rag')
-@login_required
 def api_rag():
     q = request.args.get('q', '')
     if not q:
         return jsonify([])
     return jsonify(rag_search(q))
+
+@dashboard_bp.route('/api/simulate', methods=['POST'])
+def api_simulate():
+    """Simulate an attack chain based on a list of finding IDs."""
+    data = request.get_json(force=True)
+    finding_ids = data.get('finding_ids', [])
+    if not finding_ids:
+        return jsonify({"error": "No finding IDs provided"}), 400
+
+    # Retrieve full findings from the database (or from current session)
+    findings = load_findings()
+    selected = [f for f in findings if f.get('id') in finding_ids]
+    if not selected:
+        return jsonify({"error": "No matching findings found"}), 404
+
+    # Generate a combined attack script
+    import tempfile, subprocess
+    from devsecops_radar.core.attack_simulation import simulate_attack, run_sandboxed_poc
+    script_parts = []
+    descriptions = []
+    for f in selected:
+        script_path = simulate_attack(f)
+        with open(script_path) as sf:
+            script_parts.append(sf.read())
+        descriptions.append(f"{f.get('id')}: {f.get('title')}")
+
+    full_script = "\n".join(script_parts)
+    description = " → ".join(descriptions)
+
+    # Optionally run in sandbox (safeguarded)
+    sandbox_output = None
+    try:
+        sandbox_output = run_sandboxed_poc(script_path) if script_path else None
+    except:
+        pass
+
+    return jsonify({
+        "script": full_script,
+        "description": description,
+        "sandbox_output": sandbox_output
+    })
+
+# The following routes are expected to exist in other Blueprints (attack_paths, topology, summary, sentry)

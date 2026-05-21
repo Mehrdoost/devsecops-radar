@@ -1,12 +1,23 @@
 import os
+import shutil
 import subprocess
+from pathlib import Path
 from typing import List, Dict, Any
+
+BACKUP_DIR = Path.home() / ".devsecops-radar" / "backups"
+
+def _backup_file(target_file: str):
+    """Create a backup of the file before modifying it."""
+    backup_path = BACKUP_DIR / (Path(target_file).name + ".bak")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(target_file, backup_path)
 
 def apply_remediation(finding: Dict[str, Any], ai_fix: str) -> bool:
     print(f"[FIX] Applying fix for {finding['id']}...")
     target_file = finding.get('target', '')
     line = finding.get('line')
     if target_file and line and os.path.exists(target_file):
+        _backup_file(target_file)
         with open(target_file, 'r') as f:
             lines = f.readlines()
         line_index = line - 1

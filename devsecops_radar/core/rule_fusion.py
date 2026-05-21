@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import shutil
 from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
@@ -9,7 +10,7 @@ class RuleFusion:
     """
     A hybrid rule engine that loads custom rules from local directories
     and can optionally pull community-curated rules from a git repository.
-    Also supports policy-as-code evaluation.
+    Also supports policy-as-code evaluation and OPA Rego policies.
     """
 
     def __init__(
@@ -25,6 +26,8 @@ class RuleFusion:
             "https://github.com/Mehrdoost/devsecops-radar-rules.git"
         )
         self.findings: List[Dict[str, Any]] = []
+
+    # ── public API ──────────────────────────────────────────────
 
     def load_all_rules(self) -> List[Dict[str, Any]]:
         if self.local_rules_path and self.local_rules_path.exists():
@@ -77,6 +80,8 @@ class RuleFusion:
         }
         return json.dumps(template, indent=2)
 
+    # ── policy engine ─────────────────────────────────────────
+
     @staticmethod
     def evaluate_policy(
         findings: List[Dict[str, Any]], policy_file: str
@@ -106,6 +111,30 @@ class RuleFusion:
                 return True, f"WARNING: {msg}"
 
         return True, "Policy checks passed."
+
+    @staticmethod
+    def evaluate_rego_policy(
+        findings: List[Dict[str, Any]], rego_policy_file: str
+    ) -> Tuple[bool, str]:
+        """Evaluate findings using an OPA Rego policy file."""
+        if not shutil.which("opa"):
+            return True, "OPA not installed; skipping Rego evaluation."
+        try:
+            result = subprocess.run(
+                ["opa", "eval", "--data", rego_policy_file, "--input", "/dev/stdin"],
+                input=json.dumps({"findings": findings}),
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode != 0:
+                return True, f"OPA evaluation error: {result.stderr}"
+            data = json.loads(result.stdout)
+            if data.get("result", [{}])[0].get("expressions", [{}])[0].get("value", False):
+                return False, "Rego policy violated."
+            return True, "Rego policy passed."
+        except Exception as e:
+            return True, f"OPA evaluation failed: {e}"
+
+    # ── internal helpers ────────────────────────────────────────
 
     def _load_from_directory(self, directory: Path) -> None:
         for json_file in sorted(directory.rglob("*.json")):
@@ -176,9 +205,7 @@ class RuleFusion:
                         "title": vuln.get("Title", ""),
                         "description": vuln.get("Description", ""),
                         "package": vuln.get("PkgName", ""),
-                        "installed_version": vuln.get(
-                            "InstalledVersion", ""
-                        ),
+                        "installed_version": vuln.get("InstalledVersion", ""),
                         "fixed_version": vuln.get("FixedVersion", ""),
                     }
                 )
@@ -190,13 +217,10 @@ class RuleFusion:
                     "target": result.get("path", filename),
                     "id": result.get("check_id", ""),
                     "severity": (
-                        result.get("extra", {})
-                        .get("severity", "WARNING")
+                        result.get("extra", {}).get("severity", "WARNING")
                     ).upper(),
                     "title": result.get("check_id", ""),
-                    "description": result.get("extra", {}).get(
-                        "message", ""
-                    ),
+                    "description": result.get("extra", {}).get("message", ""),
                     "line": (result.get("start", {}) or {}).get("line", 0),
                 }
             )

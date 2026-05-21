@@ -1,5 +1,6 @@
 import subprocess
 import json
+import os
 from typing import List, Dict, Optional
 
 def generate_sbom(target_dir: str, output_file: str = "sbom.json") -> Optional[Dict]:
@@ -34,3 +35,15 @@ def detect_dependency_confusion(manifest_path: str, internal_prefixes: List[str]
     except Exception:
         pass
     return findings
+
+def apply_vex_filter(findings: List[Dict], vex_file: str) -> List[Dict]:
+    """Filter findings based on a CycloneDX VEX document."""
+    if not os.path.exists(vex_file):
+        return findings
+    with open(vex_file) as f:
+        vex = json.load(f)
+    excluded = set()
+    for vuln in vex.get("vulnerabilities", []):
+        if vuln.get("analysis", {}).get("state") in ["not_affected", "false_positive"]:
+            excluded.add(vuln.get("id"))
+    return [f for f in findings if f.get("id") not in excluded]

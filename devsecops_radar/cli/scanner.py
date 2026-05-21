@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument('--llm-backend', type=str, default='ollama', choices=['ollama', 'litellm'])
     parser.add_argument('--llm-model', type=str)
     parser.add_argument('--policy', type=str)
+    parser.add_argument('--rego-policy', type=str, help='Path to an OPA Rego policy file')
     parser.add_argument('--fix', action='store_true')
     parser.add_argument('--review', action='store_true', help='Review each AI fix before applying')
     parser.add_argument('--report', type=str)
@@ -96,6 +97,12 @@ def run_policy_check(args, findings):
         if not passed:
             logger.error("Policy check failed.")
             sys.exit(1)
+    if args.rego_policy:
+        passed, msg = RuleFusion.evaluate_rego_policy(findings, args.rego_policy)
+        logger.info(f"Rego Policy: {msg}")
+        if not passed:
+            logger.error("Rego policy check failed.")
+            sys.exit(1)
 
 def save_results(args, findings):
     with open(args.output, 'w') as f:
@@ -119,7 +126,6 @@ def run_analysis(args, findings, topology=None):
     return analysis
 
 def wizard():
-    """Interactive setup wizard for first-time users."""
     print("🛡️  Welcome to Pipeline Sentinel – Quick Setup Wizard")
     print("This will install necessary components.\n")
     import subprocess
