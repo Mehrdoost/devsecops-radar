@@ -53,7 +53,9 @@ def save_scan_to_db(findings: list):
     session = SessionLocal()
     try:
         scan = Scan()
+        scan.findings_json = [f.model_dump() for f in validated]   # <-- fix NOT NULL constraint
         session.add(scan)
+        session.flush()
         for f in validated:
             finding = Finding(
                 scan_id=scan.id,
