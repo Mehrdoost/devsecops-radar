@@ -35,6 +35,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --table-bg: transparent; --table-text: var(--text);
             --table-hover-bg: rgba(255,255,255,0.04);
             --table-border: rgba(255,255,255,0.06);
+            --muted-color: var(--text-secondary);
         }
         [data-theme="midnight"] {
             --bg-primary: #0B0E14; --bg-secondary: #161B24;
@@ -50,6 +51,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --table-bg: transparent; --table-text: var(--text);
             --table-hover-bg: rgba(255,255,255,0.04);
             --table-border: rgba(255,255,255,0.05);
+            --muted-color: var(--text-secondary);
         }
         [data-theme="arctic"] {
             --bg-primary: #F8FAFC; --bg-secondary: #FFFFFF;
@@ -65,6 +67,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --table-bg: rgba(0,0,0,0.02); --table-text: var(--text);
             --table-hover-bg: rgba(0,0,0,0.04);
             --table-border: rgba(0,0,0,0.08);
+            --muted-color: var(--text-secondary);
         }
         [data-theme="forest"] {
             --bg-primary: #0F1A14; --bg-secondary: #162819;
@@ -80,6 +83,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --table-bg: transparent; --table-text: var(--text);
             --table-hover-bg: rgba(255,255,255,0.04);
             --table-border: rgba(255,255,255,0.06);
+            --muted-color: var(--text-secondary);
         }
         [data-theme="dark"] {
             --bg-primary: #111111; --bg-secondary: #1A1A1A;
@@ -95,12 +99,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --table-bg: transparent; --table-text: var(--text);
             --table-hover-bg: rgba(255,255,255,0.04);
             --table-border: rgba(255,255,255,0.08);
+            --muted-color: var(--text-secondary);
         }
         body { background: var(--bg-primary); color: var(--text);
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
             margin: 0; padding: 0; overflow-x: hidden;
             font-size: 15px; line-height: 1.6;
             transition: background 0.4s ease, color 0.4s ease; }
+        .text-muted { color: var(--muted-color) !important; }
         #particles-canvas { position: fixed; top: 0; left: 0;
             width: 100%; height: 100%; z-index: 0; pointer-events: none; }
         .content-layer { position: relative; z-index: 1; }
@@ -157,14 +163,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             justify-content: center; }
         .sim-overlay.open { display: flex; animation: fadeIn 0.25s ease; }
         .sim-panel { background: var(--glass); border: 1px solid var(--glass-border);
-            border-radius: 22px; padding: 32px; max-width: 700px;
+            border-radius: 22px; padding: 28px; max-width: 700px;
             width: 90%; max-height: 80vh; overflow-y: auto;
             backdrop-filter: blur(20px); box-shadow: 0 0 60px var(--accent-glow);
             position: relative; }
-        .sim-close { position: absolute; top: 16px; right: 20px;
+        .sim-close { position: absolute; top: 12px; right: 16px;
             background: none; border: none; color: var(--text-secondary);
-            font-size: 1.8rem; cursor: pointer; transition: color 0.2s; }
+            font-size: 1.8rem; cursor: pointer; transition: color 0.2s;
+            z-index: 10; }
         .sim-close:hover { color: var(--danger); }
+        .sim-footer { margin-top: 20px; text-align: right; }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         .clock-pill { font-family: 'SF Mono', 'Fira Code', monospace;
             font-size: 0.9rem; color: var(--text); background: var(--glass);
@@ -474,7 +482,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- Custom Simulation Overlay (no Bootstrap modal) -->
+        <!-- Simulation Overlay -->
         <div class="sim-overlay" id="simOverlay">
             <div class="sim-panel">
                 <button class="sim-close" onclick="closeSimPanel()">&times;</button>
@@ -483,6 +491,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         <div class="spinner-border" style="color:var(--accent)"></div>
                         <p class="mt-2" data-i18n="simulating">Simulating attack chain...</p>
                     </div>
+                </div>
+                <div class="sim-footer">
+                    <button class="btn btn-secondary" onclick="closeSimPanel()"
+                            data-i18n="close">Close</button>
                 </div>
             </div>
         </div>
@@ -549,7 +561,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 llm_backend_desc: "LLM backend (ollama or litellm)",
                 llm_model_desc: "LLM model name",
                 rego_policy_desc: "OPA Rego policy file",
-                update_rules_desc: "Download/update community rules"
+                update_rules_desc: "Download/update community rules",
+                docker_missing: "Docker not installed or running. Simulation needs Docker."
             },
             ru: { critical: "КРИТИЧЕСКИЙ", high: "ВЫСОКИЙ", medium: "СРЕДНИЙ",
                 low: "НИЗКИЙ", severity_breakdown: "Распределение",
@@ -589,7 +602,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 llm_backend_desc: "LLM‑бэкенд (ollama или litellm)",
                 llm_model_desc: "Название модели LLM",
                 rego_policy_desc: "Файл политики OPA Rego",
-                update_rules_desc: "Загрузить/обновить правила сообщества"
+                update_rules_desc: "Загрузить/обновить правила сообщества",
+                docker_missing: "Docker не установлен или не запущен. Для симуляции требуется Docker."
             },
             zh: { critical: "严重", high: "高", medium: "中", low: "低",
                 severity_breakdown: "严重性分布", trend_over_time: "趋势",
@@ -628,7 +642,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 llm_backend_desc: "LLM 后端 (ollama 或 litellm)",
                 llm_model_desc: "LLM 模型名称",
                 rego_policy_desc: "OPA Rego 策略文件",
-                update_rules_desc: "下载/更新社区规则"
+                update_rules_desc: "下载/更新社区规则",
+                docker_missing: "Docker 未安装或未运行。模拟需要 Docker 来运行沙盒 PoC。"
             }
         };
         let CL = localStorage.getItem('pipeline-lang') || 'en';
@@ -646,7 +661,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 l === 'en' ? 'EN' : l === 'ru' ? 'RU' : 'ZH';
             document.getElementById('langMenu').classList.remove('open');
             buildCLIRef();
-            // Redraw charts with translated tooltips
             if (typeof lastCounts !== 'undefined') createSeverityChart(lastCounts);
             if (typeof lastScanData !== 'undefined') {
                 createTrendChart(lastScanLabels, lastScanData);
@@ -753,7 +767,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const option = chart.getOption();
             if (option.graphic) {
                 option.graphic[0].style.fill = textColor;
-                option.graphic[1].style.fill = textSecondary;
+                if (option.graphic[1]) option.graphic[1].style.fill = textSecondary;
             }
             if (option.legend) {
                 option.legend.textStyle = { color: textSecondary };
@@ -866,7 +880,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
         }
 
-        // --- Report dropdown (no modal, no freeze) ---
+        // --- Report dropdown (no freeze) ---
         function toggleReportMenu() {
             const menu = document.getElementById('reportMenu');
             menu.classList.toggle('open');
@@ -1059,7 +1073,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
         // --- ECharts Severity Breakdown (enhanced) ---
         function createSeverityChart(counts) {
-            lastCounts = counts; // store for language/theme updates
+            lastCounts = counts;
             const dom = document.getElementById('severityChart');
             if (severityChartInstance) severityChartInstance.dispose();
             severityChartInstance = echarts.init(dom);
@@ -1067,7 +1081,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const textColor = style.getPropertyValue('--text').trim();
             const textSecondary = style.getPropertyValue('--text-secondary').trim();
             const total = counts.CRITICAL + counts.HIGH + counts.MEDIUM + counts.LOW;
-            // Translate tooltip names
             const tNames = [
                 T[CL]?.critical || 'CRITICAL',
                 T[CL]?.high || 'HIGH',
@@ -1086,16 +1099,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     radius: ['45%', '75%'],
                     avoidLabelOverlap: false,
                     itemStyle: {
-                        borderRadius: 10,
+                        borderRadius: 12,
                         borderColor: 'rgba(0,0,0,0.3)',
-                        borderWidth: 2,
-                        shadowBlur: 20,
-                        shadowColor: 'rgba(0,0,0,0.4)'
+                        borderWidth: 3,
+                        shadowBlur: 25,
+                        shadowColor: 'rgba(0,0,0,0.5)'
                     },
                     label: { show: false },
                     emphasis: {
                         scaleSize: 15,
-                        label: { show: true, fontSize: 18, fontWeight: 'bold',
+                        label: { show: true, fontSize: 20, fontWeight: 'bold',
                                  color: textColor }
                     },
                     data: [
@@ -1110,18 +1123,25 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     ]
                 }],
                 graphic: [
+                    {   // background circle for number visibility
+                        type: 'circle',
+                        left: 'center',
+                        top: 'center',
+                        shape: { r: 45 },
+                        style: { fill: 'rgba(0,0,0,0.2)', stroke: 'rgba(255,255,255,0.1)' }
+                    },
                     {
                         type: 'text',
                         left: 'center',
-                        top: '44%',
+                        top: '42%',
                         style: {
                             text: total.toString(),
                             textAlign: 'center',
                             fill: textColor,
-                            fontSize: 32,
+                            fontSize: 36,
                             fontWeight: 'bold',
-                            textShadowBlur: 10,
-                            textShadowColor: 'rgba(0,0,0,0.5)'
+                            textShadowBlur: 12,
+                            textShadowColor: 'rgba(0,0,0,0.6)'
                         }
                     },
                     {
@@ -1132,7 +1152,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                             text: 'TOTAL',
                             textAlign: 'center',
                             fill: textSecondary,
-                            fontSize: 14,
+                            fontSize: 13,
                             fontWeight: 'normal'
                         }
                     }
@@ -1167,7 +1187,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 yAxis: {
                     type: 'value',
                     axisLabel: { color: textSecondary },
-                    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } }
+                    splitLine: { lineStyle: { color: 'rgba(255,255,255,0.06)' } }
                 },
                 series: [
                     {
@@ -1176,11 +1196,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         data: scans.map(s => s.critical),
                         smooth: true,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10,
-                                     shadowColor: 'rgba(255,77,109,0.5)' },
+                        symbolSize: 10,
+                        lineStyle: { width: 3, shadowBlur: 15,
+                                     shadowColor: 'rgba(255,77,109,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(255,77,109,0.4)'},
+                            {offset:0, color:'rgba(255,77,109,0.5)'},
                             {offset:1, color:'rgba(255,77,109,0.02)'}
                         ])},
                         itemStyle: { color: '#FF4D6D' }
@@ -1191,11 +1211,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         data: scans.map(s => s.high),
                         smooth: true,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10,
-                                     shadowColor: 'rgba(255,177,0,0.5)' },
+                        symbolSize: 10,
+                        lineStyle: { width: 3, shadowBlur: 15,
+                                     shadowColor: 'rgba(255,177,0,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(255,177,0,0.3)'},
+                            {offset:0, color:'rgba(255,177,0,0.4)'},
                             {offset:1, color:'rgba(255,177,0,0.02)'}
                         ])},
                         itemStyle: { color: '#FFB100' }
@@ -1206,11 +1226,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         data: scans.map(s => s.medium),
                         smooth: true,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10,
-                                     shadowColor: 'rgba(0,180,216,0.5)' },
+                        symbolSize: 10,
+                        lineStyle: { width: 3, shadowBlur: 15,
+                                     shadowColor: 'rgba(0,180,216,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(0,180,216,0.3)'},
+                            {offset:0, color:'rgba(0,180,216,0.4)'},
                             {offset:1, color:'rgba(0,180,216,0.02)'}
                         ])},
                         itemStyle: { color: '#00B4D8' }
@@ -1221,11 +1241,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         data: scans.map(s => s.low),
                         smooth: true,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10,
-                                     shadowColor: 'rgba(6,214,160,0.5)' },
+                        symbolSize: 10,
+                        lineStyle: { width: 3, shadowBlur: 15,
+                                     shadowColor: 'rgba(6,214,160,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(6,214,160,0.3)'},
+                            {offset:0, color:'rgba(6,214,160,0.4)'},
                             {offset:1, color:'rgba(6,214,160,0.02)'}
                         ])},
                         itemStyle: { color: '#06D6A0' }
@@ -1250,11 +1270,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             createSeverityChart(counts);
         }
 
-        // --- D3 Attack Graph (fixed node drift) ---
-        let attackSim = null; // store simulation instance to avoid re-init issues
+        // --- D3 Attack Graph (nodes never fly away) ---
+        let attackSim = null;
         function drawAttackGraph(data) {
             const co = document.getElementById('attack-graph');
             co.innerHTML = '';
+            // stop any previous simulation
+            if (attackSim) attackSim.stop();
             const W = co.clientWidth, H = co.clientHeight;
             const svg = d3.select('#attack-graph').append('svg')
                 .attr('width', W).attr('height', H);
@@ -1262,9 +1284,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 .force('link', d3.forceLink(data.links).id(d => d.id).distance(100))
                 .force('charge', d3.forceManyBody().strength(-300))
                 .force('center', d3.forceCenter(W / 2, H / 2))
-                .force('collision', d3.forceCollide().radius(12))
-                .force('x', d3.forceX(W / 2).strength(0.05))
-                .force('y', d3.forceY(H / 2).strength(0.05));
+                .force('collision', d3.forceCollide().radius(14))
+                .force('x', d3.forceX(W / 2).strength(0.06))
+                .force('y', d3.forceY(H / 2).strength(0.06));
             attackSim = simulation;
 
             const link = svg.append('g').selectAll('line')
@@ -1310,19 +1332,24 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 .attr('fill', 'var(--text-secondary)')
                 .style('font-family', 'var(--mono-font)');
             simulation.on('tick', () => {
+                // keep nodes inside container
+                node.attr('cx', d => Math.max(5, Math.min(W - 5, d.x)))
+                    .attr('cy', d => Math.max(5, Math.min(H - 5, d.y)));
                 link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
                     .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-                node.attr('cx', d => d.x).attr('cy', d => d.y);
-                label.attr('x', d => d.x).attr('y', d => d.y);
+                label.attr('x', d => Math.max(10, Math.min(W - 50, d.x)))
+                    .attr('y', d => Math.max(10, Math.min(H - 20, d.y)));
             });
             window.addEventListener('resize', () => {
-                simulation.force('center', d3.forceCenter(co.clientWidth/2,
-                                                           co.clientHeight/2));
+                const newW = co.clientWidth, newH = co.clientHeight;
+                simulation.force('center', d3.forceCenter(newW / 2, newH / 2));
+                simulation.force('x', d3.forceX(newW / 2).strength(0.06));
+                simulation.force('y', d3.forceY(newH / 2).strength(0.06));
                 simulation.alpha(0.3).restart();
             });
         }
 
-        // --- Simulation overlay (custom, no Bootstrap modal) ---
+        // --- Simulation overlay (no freeze, always closable) ---
         function openSimPanel() {
             document.getElementById('simOverlay').classList.add('open');
             const content = document.getElementById('sim-panel-content');
@@ -1336,7 +1363,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         function closeSimPanel() {
             document.getElementById('simOverlay').classList.remove('open');
         }
-        // Close on overlay click (outside panel)
         document.getElementById('simOverlay').addEventListener('click', function(e) {
             if (e.target === this) closeSimPanel();
         });
@@ -1398,8 +1424,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         fetch('/api/attack-paths', { headers: getHeaders() })
         .then(r => r.json()).then(d => {
             if (d.error) {
-                document.getElementById('attack-error').style.display = 'block';
-                document.getElementById('attack-error').textContent = d.error;
+                // hide the error and show a friendly message instead
+                const errEl = document.getElementById('attack-error');
+                errEl.style.display = 'block';
+                errEl.textContent = '⚠️ ' + (T[CL]?.no_ai || 'Run with --analyze');
                 return;
             }
             if (!d.nodes || !d.nodes.length) return;
@@ -1417,6 +1445,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     body: JSON.stringify({ finding_ids: fids })
                 });
                 const d = await r.json();
+                if (d.error) {
+                    content.innerHTML = '<div class="alert alert-warning">' +
+                        escapeHtml(d.error) + '</div>';
+                    return;
+                }
                 const ps = 'color:var(--text);max-height:300px;overflow-y:auto;';
                 const so = d.sandbox_output
                     ? '<p><strong>Sandbox Output:</strong><br><pre>'
@@ -1429,12 +1462,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     '<p class="mt-2"><strong>Description:</strong> ' +
                     escapeHtml(d.description) + '</p>' + so);
             } catch (err) {
-                content.innerHTML = '<div class="alert alert-danger">Simulation failed: '
-                    + err.message + '</div>';
+                content.innerHTML = '<div class="alert alert-danger">' +
+                    (T[CL]?.docker_missing || 'Docker is required for sandboxed PoC.') +
+                    '</div>';
             }
         }
 
         function escapeHtml(text) {
+            if (!text) return '';
             return text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
                        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
@@ -1456,6 +1491,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 currentSeverityFilter = null;
                 document.querySelectorAll('#stats-row .card').forEach(c => c.style.border = '');
                 applyFilters();
+                closeSimPanel(); // also close simulation overlay
             }
         });
 
