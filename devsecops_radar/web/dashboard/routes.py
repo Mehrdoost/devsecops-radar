@@ -32,6 +32,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --glass-border: rgba(255,255,255,0.06);
             --card-shadow: 0 4px 24px rgba(0,0,0,0.4);
             --particle-color: rgba(0,229,255,0.15);
+            --table-bg: transparent; --table-text: var(--text);
+            --table-hover-bg: rgba(255,255,255,0.04);
+            --table-border: rgba(255,255,255,0.06);
         }
         [data-theme="midnight"] {
             --bg-primary: #0B0E14; --bg-secondary: #161B24;
@@ -44,6 +47,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --glass-border: rgba(255,255,255,0.05);
             --card-shadow: 0 4px 24px rgba(0,0,0,0.5);
             --particle-color: rgba(99,102,241,0.12);
+            --table-bg: transparent; --table-text: var(--text);
+            --table-hover-bg: rgba(255,255,255,0.04);
+            --table-border: rgba(255,255,255,0.05);
         }
         [data-theme="arctic"] {
             --bg-primary: #F8FAFC; --bg-secondary: #FFFFFF;
@@ -56,6 +62,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --glass-border: rgba(0,0,0,0.08);
             --card-shadow: 0 4px 24px rgba(0,0,0,0.08);
             --particle-color: rgba(2,132,199,0.1);
+            --table-bg: rgba(0,0,0,0.02); --table-text: var(--text);
+            --table-hover-bg: rgba(0,0,0,0.04);
+            --table-border: rgba(0,0,0,0.08);
         }
         [data-theme="forest"] {
             --bg-primary: #0F1A14; --bg-secondary: #162819;
@@ -68,6 +77,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --glass-border: rgba(255,255,255,0.06);
             --card-shadow: 0 4px 24px rgba(0,0,0,0.4);
             --particle-color: rgba(52,211,153,0.12);
+            --table-bg: transparent; --table-text: var(--text);
+            --table-hover-bg: rgba(255,255,255,0.04);
+            --table-border: rgba(255,255,255,0.06);
         }
         [data-theme="dark"] {
             --bg-primary: #111111; --bg-secondary: #1A1A1A;
@@ -80,6 +92,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --glass-border: rgba(255,255,255,0.08);
             --card-shadow: 0 4px 24px rgba(0,0,0,0.6);
             --particle-color: rgba(59,130,246,0.15);
+            --table-bg: transparent; --table-text: var(--text);
+            --table-hover-bg: rgba(255,255,255,0.04);
+            --table-border: rgba(255,255,255,0.08);
         }
         body { background: var(--bg-primary); color: var(--text);
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -121,23 +136,36 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             font-weight: 600; transition: all 0.2s; font-size: 0.9rem; }
         .btn-outline-accent:hover { background: var(--accent);
             color: #000; box-shadow: 0 0 25px var(--accent-glow); }
-        .table { border-radius: 18px; overflow: hidden; background: transparent; }
-        .table th { border-bottom: 2px solid rgba(255,255,255,0.08);
+        .findings-table { background: var(--table-bg); color: var(--table-text);
+            border-radius: 18px; overflow: hidden; }
+        .findings-table th { border-bottom: 2px solid var(--table-border);
             color: var(--accent); font-weight: 600; text-transform: uppercase;
             font-size: 0.8rem; letter-spacing: 0.9px; }
-        .table td, .table th { padding: 18px 22px; vertical-align: middle; }
-        .table tbody tr { cursor: pointer; transition: background 0.2s; }
-        .table tbody tr:hover { background: rgba(255,255,255,0.04); }
+        .findings-table td, .findings-table th { padding: 18px 22px;
+            vertical-align: middle; }
+        .findings-table tbody tr { cursor: pointer; transition: background 0.2s; }
+        .findings-table tbody tr:hover { background: var(--table-hover-bg); }
         .finding-detail { display: none; background: var(--bg-tertiary);
             border-radius: 12px; padding: 16px 20px; margin: 8px 0;
             color: var(--text); }
         .finding-detail.show { display: block; }
         #attack-graph { background: var(--bg-tertiary);
             border-radius: 18px; border: 1px solid var(--glass-border); }
-        .modal-content { background: var(--bg-secondary); color: var(--text);
-            border: 1px solid var(--glass-border); border-radius: 22px; }
-        .modal-header { border-bottom: 1px solid var(--glass-border); }
-        .modal-footer { border-top: 1px solid var(--glass-border); }
+        .sim-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); backdrop-filter: blur(6px);
+            display: none; z-index: 2000; align-items: center;
+            justify-content: center; }
+        .sim-overlay.open { display: flex; animation: fadeIn 0.25s ease; }
+        .sim-panel { background: var(--glass); border: 1px solid var(--glass-border);
+            border-radius: 22px; padding: 32px; max-width: 700px;
+            width: 90%; max-height: 80vh; overflow-y: auto;
+            backdrop-filter: blur(20px); box-shadow: 0 0 60px var(--accent-glow);
+            position: relative; }
+        .sim-close { position: absolute; top: 16px; right: 20px;
+            background: none; border: none; color: var(--text-secondary);
+            font-size: 1.8rem; cursor: pointer; transition: color 0.2s; }
+        .sim-close:hover { color: var(--danger); }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         .clock-pill { font-family: 'SF Mono', 'Fira Code', monospace;
             font-size: 0.9rem; color: var(--text); background: var(--glass);
             border: 1px solid var(--glass-border); border-radius: 12px;
@@ -186,14 +214,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             padding: 10px 18px; font-size: 0.9rem; width: 100%; }
         .cli-flag-card { background: var(--bg-tertiary); border-radius: 10px;
             padding: 16px; margin-bottom: 10px; transition: all 0.2s;
-            border-left: 4px solid transparent; display: flex; align-items: flex-start; gap: 14px; }
+            border-left: 4px solid transparent; display: flex;
+            align-items: flex-start; gap: 14px; }
         .cli-flag-card:hover { border-left-color: var(--accent);
             transform: translateX(4px); }
         .cli-flag-card .flag-icon { font-size: 1.8rem; color: var(--accent); }
         .cli-flag-card code { color: var(--accent); background: transparent;
             font-size: 0.95rem; display: block; margin-bottom: 4px; }
-        .cli-flag-card .flag-desc { color: var(--text-secondary); font-size: 0.85rem; }
-        .toggle-pill { background: var(--bg-tertiary); border: 1px solid var(--glass-border);
+        .cli-flag-card .flag-desc { color: var(--text-secondary);
+            font-size: 0.85rem; }
+        .toggle-pill { background: var(--bg-tertiary);
+            border: 1px solid var(--glass-border);
             color: var(--accent); border-radius: 30px; padding: 6px 18px;
             font-size: 0.85rem; font-weight: 600; transition: all 0.2s;
             display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
@@ -206,9 +237,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         .ai-badge { background: var(--bg-tertiary); color: var(--text);
             padding: 4px 12px; border-radius: 20px; font-size: 0.8rem; }
         .report-dropdown { position: relative; display: inline-block; }
-        .report-menu { position: absolute; bottom: 100%; left: 0; margin-bottom: 8px;
-            background: var(--bg-secondary); border: 1px solid var(--glass-border);
-            border-radius: 12px; padding: 6px; min-width: 150px;
+        .report-menu { position: absolute; bottom: 100%; left: 0;
+            margin-bottom: 8px; background: var(--bg-secondary);
+            border: 1px solid var(--glass-border); border-radius: 12px;
+            padding: 6px; min-width: 150px;
             box-shadow: var(--card-shadow); display: none; z-index: 1050; }
         .report-menu.open { display: block; animation: slideUp 0.2s ease; }
         @keyframes slideUp {
@@ -253,15 +285,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <div class="d-flex align-items-center gap-3">
                 <div class="clock-pill" id="clock-pill">--</div>
                 <div class="position-relative">
-                    <button class="lang-btn" id="langDropdownBtn" onclick="toggleLangMenu()">
+                    <button class="lang-btn" id="langDropdownBtn"
+                            onclick="toggleLangMenu()">
                         <span>🌐</span>
                         <span id="current-lang-label">EN</span>
                         <span style="font-size:0.7rem;">▼</span>
                     </button>
                     <div class="lang-menu" id="langMenu">
-                        <div class="lang-item" onclick="switchLanguage('en')">🇬🇧 English</div>
-                        <div class="lang-item" onclick="switchLanguage('ru')">🇷🇺 Русский</div>
-                        <div class="lang-item" onclick="switchLanguage('zh')">🇨🇳 中文</div>
+                        <div class="lang-item"
+                             onclick="switchLanguage('en')">🇬🇧 English</div>
+                        <div class="lang-item"
+                             onclick="switchLanguage('ru')">🇷🇺 Русский</div>
+                        <div class="lang-item"
+                             onclick="switchLanguage('zh')">🇨🇳 中文</div>
                     </div>
                 </div>
             </div>
@@ -424,7 +460,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                        placeholder="Search findings..." data-i18n-placeholder="search_placeholder">
             </div>
             <div class="table-responsive">
-                <table class="table table-dark table-hover align-middle">
+                <table class="findings-table table table-hover align-middle">
                     <thead><tr>
                         <th><input type="checkbox" id="select-all"></th>
                         <th data-i18n="tool">Tool</th>
@@ -438,33 +474,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- Toast container -->
-        <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-container"></div>
-
-        <!-- Simulation Modal -->
-        <div class="modal fade" id="simulationModal" tabindex="-1" aria-hidden="true">
-            <div class="modal-dialog modal-lg modal-dialog-centered">
-                <div class="modal-content">
-                    <div class="modal-header">
-                        <h5 class="modal-title">⚡ <span data-i18n="attack_simulation">Attack Simulation</span></h5>
-                        <button type="button" class="btn-close btn-close-white"
-                                data-bs-dismiss="modal"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div id="simulation-result">
-                            <div class="d-flex justify-content-center">
-                                <div class="spinner-border"
-                                     style="color:var(--accent)"></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button class="btn btn-secondary" data-bs-dismiss="modal"
-                                data-i18n="close">Close</button>
+        <!-- Custom Simulation Overlay (no Bootstrap modal) -->
+        <div class="sim-overlay" id="simOverlay">
+            <div class="sim-panel">
+                <button class="sim-close" onclick="closeSimPanel()">&times;</button>
+                <div id="sim-panel-content">
+                    <div class="text-center">
+                        <div class="spinner-border" style="color:var(--accent)"></div>
+                        <p class="mt-2" data-i18n="simulating">Simulating attack chain...</p>
                     </div>
                 </div>
             </div>
         </div>
+
+        <!-- Toast container -->
+        <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-container"></div>
 
         <footer class="text-center text-muted py-3 border-top border-secondary mt-4">
             <small>🛡️ <strong>Pipeline Sentinel</strong> · crafted by
@@ -622,6 +646,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 l === 'en' ? 'EN' : l === 'ru' ? 'RU' : 'ZH';
             document.getElementById('langMenu').classList.remove('open');
             buildCLIRef();
+            // Redraw charts with translated tooltips
+            if (typeof lastCounts !== 'undefined') createSeverityChart(lastCounts);
+            if (typeof lastScanData !== 'undefined') {
+                createTrendChart(lastScanLabels, lastScanData);
+            }
         }
         function toggleLangMenu() {
             const menu = document.getElementById('langMenu');
@@ -688,17 +717,22 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
             body.addEventListener('shown.bs.collapse', () => {
                 toggle.classList.add('expanded');
-                toggle.querySelector('[data-i18n="show_hide"]').textContent = T[CL]?.hide || 'Hide';
+                toggle.querySelector('[data-i18n="show_hide"]').textContent =
+                    T[CL]?.hide || 'Hide';
             });
             body.addEventListener('hidden.bs.collapse', () => {
                 toggle.classList.remove('expanded');
-                toggle.querySelector('[data-i18n="show_hide"]').textContent = T[CL]?.show_hide || 'Show';
+                toggle.querySelector('[data-i18n="show_hide"]').textContent =
+                    T[CL]?.show_hide || 'Show';
             });
         }
 
         // --- themes ---
         let severityChartInstance = null;
         let trendChartInstance = null;
+        let lastCounts = null;
+        let lastScanData = null;
+        let lastScanLabels = null;
 
         function switchTheme(t) {
             document.documentElement.setAttribute('data-theme', t);
@@ -708,13 +742,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const dot = document.querySelector(`.theme-dot[data-theme="${t}"]`);
             if (dot) dot.classList.add('active');
             initParticles();
-            // Redraw charts with new theme colors
-            if (severityChartInstance) {
-                updateChartColors(severityChartInstance);
-            }
-            if (trendChartInstance) {
-                updateChartColors(trendChartInstance);
-            }
+            if (severityChartInstance) updateChartColors(severityChartInstance);
+            if (trendChartInstance) updateChartColors(trendChartInstance);
         }
 
         function updateChartColors(chart) {
@@ -722,12 +751,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const textColor = style.getPropertyValue('--text').trim();
             const textSecondary = style.getPropertyValue('--text-secondary').trim();
             const option = chart.getOption();
-            // Update graphic text colors for doughnut
             if (option.graphic) {
                 option.graphic[0].style.fill = textColor;
                 option.graphic[1].style.fill = textSecondary;
             }
-            // Update legend and axis colors for line chart
             if (option.legend) {
                 option.legend.textStyle = { color: textSecondary };
             }
@@ -1030,8 +1057,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
         });
 
-        // --- ECharts Severity Breakdown ---
+        // --- ECharts Severity Breakdown (enhanced) ---
         function createSeverityChart(counts) {
+            lastCounts = counts; // store for language/theme updates
             const dom = document.getElementById('severityChart');
             if (severityChartInstance) severityChartInstance.dispose();
             severityChartInstance = echarts.init(dom);
@@ -1039,8 +1067,20 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const textColor = style.getPropertyValue('--text').trim();
             const textSecondary = style.getPropertyValue('--text-secondary').trim();
             const total = counts.CRITICAL + counts.HIGH + counts.MEDIUM + counts.LOW;
+            // Translate tooltip names
+            const tNames = [
+                T[CL]?.critical || 'CRITICAL',
+                T[CL]?.high || 'HIGH',
+                T[CL]?.medium || 'MEDIUM',
+                T[CL]?.low || 'LOW'
+            ];
             const option = {
-                tooltip: { trigger: 'item' },
+                tooltip: {
+                    trigger: 'item',
+                    formatter: function(params) {
+                        return params.name + ': ' + params.value;
+                    }
+                },
                 series: [{
                     type: 'pie',
                     radius: ['45%', '75%'],
@@ -1055,32 +1095,39 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     label: { show: false },
                     emphasis: {
                         scaleSize: 15,
-                        label: { show: true, fontSize: 18, fontWeight: 'bold', color: textColor }
+                        label: { show: true, fontSize: 18, fontWeight: 'bold',
+                                 color: textColor }
                     },
                     data: [
-                        { value: counts.CRITICAL, name: 'CRITICAL', itemStyle: { color: '#FF4D6D' } },
-                        { value: counts.HIGH, name: 'HIGH', itemStyle: { color: '#FFB100' } },
-                        { value: counts.MEDIUM, name: 'MEDIUM', itemStyle: { color: '#00B4D8' } },
-                        { value: counts.LOW, name: 'LOW', itemStyle: { color: '#06D6A0' } }
+                        { value: counts.CRITICAL, name: tNames[0],
+                          itemStyle: { color: '#FF4D6D' } },
+                        { value: counts.HIGH, name: tNames[1],
+                          itemStyle: { color: '#FFB100' } },
+                        { value: counts.MEDIUM, name: tNames[2],
+                          itemStyle: { color: '#00B4D8' } },
+                        { value: counts.LOW, name: tNames[3],
+                          itemStyle: { color: '#06D6A0' } }
                     ]
                 }],
                 graphic: [
                     {
                         type: 'text',
                         left: 'center',
-                        top: 'center',
+                        top: '44%',
                         style: {
                             text: total.toString(),
                             textAlign: 'center',
                             fill: textColor,
-                            fontSize: 28,
-                            fontWeight: 'bold'
+                            fontSize: 32,
+                            fontWeight: 'bold',
+                            textShadowBlur: 10,
+                            textShadowColor: 'rgba(0,0,0,0.5)'
                         }
                     },
                     {
                         type: 'text',
                         left: 'center',
-                        top: 'center',
+                        top: '52%',
                         style: {
                             text: 'TOTAL',
                             textAlign: 'center',
@@ -1094,8 +1141,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             severityChartInstance.setOption(option);
         }
 
-        // --- ECharts Trend Over Time ---
+        // --- ECharts Trend Over Time (enhanced) ---
         function createTrendChart(labels, scans) {
+            lastScanLabels = labels;
+            lastScanData = scans;
             const dom = document.getElementById('trendChart');
             if (trendChartInstance) trendChartInstance.dispose();
             trendChartInstance = echarts.init(dom);
@@ -1128,10 +1177,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         smooth: true,
                         symbol: 'circle',
                         symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10, shadowColor: 'rgba(255,77,109,0.5)' },
-                        areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: 'rgba(255,77,109,0.4)' },
-                            { offset: 1, color: 'rgba(255,77,109,0.02)' }
+                        lineStyle: { width: 2, shadowBlur: 10,
+                                     shadowColor: 'rgba(255,77,109,0.5)' },
+                        areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
+                            {offset:0, color:'rgba(255,77,109,0.4)'},
+                            {offset:1, color:'rgba(255,77,109,0.02)'}
                         ])},
                         itemStyle: { color: '#FF4D6D' }
                     },
@@ -1142,10 +1192,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         smooth: true,
                         symbol: 'circle',
                         symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10, shadowColor: 'rgba(255,177,0,0.5)' },
-                        areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: 'rgba(255,177,0,0.3)' },
-                            { offset: 1, color: 'rgba(255,177,0,0.02)' }
+                        lineStyle: { width: 2, shadowBlur: 10,
+                                     shadowColor: 'rgba(255,177,0,0.5)' },
+                        areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
+                            {offset:0, color:'rgba(255,177,0,0.3)'},
+                            {offset:1, color:'rgba(255,177,0,0.02)'}
                         ])},
                         itemStyle: { color: '#FFB100' }
                     },
@@ -1156,10 +1207,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         smooth: true,
                         symbol: 'circle',
                         symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10, shadowColor: 'rgba(0,180,216,0.5)' },
-                        areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: 'rgba(0,180,216,0.3)' },
-                            { offset: 1, color: 'rgba(0,180,216,0.02)' }
+                        lineStyle: { width: 2, shadowBlur: 10,
+                                     shadowColor: 'rgba(0,180,216,0.5)' },
+                        areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
+                            {offset:0, color:'rgba(0,180,216,0.3)'},
+                            {offset:1, color:'rgba(0,180,216,0.02)'}
                         ])},
                         itemStyle: { color: '#00B4D8' }
                     },
@@ -1170,10 +1222,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         smooth: true,
                         symbol: 'circle',
                         symbolSize: 8,
-                        lineStyle: { width: 2, shadowBlur: 10, shadowColor: 'rgba(6,214,160,0.5)' },
-                        areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: 'rgba(6,214,160,0.3)' },
-                            { offset: 1, color: 'rgba(6,214,160,0.02)' }
+                        lineStyle: { width: 2, shadowBlur: 10,
+                                     shadowColor: 'rgba(6,214,160,0.5)' },
+                        areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
+                            {offset:0, color:'rgba(6,214,160,0.3)'},
+                            {offset:1, color:'rgba(6,214,160,0.02)'}
                         ])},
                         itemStyle: { color: '#06D6A0' }
                     }
@@ -1197,6 +1250,98 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             createSeverityChart(counts);
         }
 
+        // --- D3 Attack Graph (fixed node drift) ---
+        let attackSim = null; // store simulation instance to avoid re-init issues
+        function drawAttackGraph(data) {
+            const co = document.getElementById('attack-graph');
+            co.innerHTML = '';
+            const W = co.clientWidth, H = co.clientHeight;
+            const svg = d3.select('#attack-graph').append('svg')
+                .attr('width', W).attr('height', H);
+            const simulation = d3.forceSimulation(data.nodes)
+                .force('link', d3.forceLink(data.links).id(d => d.id).distance(100))
+                .force('charge', d3.forceManyBody().strength(-300))
+                .force('center', d3.forceCenter(W / 2, H / 2))
+                .force('collision', d3.forceCollide().radius(12))
+                .force('x', d3.forceX(W / 2).strength(0.05))
+                .force('y', d3.forceY(H / 2).strength(0.05));
+            attackSim = simulation;
+
+            const link = svg.append('g').selectAll('line')
+                .data(data.links).enter().append('line')
+                .attr('stroke', '#94A3B8').attr('stroke-opacity', 0.5)
+                .attr('stroke-width', 1.5);
+            const node = svg.append('g').selectAll('circle')
+                .data(data.nodes).enter().append('circle')
+                .attr('r', 10)
+                .attr('fill', d => ({
+                    CRITICAL: '#FF4D6D', HIGH: '#FFB100',
+                    MEDIUM: '#00B4D8', LOW: '#06D6A0'
+                }[d.severity] || '#6c757d'))
+                .style('cursor', 'pointer')
+                .style('filter', 'drop-shadow(0 0 6px currentColor)')
+                .on('click', (e, d) => {
+                    const dt = document.getElementById('attack-detail');
+                    dt.innerHTML = (
+                        '<strong>' + d.id + '</strong><br>Severity: ' +
+                        d.severity + '<br>' + d.title + '<br>' +
+                        '<button class="btn-accent mt-2" ' +
+                        'onclick="simulateAttack([\'' + d.id + '\'])">' +
+                        'Simulate this attack</button>'
+                    );
+                    dt.style.display = 'block';
+                })
+                .call(d3.drag()
+                    .on('start', (event, d) => {
+                        if (!event.active) simulation.alphaTarget(0.3).restart();
+                        d.fx = d.x; d.fy = d.y;
+                    })
+                    .on('drag', (event, d) => {
+                        d.fx = event.x; d.fy = event.y;
+                    })
+                    .on('end', (event, d) => {
+                        if (!event.active) simulation.alphaTarget(0);
+                        d.fx = null; d.fy = null;
+                    }));
+            const label = svg.append('g').selectAll('text')
+                .data(data.nodes).enter().append('text')
+                .text(d => d.id)
+                .attr('font-size', '9px').attr('dx', 13).attr('dy', 4)
+                .attr('fill', 'var(--text-secondary)')
+                .style('font-family', 'var(--mono-font)');
+            simulation.on('tick', () => {
+                link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+                    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+                node.attr('cx', d => d.x).attr('cy', d => d.y);
+                label.attr('x', d => d.x).attr('y', d => d.y);
+            });
+            window.addEventListener('resize', () => {
+                simulation.force('center', d3.forceCenter(co.clientWidth/2,
+                                                           co.clientHeight/2));
+                simulation.alpha(0.3).restart();
+            });
+        }
+
+        // --- Simulation overlay (custom, no Bootstrap modal) ---
+        function openSimPanel() {
+            document.getElementById('simOverlay').classList.add('open');
+            const content = document.getElementById('sim-panel-content');
+            content.innerHTML = (
+                '<div class="text-center">' +
+                '<div class="spinner-border" style="color:var(--accent)"></div>' +
+                '<p class="mt-2">' + (T[CL]?.simulating || 'Simulating...') +
+                '</p></div>'
+            );
+        }
+        function closeSimPanel() {
+            document.getElementById('simOverlay').classList.remove('open');
+        }
+        // Close on overlay click (outside panel)
+        document.getElementById('simOverlay').addEventListener('click', function(e) {
+            if (e.target === this) closeSimPanel();
+        });
+
+        // --- fetch wrappers ---
         fetch('/api/findings', { headers: getHeaders() })
         .then(r => r.json()).then(data => {
             allFindings = data.items;
@@ -1258,70 +1403,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 return;
             }
             if (!d.nodes || !d.nodes.length) return;
-            const co = document.getElementById('attack-graph');
-            co.innerHTML = '';
-            const W = co.clientWidth, H = co.clientHeight;
-            const sv = d3.select('#attack-graph').append('svg')
-                .attr('width', W).attr('height', H);
-            const sim = d3.forceSimulation(d.nodes)
-                .force('link', d3.forceLink(d.links).id(dd => dd.id).distance(100))
-                .force('charge', d3.forceManyBody().strength(-450))
-                .force('center', d3.forceCenter(W / 2, H / 2));
-            const lk = sv.append('g').selectAll('line').data(d.links)
-                .enter().append('line').attr('stroke', '#94A3B8')
-                .attr('stroke-opacity', 0.5).attr('stroke-width', 1.5);
-            const nd = sv.append('g').selectAll('circle').data(d.nodes)
-                .enter().append('circle').attr('r', 10)
-                .attr('fill', dd => ({
-                    CRITICAL: '#FF4D6D', HIGH: '#FFB100',
-                    MEDIUM: '#00B4D8', LOW: '#06D6A0'
-                }[dd.severity] || '#6c757d'))
-                .style('cursor', 'pointer')
-                .style('filter', 'drop-shadow(0 0 6px currentColor)')
-                .on('click', (e, dd) => {
-                    const dt = document.getElementById('attack-detail');
-                    dt.innerHTML = (
-                        '<strong>' + dd.id + '</strong><br>Severity: ' +
-                        dd.severity + '<br>' + dd.title + '<br>' +
-                        '<button class="btn-accent mt-2" ' +
-                        'onclick="simulateAttack([\'' + dd.id + '\'])">' +
-                        'Simulate this attack</button>'
-                    );
-                    dt.style.display = 'block';
-                })
-                .call(d3.drag()
-                    .on('start', (e, dd) => {
-                        if (!e.active) sim.alphaTarget(0.3).restart();
-                        dd.fx = dd.x; dd.fy = dd.y;
-                    })
-                    .on('drag', (e, dd) => { dd.fx = e.x; dd.fy = e.y; })
-                    .on('end', (e, dd) => {
-                        if (!e.active) sim.alphaTarget(0);
-                        dd.fx = null; dd.fy = null;
-                    }));
-            const lb = sv.append('g').selectAll('text').data(d.nodes)
-                .enter().append('text').text(dd => dd.id)
-                .attr('font-size', '9px').attr('dx', 13).attr('dy', 4)
-                .attr('fill', 'var(--text-secondary)')
-                .style('font-family', 'var(--mono-font)');
-            sim.on('tick', () => {
-                lk.attr('x1', dd => dd.source.x).attr('y1', dd => dd.source.y)
-                  .attr('x2', dd => dd.target.x).attr('y2', dd => dd.target.y);
-                nd.attr('cx', dd => dd.x).attr('cy', dd => dd.y);
-                lb.attr('x', dd => dd.x).attr('y', dd => dd.y);
-            });
+            drawAttackGraph(d);
         });
 
         async function simulateAttack(fids) {
-            const modal = new bootstrap.Modal(
-                document.getElementById('simulationModal'));
-            modal.show();
-            const rd = document.getElementById('simulation-result');
-            rd.innerHTML = (
-                '<div class="text-center">' +
-                '<div class="spinner-border" style="color:var(--accent)"></div>' +
-                '<p class="mt-2">' +
-                (T[CL]?.simulating || 'Simulating...') + '</p></div>');
+            openSimPanel();
+            const content = document.getElementById('sim-panel-content');
             try {
                 const r = await fetch('/api/simulate', {
                     method: 'POST',
@@ -1335,14 +1422,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     ? '<p><strong>Sandbox Output:</strong><br><pre>'
                       + escapeHtml(d.sandbox_output) + '</pre></p>'
                     : '';
-                rd.innerHTML = (
+                content.innerHTML = (
                     '<h6 style="color:var(--accent)">Simulation Results</h6>' +
                     '<pre class="bg-dark p-3 rounded" style="' + ps + '">' +
                     escapeHtml(d.script) + '</pre>' +
                     '<p class="mt-2"><strong>Description:</strong> ' +
                     escapeHtml(d.description) + '</p>' + so);
             } catch (err) {
-                rd.innerHTML = '<div class="alert alert-danger">Simulation failed: '
+                content.innerHTML = '<div class="alert alert-danger">Simulation failed: '
                     + err.message + '</div>';
             }
         }

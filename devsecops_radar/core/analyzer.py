@@ -25,6 +25,7 @@ def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=None):
 
 
 MAX_ANALYZER_FINDINGS = int(os.environ.get("ANALYZER_MAX_FINDINGS", "100"))
+LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "600"))
 
 FEW_SHOT_EXAMPLE = {
     "executive_summary": (
@@ -103,6 +104,7 @@ class OllamaAnalyzer(BaseAnalyzer):
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "llama3.2:latest")
         self.endpoint = endpoint or os.environ.get("OPENAI_API_BASE", "http://localhost:11434/api/generate")
         self.session = _session_with_retries()
+        self.timeout = LLM_TIMEOUT
 
     def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
         if not findings:
@@ -129,7 +131,7 @@ Respond ONLY with valid JSON in the same format as the example."""
             resp = self.session.post(
                 self.endpoint,
                 json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
-                timeout=180
+                timeout=self.timeout
             )
             resp.raise_for_status()
             result = resp.json()
