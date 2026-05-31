@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from devsecops_radar.core.notifier import notify_jira, notify_asana
+from devsecops_radar.core.notifier import notify_asana, notify_jira
 
 
 @pytest.mark.asyncio
