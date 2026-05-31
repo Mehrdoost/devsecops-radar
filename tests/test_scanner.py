@@ -1,4 +1,5 @@
 import argparse
+import sys
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -15,26 +16,29 @@ from devsecops_radar.cli.scanner import (
 )
 
 
-def test_parse_args():
+def test_parse_args(monkeypatch):
+    """Avoid interference from pytest's own command‑line arguments."""
+    monkeypatch.setattr(sys, "argv", ["prog"])
     args = parse_args()
-    assert args.output == 'findings.json'
+    assert args.output == "findings.json"
     assert args.analyze is False
 
 
 def test_discover_plugins():
     plugins = discover_plugins()
-    assert 'trivy' in plugins
-    assert 'semgrep' in plugins
+    assert "trivy" in plugins
+    assert "semgrep" in plugins
 
 
 def test_save_results_creates_file():
     findings = [{"id": "1", "severity": "HIGH"}]
-    with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
         out = f.name
     args = argparse.Namespace(output=out)
-    with patch('devsecops_radar.cli.scanner.save_scan') as mock_save:
+    with patch("devsecops_radar.cli.scanner.save_scan") as mock_save:
         save_results(args, findings)
         import json
+
         with open(out) as f:
             data = json.load(f)
         assert len(data) == 1
@@ -46,7 +50,7 @@ def test_load_custom_rules_no_rules():
     assert load_custom_rules(args) == []
 
 
-@patch('devsecops_radar.cli.scanner.RuleFusion')
+@patch("devsecops_radar.cli.scanner.RuleFusion")
 def test_load_custom_rules_with_dir(mock_rf):
     mock_rf.return_value.load_all_rules.return_value = [{"id": "r1"}]
     args = argparse.Namespace(rules="/tmp/dummy")
@@ -56,29 +60,31 @@ def test_load_custom_rules_with_dir(mock_rf):
 
 def test_run_policy_check_pass():
     findings = [{"severity": "CRITICAL"}] * 2
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         f.write('{"max_critical": 5, "on_violation": "fail"}')
         policy_file = f.name
     args = argparse.Namespace(policy=policy_file, rego_policy=None)
-    run_policy_check(args, findings)  # should not exit
+    run_policy_check(args, findings)  # should not raise SystemExit
 
 
 @pytest.mark.asyncio
-@patch('devsecops_radar.cli.scanner.get_analyzer')
+@patch("devsecops_radar.cli.scanner.get_analyzer")
 async def test_run_analysis(mock_get_analyzer):
     mock_analyzer = MagicMock()
     mock_analyzer.analyze = AsyncMock(return_value={"executive_summary": "ok"})
     mock_get_analyzer.return_value = mock_analyzer
     findings = [{"severity": "CRITICAL"}]
-    args = argparse.Namespace(analyze=True, llm_backend='ollama', llm_model=None, output='findings.json')
+    args = argparse.Namespace(
+        analyze=True, llm_backend="ollama", llm_model=None, output="findings.json"
+    )
     result = await run_analysis(args, findings)
     assert result["executive_summary"] == "ok"
 
 
 def test_wizard(monkeypatch):
-    monkeypatch.setattr('subprocess.run', lambda *args, **kwargs: None)
-    monkeypatch.setattr('builtins.input', lambda _: 'y')
-    monkeypatch.setattr('builtins.print', lambda *args, **kwargs: None)
+    monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: None)
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    monkeypatch.setattr("builtins.print", lambda *args, **kwargs: None)
     try:
         wizard()
     except SystemExit:
