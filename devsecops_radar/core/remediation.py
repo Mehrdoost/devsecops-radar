@@ -4,17 +4,21 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 BACKUP_DIR = Path.home() / ".devsecops-radar" / "backups"
+_TRACKED_FILES: set[str] = set()
 
 
-def _backup_file(target_file: str):
+def _backup_file(target_file: str) -> None:
     backup_path = BACKUP_DIR / (Path(target_file).name + ".bak")
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     shutil.copy2(target_file, backup_path)
+    _TRACKED_FILES.add(target_file)
 
 
 def apply_remediation(finding: dict[str, Any], ai_fix: str) -> bool:
-    print(f"[FIX] Applying fix for {finding['id']}...")
+    logger.info(f"Applying fix for {finding['id']}...")
     target_file = finding.get('target', '')
     line = finding.get('line')
     if target_file and line and os.path.exists(target_file):
@@ -53,13 +57,9 @@ def generate_fix_commands(findings: list[dict[str, Any]], ai_summary: dict[str, 
         if finding:
             target = finding.get('target', '')
             if 'requirements.txt' in target:
-                commands.append(
-                    f"# Update {target}\npip install --upgrade {finding.get('package', '')}"
-                )
+                commands.append(f"# Update {target}\npip install --upgrade {finding.get('package', '')}")
             elif 'package.json' in target:
-                commands.append(
-                    f"# Update {target}\nnpm update {finding.get('package', '')}"
-                )
+                commands.append(f"# Update {target}\nnpm update {finding.get('package', '')}")
             elif 'dockerfile' in target.lower():
                 commands.append(
                     f"# Fix {target}\nsed -i "
@@ -70,12 +70,16 @@ def generate_fix_commands(findings: list[dict[str, Any]], ai_summary: dict[str, 
     return '\n'.join(commands)
 
 
-def generate_pr(findings_file: str, branch: str = "auto-fix"):
+def generate_pr(findings_file: str, branch: str = "auto-fix") -> None:
     try:
         subprocess.run(['git', 'checkout', '-b', branch], check=True)
-        subprocess.run(['git', 'add', '-A'], check=True)
+        if _TRACKED_FILES:
+            subprocess.run(['git', 'add'] + list(_TRACKED_FILES), check=True)
+        else:
+            logger.warning("No files were modified; skipping PR creation.")
+            return
         subprocess.run(['git', 'commit', '-m', 'Auto-remediation by Pipeline Sentinel'], check=True)
         subprocess.run(['git', 'push', 'origin', branch], check=True)
-        print(f"[FIX] Branch '{branch}' pushed. Create a PR manually or via GitHub CLI.")
-    except Exception as e:
-        print(f"[FIX] Failed to create PR: {e}")
+        logger.info(f"Branch '{branch}' pushed. Create a PR manually or via GitHub CLI.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to create PR: {e}")

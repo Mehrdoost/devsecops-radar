@@ -1,9 +1,11 @@
 import json
 import os
-import shutil
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from loguru import logger
 
 
 class RuleFusion:
@@ -40,25 +42,33 @@ class RuleFusion:
         return self.findings
 
     def update_community_rules(self) -> None:
+        """Clone or pull the latest community rules repository."""
+        repo = self.community_repo
+        # Validate the repository URL
+        if not re.match(r'^https://github\.com/[\w.-]+/[\w.-]+\.git$', repo):
+            logger.error(f"Invalid community rules repository URL: {repo}")
+            return
+
         target_dir = Path.home() / ".devsecops-radar" / "community-rules"
         target_dir.parent.mkdir(parents=True, exist_ok=True)
 
         if (target_dir / ".git").exists():
-            print("🔄 Updating community rules...")
-            subprocess.run(
-                ["git", "-C", str(target_dir), "pull"], check=True
-            )
+            logger.info("Updating community rules...")
+            try:
+                subprocess.run(["git", "-C", str(target_dir), "pull"], check=True)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to update community rules: {e}")
         else:
-            print("📥 Downloading community rules for the first time...")
-            subprocess.run(
-                ["git", "clone", self.community_repo, str(target_dir)],
-                check=True,
-            )
+            logger.info("Downloading community rules for the first time...")
+            try:
+                subprocess.run(["git", "clone", repo, str(target_dir)], check=True)
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Failed to clone community rules: {e}")
+                return
 
-        print(f"✅ Community rules updated at {target_dir}")
-        print(
-            f"   To use them, run: "
-            f"devsecops-radar --trivy ... --rules {target_dir}"
+        logger.info(f"Community rules updated at {target_dir}")
+        logger.info(
+            f"To use them, run: devsecops-radar --trivy ... --rules {target_dir}"
         )
 
     def generate_template(self, scanner_name: str) -> str:
@@ -117,6 +127,8 @@ class RuleFusion:
         findings: list[dict[str, Any]], rego_policy_file: str
     ) -> tuple[bool, str]:
         """Evaluate findings using an OPA Rego policy file."""
+        import shutil
+
         if not shutil.which("opa"):
             return True, "OPA not installed; skipping Rego evaluation."
         try:
@@ -132,6 +144,7 @@ class RuleFusion:
                 return False, "Rego policy violated."
             return True, "Rego policy passed."
         except Exception as e:
+            logger.error(f"OPA evaluation failed: {e}")
             return True, f"OPA evaluation failed: {e}"
 
     # ── internal helpers ────────────────────────────────────────
@@ -142,10 +155,10 @@ class RuleFusion:
                 with open(json_file, encoding="utf-8") as f:
                     data = json.load(f)
             except json.JSONDecodeError:
-                print(f"⚠️ Skipping invalid JSON: {json_file.name}")
+                logger.warning(f"Skipping invalid JSON: {json_file.name}")
                 continue
             except Exception as e:
-                print(f"❌ Error reading {json_file.name}: {e}")
+                logger.error(f"Error reading {json_file.name}: {e}")
                 continue
 
             if not self._validate_json(data, json_file.name):
@@ -153,31 +166,25 @@ class RuleFusion:
 
             parsed = self._parse_scanner_output(data, json_file.name)
             self.findings.extend(parsed)
-            print(f"📄 Loaded {len(parsed)} findings from {json_file.name}")
+            logger.info(f"Loaded {len(parsed)} findings from {json_file.name}")
 
     def _validate_json(self, data: Any, filename: str) -> bool:
         if isinstance(data, list):
             if len(data) == 0:
-                print(f"[WARNING] {filename}: empty list, skipping")
+                logger.warning(f"{filename}: empty list, skipping")
                 return False
             for item in data:
                 if isinstance(item, dict) and self._is_finding(item):
                     return True
-            print(
-                f"[WARNING] {filename}: list items do not look like "
-                "findings, skipping"
-            )
+            logger.warning(f"{filename}: list items do not look like findings, skipping")
             return False
         if isinstance(data, dict):
             known_keys = {"Results", "results", "findings"}
             if any(k in data for k in known_keys):
                 return True
-            print(
-                f"[WARNING] {filename}: unrecognised JSON structure, "
-                "skipping"
-            )
+            logger.warning(f"{filename}: unrecognised JSON structure, skipping")
             return False
-        print(f"[WARNING] {filename}: unexpected JSON type, skipping")
+        logger.warning(f"{filename}: unexpected JSON type, skipping")
         return False
 
     def _parse_scanner_output(

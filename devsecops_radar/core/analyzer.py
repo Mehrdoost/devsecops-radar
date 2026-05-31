@@ -3,29 +3,11 @@ import os
 import re
 from typing import Any
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
-
-def _session_with_retries(total=3, backoff_factor=0.5, status_forcelist=None):
-    if status_forcelist is None:
-        status_forcelist = [429, 500, 502, 503, 504]
-    session = requests.Session()
-    retries = Retry(
-        total=total,
-        backoff_factor=backoff_factor,
-        status_forcelist=status_forcelist,
-        allowed_methods=["POST"]
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    return session
-
+import httpx
+from loguru import logger
 
 MAX_ANALYZER_FINDINGS = int(os.environ.get("ANALYZER_MAX_FINDINGS", "100"))
-LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "600"))
+ANALYZER_TIMEOUT = int(os.environ.get("ANALYZER_TIMEOUT", "1800"))
 
 FEW_SHOT_EXAMPLE = {
     "executive_summary": (
@@ -46,7 +28,12 @@ FEW_SHOT_EXAMPLE = {
             "mitre_tactics": ["TA0001", "TA0042"],
             "mitre_techniques": ["T1078", "T1578"],
             "potential_impact": "Full compromise of production services",
-            "difficulty": "medium"
+            "difficulty": "medium",
+            "enrichment": {
+                "nist_nvd": "https://nvd.nist.gov/vuln/detail/CVE-2026-1234",
+                "github_advisory": "https://github.com/advisories/GHSA-xxxx-xxxx-xxxx",
+                "poc_available": True
+            }
         }
     ],
     "top_remediations": [
@@ -62,15 +49,46 @@ FEW_SHOT_EXAMPLE = {
                 "+++ b/.github/workflows/deploy.yml\n"
                 "- run: echo ${{ secrets.DEPLOY_KEY }}\n"
                 "+ run: echo '**redacted**'"
-            )
+            ),
+            "remediation_steps": [
+                "1. Go to GitHub repository Settings → Secrets",
+                "2. Delete the compromised DEPLOY_KEY",
+                "3. Generate a new secret and update the workflow to use ${{ secrets.NEW_KEY }}",
+                "4. Verify the workflow no longer echoes the secret"
+            ]
         }
     ],
     "false_positives_likely": []
 }
 
 
+def _build_prompt(findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> str:
+    selected = select_findings_for_llm(findings)
+    topology_text = ""
+    if topology:
+        topology_text = f"\nAsset Topology:\n{json.dumps(topology, indent=2)}"
+    prompt = f"""You are a DevSecOps expert. Analyze the findings below.
+Example output structure:
+{json.dumps(FEW_SHOT_EXAMPLE, indent=2)}
+
+IMPORTANT:
+- Each remediation must reference the exact 'id' of the finding.
+- Identify multi-step attack chains.
+- For each attack path, provide enrichment links (NIST NVD, GitHub Advisory) and indicate if a PoC is available.
+- For each remediation, provide step-by-step instructions in `remediation_steps`.
+
+Findings:
+{json.dumps(selected, indent=2)}
+{topology_text}
+
+Respond ONLY with valid JSON in the same format as the example."""
+    return prompt
+
+
 class BaseAnalyzer:
-    def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def analyze(
+        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
 
@@ -103,40 +121,52 @@ class OllamaAnalyzer(BaseAnalyzer):
     def __init__(self, model: str | None = None, endpoint: str | None = None):
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "llama3.2:latest")
         self.endpoint = endpoint or os.environ.get("OPENAI_API_BASE", "http://localhost:11434/api/generate")
-        self.session = _session_with_retries()
-        self.timeout = LLM_TIMEOUT
+        self.timeout = ANALYZER_TIMEOUT
 
-    def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def analyze(
+        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         if not findings:
             return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
 
-        selected = select_findings_for_llm(findings)
-        topology_text = ""
-        if topology:
-            topology_text = f"\nAsset Topology:\n{json.dumps(topology, indent=2)}"
-
-        prompt = f"""You are a DevSecOps expert. Analyze the findings below.
-Example output structure:
-{json.dumps(FEW_SHOT_EXAMPLE, indent=2)}
-
-IMPORTANT: Each remediation must reference the exact 'id' of the finding. Identify multi-step attack chains.
-
-Findings:
-{json.dumps(selected, indent=2)}
-{topology_text}
-
-Respond ONLY with valid JSON in the same format as the example."""
+        prompt = _build_prompt(findings, topology)
+        logger.info(f"Sending analysis request to Ollama (timeout: {self.timeout}s)...")
+        logger.info(f"Model: {self.model}, Findings count: {len(findings)}")
 
         try:
-            resp = self.session.post(
-                self.endpoint,
-                json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
-                timeout=self.timeout
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(
+                    self.endpoint,
+                    json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
+                )
+                resp.raise_for_status()
+                result = resp.json()
+                return extract_json(result.get("response", "{}"))
+        except httpx.TimeoutException:
+            logger.error(
+                f"Ollama analysis timed out after {self.timeout}s. "
+                "Consider using a smaller model or increasing ANALYZER_TIMEOUT."
             )
-            resp.raise_for_status()
-            result = resp.json()
-            return extract_json(result.get("response", "{}"))
+            return {
+                "executive_summary": (
+                    f"AI analysis timed out after {self.timeout}s. "
+                    "Try a smaller model or increase ANALYZER_TIMEOUT env var."
+                ),
+                "attack_paths": [],
+                "top_remediations": []
+            }
+        except httpx.ConnectError as e:
+            logger.error(f"Cannot connect to Ollama: {e}. Is Ollama running?")
+            return {
+                "executive_summary": (
+                    "AI failed: Cannot connect to Ollama. "
+                    "Please ensure Ollama is running."
+                ),
+                "attack_paths": [],
+                "top_remediations": []
+            }
         except Exception as e:
+            logger.error(f"AI analysis failed: {e}")
             return {"executive_summary": f"AI failed: {str(e)}", "attack_paths": [], "top_remediations": []}
 
 
@@ -149,26 +179,17 @@ class LiteLLMAnalyzer(BaseAnalyzer):
             raise ImportError("Install litellm: pip install litellm") from err
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "gpt-4o-mini")
 
-    def analyze(self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def analyze(
+        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         if not findings:
             return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
 
-        selected = select_findings_for_llm(findings)
-        topology_text = ""
-        if topology:
-            topology_text = f"\nAsset Topology:\n{json.dumps(topology, indent=2)}"
-
-        prompt = f"""You are a DevSecOps expert. Example:
-{json.dumps(FEW_SHOT_EXAMPLE, indent=2)}
-
-Findings:
-{json.dumps(selected, indent=2)}
-{topology_text}
-
-Respond ONLY with JSON like the example."""
+        prompt = _build_prompt(findings, topology)
+        logger.info(f"Sending analysis request to LiteLLM (model: {self.model})...")
 
         try:
-            response = self.litellm.completion(
+            response = await self.litellm.acompletion(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
@@ -176,6 +197,7 @@ Respond ONLY with JSON like the example."""
             )
             return extract_json(response.choices[0].message.content)
         except Exception as e:
+            logger.error(f"AI analysis failed: {e}")
             return {"executive_summary": f"AI failed: {str(e)}", "attack_paths": [], "top_remediations": []}
 
 

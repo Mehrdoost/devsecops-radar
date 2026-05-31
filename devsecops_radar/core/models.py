@@ -1,5 +1,6 @@
-import datetime
 import os
+from contextlib import contextmanager
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, field_validator
 from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, create_engine
@@ -24,7 +25,7 @@ class FindingSchema(BaseModel):
 class Scan(Base):
     __tablename__ = 'scans'
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=lambda: datetime.datetime.now(datetime.UTC))
+    timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
     findings_json = Column(JSON)
     findings = relationship("Finding", back_populates="scan", cascade="all, delete-orphan")
 
@@ -47,13 +48,24 @@ SessionLocal = sessionmaker(bind=engine)
 def init_db():
     Base.metadata.create_all(engine)
 
-def save_scan_to_db(findings: list):
-    validated = [FindingSchema(**f) for f in findings]
-    init_db()
+@contextmanager
+def get_session():
     session = SessionLocal()
     try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+def save_scan_to_db(findings: list) -> None:
+    validated = [FindingSchema(**f) for f in findings]
+    init_db()
+    with get_session() as session:
         scan = Scan()
-        scan.findings_json = [f.model_dump() for f in validated]   # <-- fix NOT NULL constraint
+        scan.findings_json = [f.model_dump() for f in validated]
         session.add(scan)
         session.flush()
         for f in validated:
@@ -67,9 +79,3 @@ def save_scan_to_db(findings: list):
                 line=f.line
             )
             session.add(finding)
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
