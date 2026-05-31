@@ -26,7 +26,9 @@ def login_required(f):
 
 def create_token(user: str = "admin") -> str:
     import datetime
+
     import jwt
+
     from devsecops_radar.core.settings import settings
 
     payload = {
