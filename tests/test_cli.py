@@ -1,5 +1,5 @@
-import os
 import subprocess
+import os
 import tempfile
 
 import pytest
@@ -10,10 +10,13 @@ def test_cli_help():
     assert result.returncode == 0
     assert '--trivy' in result.stdout
 
+
 def test_cli_wizard_flag():
     result = subprocess.run(['devsecops-radar', '--wizard'], capture_output=True, text=True)
     assert result.returncode == 0
-    assert 'Quick Setup Wizard' in result.stdout or 'Welcome' in result.stdout
+    # loguru writes to stderr by default
+    assert 'Quick Setup Wizard' in result.stderr or 'Welcome' in result.stderr
+
 
 def test_cli_merge_sample_files():
     sample_dir = os.path.join(os.path.dirname(__file__), '..')
@@ -28,6 +31,5 @@ def test_cli_merge_sample_files():
         capture_output=True, text=True
     )
     assert result.returncode == 0
-    # CLI logs to stderr, so check there
     assert 'Merged' in result.stderr
     os.unlink(outpath)

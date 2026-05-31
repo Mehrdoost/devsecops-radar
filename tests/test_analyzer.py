@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import MagicMock, patch
 
 from devsecops_radar.core.analyzer import (
@@ -26,8 +27,9 @@ def test_select_findings_for_llm():
     assert len(criticals) == 100
 
 
-@patch('requests.Session.post')
-def test_ollama_analyzer_success(mock_post):
+@pytest.mark.asyncio
+@patch('httpx.AsyncClient.post')
+async def test_ollama_analyzer_success(mock_post):
     mock_response = MagicMock()
     mock_response.json.return_value = {
         "response": (
@@ -40,14 +42,15 @@ def test_ollama_analyzer_success(mock_post):
     mock_post.return_value = mock_response
     analyzer = OllamaAnalyzer()
     findings = [{"severity": "CRITICAL", "id": "1", "tool": "test"}]
-    analysis = analyzer.analyze(findings)
+    analysis = await analyzer.analyze(findings)
     assert analysis["executive_summary"] == "ok"
 
 
-@patch('requests.Session.post')
-def test_ollama_analyzer_network_error(mock_post):
+@pytest.mark.asyncio
+@patch('httpx.AsyncClient.post')
+async def test_ollama_analyzer_network_error(mock_post):
     mock_post.side_effect = Exception("Network down")
     analyzer = OllamaAnalyzer()
     findings = [{"severity": "CRITICAL", "id": "1", "tool": "test"}]
-    analysis = analyzer.analyze(findings)
+    analysis = await analyzer.analyze(findings)
     assert "AI failed" in analysis["executive_summary"]
