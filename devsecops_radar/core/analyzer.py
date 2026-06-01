@@ -63,7 +63,6 @@ FEW_SHOT_EXAMPLE = {
 
 
 def _build_prompt(findings: list[dict[str, Any]], topology: dict[str, Any] | None = None) -> str:
-    selected = select_findings_for_llm(findings)
     topology_text = ""
     if topology:
         topology_text = f"\nAsset Topology:\n{json.dumps(topology, indent=2)}"
@@ -78,7 +77,7 @@ IMPORTANT:
 - For each remediation, provide step-by-step instructions in `remediation_steps`.
 
 Findings:
-{json.dumps(selected, indent=2)}
+{json.dumps(findings, indent=2)}
 {topology_text}
 
 Respond ONLY with valid JSON in the same format as the example."""
@@ -105,36 +104,51 @@ def extract_json(text: str) -> dict[str, Any]:
     return {"executive_summary": text, "attack_paths": [], "top_remediations": []}
 
 
-def select_findings_for_llm(findings: list[dict], max_items: int = MAX_ANALYZER_FINDINGS) -> list[dict]:
-    if len(findings) <= max_items:
-        return findings
-    critical_high = [f for f in findings if f.get('severity') in ('CRITICAL', 'HIGH')]
-    others = [f for f in findings if f not in critical_high]
-    selected = critical_high[:max_items]
-    remaining = max_items - len(selected)
-    if remaining > 0:
-        selected.extend(others[:remaining])
-    return selected
+def merge_analyses(analyses: list[dict[str, Any]]) -> dict[str, Any]:
+    if not analyses:
+        return {"executive_summary": "No analysis performed.", "attack_paths": [], "top_remediations": []}
+
+    merged = {
+        "executive_summary": "",
+        "attack_paths": [],
+        "top_remediations": [],
+        "risk_score": 0
+    }
+
+    summaries = []
+    max_risk = 0
+
+    for a in analyses:
+        if a.get("executive_summary"):
+            summaries.append(a.get("executive_summary"))
+        merged["attack_paths"].extend(a.get("attack_paths", []))
+        merged["top_remediations"].extend(a.get("top_remediations", []))
+        if a.get("risk_score", 0) > max_risk:
+            max_risk = a.get("risk_score", 0)
+
+    if len(summaries) > 1:
+        merged["executive_summary"] = "Composite Summary: " + " | ".join(summaries[:3])
+        if len(summaries) > 3:
+            merged["executive_summary"] += " ... (multiple chunks analyzed)"
+    elif summaries:
+        merged["executive_summary"] = summaries[0]
+
+    merged["risk_score"] = max_risk
+
+    return merged
 
 
 class OllamaAnalyzer(BaseAnalyzer):
     def __init__(self, model: str | None = None, endpoint: str | None = None):
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "llama3.2:latest")
         self.endpoint = endpoint or os.environ.get("OPENAI_API_BASE", "http://localhost:11434/api/generate")
-        self.timeout = ANALYZER_TIMEOUT
+        self.timeout = float(ANALYZER_TIMEOUT)
 
-    async def analyze(
-        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        if not findings:
-            return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
-
-        prompt = _build_prompt(findings, topology)
-        logger.info(f"Sending analysis request to Ollama (timeout: {self.timeout}s)...")
-        logger.info(f"Model: {self.model}, Findings count: {len(findings)}")
-
+    async def _analyze_chunk(self, chunk: list[dict[str, Any]], topology: dict[str, Any] | None) -> dict[str, Any]:
+        prompt = _build_prompt(chunk, topology)
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            timeout_config = httpx.Timeout(self.timeout, read=None)
+            async with httpx.AsyncClient(timeout=timeout_config) as client:
                 resp = await client.post(
                     self.endpoint,
                     json={"model": self.model, "prompt": prompt, "stream": False, "format": "json"},
@@ -142,32 +156,27 @@ class OllamaAnalyzer(BaseAnalyzer):
                 resp.raise_for_status()
                 result = resp.json()
                 return extract_json(result.get("response", "{}"))
-        except httpx.TimeoutException:
-            logger.error(
-                f"Ollama analysis timed out after {self.timeout}s. "
-                "Consider using a smaller model or increasing ANALYZER_TIMEOUT."
-            )
-            return {
-                "executive_summary": (
-                    f"AI analysis timed out after {self.timeout}s. "
-                    "Try a smaller model or increase ANALYZER_TIMEOUT env var."
-                ),
-                "attack_paths": [],
-                "top_remediations": []
-            }
-        except httpx.ConnectError as e:
-            logger.error(f"Cannot connect to Ollama: {e}. Is Ollama running?")
-            return {
-                "executive_summary": (
-                    "AI failed: Cannot connect to Ollama. "
-                    "Please ensure Ollama is running."
-                ),
-                "attack_paths": [],
-                "top_remediations": []
-            }
         except Exception as e:
-            logger.error(f"AI analysis failed: {e}")
-            return {"executive_summary": f"AI failed: {str(e)}", "attack_paths": [], "top_remediations": []}
+            logger.error(f"Ollama chunk analysis failed: {e}")
+            return {"executive_summary": "", "attack_paths": [], "top_remediations": []}
+
+    async def analyze(
+        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None, chunk_size: int = 0
+    ) -> dict[str, Any]:
+        if not findings:
+            return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
+
+        if chunk_size > 0 and len(findings) > chunk_size:
+            logger.info(f"Chunking enabled: Splitting {len(findings)} findings into chunks of {chunk_size}")
+            results = []
+            for i in range(0, len(findings), chunk_size):
+                chunk = findings[i:i + chunk_size]
+                logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(findings) + chunk_size - 1)//chunk_size}...")
+                res = await self._analyze_chunk(chunk, topology)
+                results.append(res)
+            return merge_analyses(results)
+        else:
+            return await self._analyze_chunk(findings, topology)
 
 
 class LiteLLMAnalyzer(BaseAnalyzer):
@@ -179,15 +188,8 @@ class LiteLLMAnalyzer(BaseAnalyzer):
             raise ImportError("Install litellm: pip install litellm") from err
         self.model = model or os.environ.get("PIPELINE_LLM_MODEL", "gpt-4o-mini")
 
-    async def analyze(
-        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        if not findings:
-            return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
-
-        prompt = _build_prompt(findings, topology)
-        logger.info(f"Sending analysis request to LiteLLM (model: {self.model})...")
-
+    async def _analyze_chunk(self, chunk: list[dict[str, Any]], topology: dict[str, Any] | None) -> dict[str, Any]:
+        prompt = _build_prompt(chunk, topology)
         try:
             response = await self.litellm.acompletion(
                 model=self.model,
@@ -197,8 +199,26 @@ class LiteLLMAnalyzer(BaseAnalyzer):
             )
             return extract_json(response.choices[0].message.content)
         except Exception as e:
-            logger.error(f"AI analysis failed: {e}")
-            return {"executive_summary": f"AI failed: {str(e)}", "attack_paths": [], "top_remediations": []}
+            logger.error(f"LiteLLM chunk analysis failed: {e}")
+            return {"executive_summary": "", "attack_paths": [], "top_remediations": []}
+
+    async def analyze(
+        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None, chunk_size: int = 0
+    ) -> dict[str, Any]:
+        if not findings:
+            return {"executive_summary": "No findings.", "attack_paths": [], "top_remediations": []}
+
+        if chunk_size > 0 and len(findings) > chunk_size:
+            logger.info(f"Chunking enabled: Splitting {len(findings)} findings into chunks of {chunk_size}")
+            results = []
+            for i in range(0, len(findings), chunk_size):
+                chunk = findings[i:i + chunk_size]
+                logger.info(f"Processing chunk {i//chunk_size + 1}/{(len(findings) + chunk_size - 1)//chunk_size}...")
+                res = await self._analyze_chunk(chunk, topology)
+                results.append(res)
+            return merge_analyses(results)
+        else:
+            return await self._analyze_chunk(findings, topology)
 
 
 def get_analyzer(backend: str = "ollama", model: str | None = None) -> BaseAnalyzer:

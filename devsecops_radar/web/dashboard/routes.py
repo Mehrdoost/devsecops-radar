@@ -450,6 +450,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         .custom-progress-bar {
             height: 100%; border-radius: 10px; transition: width 1s cubic-bezier(0.16, 1, 0.3, 1);
         }
+        .ai-meta-badge {
+            font-size: 0.8rem; font-weight: 700; padding: 6px 12px; border-radius: 12px;
+            display: flex; align-items: center; gap: 6px;
+        }
     </style>
 </head>
 <body>
@@ -601,10 +605,21 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <div class="col-12">
                 <div class="card p-4 tilt-card">
                     <div class="inner-content">
-                        <div class="d-flex justify-content-between align-items-center mb-3">
+                        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
                             <h5 class="card-title mb-0" style="color:var(--accent); font-weight:800;">
                                 🧠 <span data-i18n="ai_summary">AI Executive Summary</span>
                             </h5>
+                           <div id="ai-meta-info" class="d-flex gap-2" style="display:none !important;">
+                                <div class="ai-meta-badge shadow-sm"
+                                     style="background:var(--bg-secondary); border:1px solid var(--glass-border);">
+                                    ⚙️ <span id="ai-hardware">CPU</span>
+                                </div>
+                                <div class="ai-meta-badge shadow-sm"
+                                     style="background:var(--accent-glow); color:var(--accent);
+                                            border:1px solid var(--accent);">
+                                    ⏱️ <span id="ai-time">0s</span>
+                                </div>
+                            </div>
                         </div>
                         <div class="bg-secondary p-4 rounded shadow-inner"
                              style="background:var(--bg-secondary) !important; border:1px solid var(--glass-border);">
@@ -753,8 +768,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             <small style="color:var(--text-secondary); font-size:0.9rem;">
                 🛡️ <strong style="color:var(--text); font-weight:800;">Pipeline Sentinel</strong> · crafted by
                 <a href="https://github.com/Mehrdoost" class="text-decoration-none fw-bold"
-                   style="color:var(--accent)" target="_blank">Mehrdoost</a>
-                <span class="version-badge shadow-sm" style="background:var(--accent-2); color:#fff;">v0.5.0</span> ·
+                   style="color:var(--accent)" target="_blank">ReverseForge</a>
+                <span class="version-badge shadow-sm" style="background:var(--accent-2); color:#fff;">v0.4.1</span> ·
                 <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none fw-bold"
                    style="color:var(--accent)" target="_blank">View on GitHub</a>
             </small>
@@ -1866,6 +1881,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         aiStat.style.background = 'rgba(0, 229, 255, 0.15)';
                         aiStat.style.borderColor = 'var(--accent)';
                         aiStat.style.color = 'var(--accent)';
+                    }
+                    if (d.execution_time) {
+                        document.getElementById('ai-meta-info').style.setProperty('display', 'flex', 'important');
+                        document.getElementById('ai-time').textContent = d.execution_time;
+                    }
+                    if (d.hardware_profile) {
+                        document.getElementById('ai-meta-info').style.setProperty('display', 'flex', 'important');
+                        document.getElementById('ai-hardware').textContent = d.hardware_profile;
                     }
                     if (d.risk_score) renderRiskScore(d.risk_score);
                 } else {
