@@ -62,11 +62,11 @@ async def test_ollama_analyzer_success(mock_post):
     }
     mock_response.raise_for_status.return_value = None
     mock_post.return_value = mock_response
-    
+
     analyzer = OllamaAnalyzer()
     findings = [{"severity": "CRITICAL", "id": "1", "tool": "test"}]
     analysis = await analyzer.analyze(findings)
-    
+
     assert analysis["executive_summary"] == "ok"
     assert mock_post.call_count == 1
 
@@ -88,9 +88,9 @@ async def test_ollama_analyzer_chunking(mock_post):
 
     analyzer = OllamaAnalyzer()
     findings = [{"id": str(i)} for i in range(5)]
-    
+
     analysis = await analyzer.analyze(findings, chunk_size=2)
-    
+
     assert mock_post.call_count == 3
     assert "Composite Summary" in analysis["executive_summary"]
     assert len(analysis["attack_paths"]) == 3
@@ -103,7 +103,7 @@ async def test_ollama_analyzer_timeout_error(mock_post):
     mock_post.side_effect = httpx.TimeoutException("Timeout")
     analyzer = OllamaAnalyzer()
     findings = [{"severity": "CRITICAL", "id": "1", "tool": "test"}]
-    
+
     analysis = await analyzer.analyze(findings)
     assert analysis["executive_summary"] == ""
     assert analysis["attack_paths"] == []
@@ -115,7 +115,7 @@ async def test_ollama_analyzer_connect_error(mock_post):
     mock_post.side_effect = httpx.ConnectError("Connection refused")
     analyzer = OllamaAnalyzer()
     findings = [{"severity": "CRITICAL", "id": "1", "tool": "test"}]
-    
+
     analysis = await analyzer.analyze(findings)
     assert analysis["executive_summary"] == ""
     assert analysis["attack_paths"] == []
@@ -127,7 +127,7 @@ async def test_ollama_analyzer_generic_error(mock_post):
     mock_post.side_effect = Exception("Unknown internal error")
     analyzer = OllamaAnalyzer()
     findings = [{"severity": "CRITICAL", "id": "1", "tool": "test"}]
-    
+
     analysis = await analyzer.analyze(findings)
     assert analysis["executive_summary"] == ""
     assert analysis["attack_paths"] == []
