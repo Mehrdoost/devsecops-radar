@@ -773,7 +773,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 🛡️ <strong style="color:var(--text); font-weight:800;">Pipeline Sentinel</strong> · crafted by
                 <a href="https://github.com/Mehrdoost" class="text-decoration-none fw-bold"
                    style="color:var(--accent)" target="_blank">ReverseForge</a>
-                <span class="version-badge shadow-sm" style="background:var(--accent-2); color:#fff;">v0.4.1</span> ·
+                <span class="version-badge shadow-sm" style="background:var(--accent-2); color:#fff;">v0.4.3</span> ·
                 <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none fw-bold"
                    style="color:var(--accent)" target="_blank">View on GitHub</a>
             </small>

@@ -19,7 +19,9 @@
 
 *严重性圆环图、趋势折线图、攻击路径图（可点击节点）、拓扑视图、高管摘要和攻击模拟面板 — 全面支持离线。*
 
-![Pipeline Sentinel Dashboard](docs/Demo.gif)
+<video src="docs/demo_small.mp4" muted autoplay loop playsinline width="100%" poster="docs/demo_thumb.png">
+  Your browser does not support the video tag.
+</video>
 
 </div>
 
@@ -41,7 +43,7 @@
 11. [核心能力](#-核心能力)
 12. [社区规则与在线更新](#-社区规则与在线更新)
 13. [攻击模拟与 “如果...怎么办” 分析](#-攻击模拟与-如果怎么办-分析)
-14. [v0.4.2 版本安全提升](#-v042-版本安全提升)
+14. [v0.4.3 版本安全提升](#-v043-版本安全提升)
 15. [项目架构](#-项目架构)
 16. [发展路线图](#-发展路线图)
 17. [测试与 CI](#-测试与-ci)
@@ -468,7 +470,7 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## 🔐 v0.4.2 版本安全提升
+## 🔐 v0.4.3 版本安全提升
 
 - **路径遍历全面防御：** 对所有涉及规则文件、清单、SBOM 及备份的底层文件操作执行前置宿主基准路径锁闭校验。
 - **攻击模拟输入净化：** 针对自动生成 Exploit 脚本的流控制模块引入高烈度控制数据转义，杜绝沙箱外的指令注入隐患。

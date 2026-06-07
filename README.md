@@ -19,7 +19,10 @@
 
 *Severity doughnut, trend line chart, attack‑path graph (clickable nodes), topology view, executive summary, and attack simulation panel — all fully offline.*
 
-![Pipeline Sentinel Dashboard](docs/Demo.gif)
+<video src="docs/demo_small.mp4" muted autoplay loop playsinline width="100%" poster="docs/demo_thumb.png">
+  Your browser does not support the video tag.
+</video>
+
 
 </div>
 
@@ -41,7 +44,7 @@
 11. [Core Capabilities](#-core-capabilities)
 12. [Community Rules & Online Updates](#-community-rules--online-updates)
 13. [Attack Simulation & What‑If Analysis](#-attack-simulation--what‑if-analysis)
-14. [Security Improvements in v0.4.2](#-security-improvements-in-v042)
+14. [Security Improvements in v0.4.3](#-security-improvements-in-v043)
 15. [Architecture](#-architecture)
 16. [Roadmap](#-roadmap)
 17. [Testing & CI](#-testing--ci)
@@ -467,7 +470,7 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## 🔐 Security Improvements in v0.4.2
+## 🔐 Security Improvements in v0.4.3
 
 - **Path Traversal Prevention:** All file operations (rules, manifests, SBOM, backups) now strictly validate that paths remain within the allowed base directory.
 - **Input Sanitization for Attack Simulation:** Bash script generation now safely escapes all user-controlled data, eliminating command injection risks in sandboxed PoCs.
