@@ -465,7 +465,7 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 *(Вы также можете кликнуть на любой узел безопасности внутри графа путей атак и выбрать опцию **“Simulate this attack”**)*.
 
-![Attack Simulation](docs/Simulation.png)
+![Attack Simulation](docs/Simulation.PNG)
 
 ---
 

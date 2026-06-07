@@ -465,7 +465,7 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 *(يمكنك أيضاً النقر فوق أي عقدة أمنية داخل مخطط مسار الهجوم واختيار **“Simulate this attack”**)*.
 
-![Attack Simulation](docs/Simulation.png)
+![Attack Simulation](docs/Simulation.PNG)
 
 ---
 

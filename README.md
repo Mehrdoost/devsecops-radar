@@ -275,6 +275,9 @@ devsecops-radar --trivy trivy.json --analyze
 devsecops-radar-web
 ```
 The LLM generates `findings_ai_summary.json` containing: `executive_summary`, `risk_score`, `attack_paths` (with MITRE ATT&CK), `top_remediations`, and `false_positives_likely`.
+
+![AI Analysis](docs/AI_CLI.PNG)
+
 </details>
 
 <details>
@@ -460,7 +463,7 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 *(You can also click any node in the Attack Path Graph and press **“Simulate this attack”**)*.
 
-![Attack Simulation](docs/Simulation.png)
+![Attack Simulation](docs/Simulation.PNG)
 
 ---
 

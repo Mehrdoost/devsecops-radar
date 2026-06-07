@@ -464,7 +464,7 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 *(您也可以直接点击攻击路径图中的任意安全节点，然后触发 **“Simulate this attack（模拟此项攻击）”**)*。
 
-![Attack Simulation](docs/Simulation.png)
+![Attack Simulation](docs/Simulation.PNG)
 
 ---
 
