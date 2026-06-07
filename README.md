@@ -460,6 +460,8 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 *(You can also click any node in the Attack Path Graph and press **“Simulate this attack”**)*.
 
+![Attack Simulation](docs/Simulation.png)
+
 ---
 
 ## 🔐 Security Improvements in v0.4.2

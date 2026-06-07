@@ -276,6 +276,9 @@ devsecops-radar --trivy trivy.json --analyze
 devsecops-radar-web
 ```
 Локальная языковая модель создаст файл `findings_ai_summary.json`, содержащий: `executive_summary` (резюме для руководства), `risk_score` (оценка степени риска), `attack_paths` (пути уязвимостей с привязкой к MITRE ATT&CK), `top_remediations` (главные рекомендации по устранению) и `false_positives_likely` (вероятные ложные срабатывания).
+
+![AI Analysis](docs/AI_CLI.PNG)
+
 </details>
 
 <details>
@@ -461,6 +464,8 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 3. В модальном окне отобразится автоматически сгенерированный атакующий скрипт (`bash`), описание цепочки эксплуатации и результаты симуляции (если песочница Docker доступна).
 
 *(Вы также можете кликнуть на любой узел безопасности внутри графа путей атак и выбрать опцию **“Simulate this attack”**)*.
+
+![Attack Simulation](docs/Simulation.png)
 
 ---
 

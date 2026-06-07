@@ -1,5 +1,5 @@
 import json
-from unittest.mock import mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 from flask import Flask
@@ -24,20 +24,19 @@ class TestLoadFindings:
 
 
 # ------------------------------------------------------------
-# Fixtures
+# Flask app fixture with API key and patched auth
 # ------------------------------------------------------------
 @pytest.fixture
 def app(monkeypatch):
-    """Create app with API key set to 'testkey' and monkeypatch settings."""
     monkeypatch.setenv("PIPELINE_API_KEY", "testkey")
-    # Force settings to reload the key (since settings is a singleton already imported)
     from devsecops_radar.core.settings import settings
     settings.PIPELINE_API_KEY = "testkey"
 
-    app = Flask(__name__)
-    app.config["TESTING"] = True
-    app.register_blueprint(dashboard_bp)
-    return app
+    with patch("devsecops_radar.web.dashboard.routes.require_api_key", lambda f: f):
+        app = Flask(__name__)
+        app.config["TESTING"] = True
+        app.register_blueprint(dashboard_bp)
+        yield app
 
 
 @pytest.fixture
@@ -45,7 +44,6 @@ def client(app):
     return app.test_client()
 
 
-# Helper to add auth header
 def auth_headers():
     return {"X-API-Key": "testkey"}
 
@@ -55,8 +53,7 @@ def auth_headers():
 # ------------------------------------------------------------
 class TestIndex:
     def test_returns_200(self, client):
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=[]):
+        with patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=[]):
             resp = client.get("/")
             assert resp.status_code == 200
             assert b"Pipeline Sentinel" in resp.data
@@ -70,8 +67,7 @@ class TestApiFindings:
         mock_data = {"data": [], "total": 0, "page": 1, "per_page": 50}
         with patch("devsecops_radar.web.dashboard.routes.get_findings_paginated",
                    return_value=mock_data) as mock_fn:
-            resp = client.get("/api/findings?page=2&per_page=10",
-                              headers=auth_headers())
+            resp = client.get("/api/findings?page=2&per_page=10", headers=auth_headers())
             assert resp.status_code == 200
             mock_fn.assert_called_once_with(2, 10)
             assert resp.json == mock_data
@@ -85,16 +81,54 @@ class TestApiFindings:
 
 
 # ------------------------------------------------------------
-# GET /api/history
+# GET /api/history (new version)
 # ------------------------------------------------------------
 class TestApiHistory:
     def test_returns_history(self, client):
-        mock_history = [{"scan_id": 1, "risk_score": 80}]
-        with patch("devsecops_radar.web.dashboard.routes.get_all_scans",
-                   return_value=mock_history):
+        mock_finding = MagicMock()
+        mock_finding.severity = "HIGH"
+        mock_scan = MagicMock()
+        mock_scan.timestamp = None
+        mock_scan.risk_score = 80
+        mock_scan.findings = [mock_finding]
+
+        mock_session = MagicMock()
+        mock_session.query.return_value.order_by.return_value.all.return_value = [mock_scan]
+        mock_session.close = MagicMock()
+
+        with patch("devsecops_radar.web.dashboard.routes.db_session", return_value=mock_session):
             resp = client.get("/api/history", headers=auth_headers())
             assert resp.status_code == 200
-            assert resp.json == mock_history
+            data = resp.json
+            assert len(data) == 1
+            assert data[0]["risk_score"] == 80
+            assert data[0]["high"] == 1
+            assert data[0]["critical"] == 0
+
+
+# ------------------------------------------------------------
+# GET /api/attack-paths (new endpoint)
+# ------------------------------------------------------------
+class TestApiAttackPaths:
+    def test_returns_graph_from_findings(self, client):
+        findings = [
+            {"id": "R1", "severity": "HIGH", "title": "SQLi", "target": "app.py", "tool": "semgrep"},
+            {"id": "R2", "severity": "MEDIUM", "title": "XSS", "target": "views.py", "tool": "trivy"},
+        ]
+        with patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=findings):
+            resp = client.get("/api/attack-paths", headers=auth_headers())
+            assert resp.status_code == 200
+            data = resp.json
+            assert len(data["nodes"]) == 2
+            assert len(data["links"]) == 1
+            assert data["nodes"][0]["severity"] == "HIGH"
+            assert data["nodes"][1]["severity"] == "MEDIUM"
+
+    def test_no_findings_returns_empty(self, client):
+        with patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=[]):
+            resp = client.get("/api/attack-paths", headers=auth_headers())
+            assert resp.status_code == 200
+            assert resp.json == {"nodes": [], "links": []}
 
 
 # ------------------------------------------------------------
@@ -128,8 +162,7 @@ class TestApiSimulate:
     def test_findings_not_found(self, client):
         with patch("devsecops_radar.web.dashboard.routes.load_findings",
                    return_value=[{"id": "R1"}]):
-            resp = client.post("/api/simulate", json={"finding_ids": ["R2"]},
-                               headers=auth_headers())
+            resp = client.post("/api/simulate", json={"finding_ids": ["R2"]}, headers=auth_headers())
             assert resp.status_code == 404
             assert resp.json["error"] == "Not found"
 
@@ -143,8 +176,7 @@ class TestApiSimulate:
              patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc",
                    return_value="sandbox output"), \
              patch("builtins.open", mock_open(read_data=mock_script)):
-            resp = client.post("/api/simulate", json={"finding_ids": ["R1"]},
-                               headers=auth_headers())
+            resp = client.post("/api/simulate", json={"finding_ids": ["R1"]}, headers=auth_headers())
             assert resp.status_code == 200
             data = resp.json
             assert mock_script in data["script"]
@@ -160,8 +192,7 @@ class TestApiSimulate:
              patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc",
                    side_effect=Exception("docker missing")), \
              patch("builtins.open", mock_open(read_data="script")):
-            resp = client.post("/api/simulate", json={"finding_ids": ["R1"]},
-                               headers=auth_headers())
+            resp = client.post("/api/simulate", json={"finding_ids": ["R1"]}, headers=auth_headers())
             assert resp.status_code == 200
             assert resp.json["sandbox_output"] is None
 

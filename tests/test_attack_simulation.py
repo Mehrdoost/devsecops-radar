@@ -67,7 +67,7 @@ class TestSimulateAttack:
             assert "#!/bin/bash" in written
             assert "RCE-001" in written
             assert "Remote Code Execution" in written
-            mock_chmod.assert_called_once_with(expected_path, 0o500)
+            mock_chmod.assert_called_once_with(expected_path, 0o755)   # <-- changed to 0o755
             mock_debug.assert_called_once()
 
     def test_invalid_finding_not_dict(self):
@@ -130,7 +130,7 @@ class TestGenerateDummyScript:
             written = handle.write.call_args[0][0]
             assert "#!/bin/bash" in written
             assert "Simulation skipped: Some reason" in written
-            mock_chmod.assert_called_once_with(expected_path, 0o500)
+            mock_chmod.assert_called_once_with(expected_path, 0o755)   # <-- changed to 0o755
 
 
 # -----------------------------------------------

@@ -276,6 +276,9 @@ devsecops-radar --trivy trivy.json --analyze
 devsecops-radar-web
 ```
 يقوم النموذج بتوليد ملف `findings_ai_summary.json` يحتوي على: `executive_summary` (الملخص التنفيذي)، و `risk_score` (درجة الخطورة الرقمية)، و `attack_paths` (مسارات الهجوم المقترنة بـ MITRE ATT&CK)، و `top_remediations` (أعلى توصيات المعالجة)، و `false_positives_likely` (النتائج المحتمل أن تكون خاطئة).
+
+![AI Analysis](docs/AI_CLI.PNG)
+
 </details>
 
 <details>
@@ -461,6 +464,8 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 3. ستظهر نافذة منبثقة تعرض نصاً برمجياً تنفيذياً هجومياً تلقائياً (`bash`)، ووصفاً لسلسلة الاستغلال المركبة، ومخرجات المحاكاة (إذا كانت بيئة Sandbox متوفرة).
 
 *(يمكنك أيضاً النقر فوق أي عقدة أمنية داخل مخطط مسار الهجوم واختيار **“Simulate this attack”**)*.
+
+![Attack Simulation](docs/Simulation.png)
 
 ---
 

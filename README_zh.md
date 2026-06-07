@@ -275,6 +275,9 @@ devsecops-radar --trivy trivy.json --analyze
 devsecops-radar-web
 ```
 LLM 将生成包含以下内容的 `findings_ai_summary.json`：`executive_summary`（高管摘要）、`risk_score`（风险评分）、`attack_paths`（带 MITRE ATT&CK 映射的攻击路径）、`top_remediations`（顶级修复建议）和 `false_positives_likely`（可能误报列表）。
+
+![AI Analysis](docs/AI_CLI.PNG)
+
 </details>
 
 <details>
@@ -460,6 +463,8 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 3. 界面弹出模态框展示自动生成的攻击脚本 (`bash`)、复合利用攻击链描述以及（若沙箱就绪）隔离模拟输出。
 
 *(您也可以直接点击攻击路径图中的任意安全节点，然后触发 **“Simulate this attack（模拟此项攻击）”**)*。
+
+![Attack Simulation](docs/Simulation.png)
 
 ---
 

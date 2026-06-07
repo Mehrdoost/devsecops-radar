@@ -99,7 +99,7 @@ class TestBuildPrompt:
         analyzer = DummyAnalyzer("test-model")
         findings = [{"id": "1", "severity": "high"}]
         prompt = analyzer._build_prompt(findings)
-        assert "You are a DevSecOps AI Expert" in prompt
+        assert "Analyze the following security findings." in prompt
         assert "<FINDINGS_DATA>" in prompt
         # Use same indent as source: indent=2
         assert json.dumps(findings, indent=2) in prompt

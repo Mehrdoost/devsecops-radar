@@ -1,10 +1,19 @@
 import os
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from loguru import logger
 
-# Load environment variables from .env file if it exists
-load_dotenv()
+# Locate .env relative to the project root (three levels up from this file)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_DOTENV_PATH = _PROJECT_ROOT / ".env"
+
+if _DOTENV_PATH.exists():
+    load_dotenv(_DOTENV_PATH)
+else:
+    # Fallback: try current directory (backward compatibility)
+    load_dotenv()
 
 class Settings:
     """Centralized configuration management for Pipeline Sentinel."""
@@ -61,9 +70,15 @@ class Settings:
             raise ValueError("PIPELINE_API_KEY value 'disabled' is strictly prohibited.")
         return api_key
 
-# Instantiate settings singleton.
-# If validation fails, the app will explicitly crash here at import time (Fail-Fast).
+# Instantiate settings singleton with friendly error message.
 try:
     settings = Settings()
 except ValueError as e:
-    raise RuntimeError(f"Configuration Initialization Failed: {e}") from e
+    print("\n" + "=" * 60)
+    print("  🚨  Pipeline Sentinel – Configuration Error  🚨")
+    print("=" * 60)
+    print(f"  {e}")
+    print("  Please create a .env file in the project root using .env.example as a template.")
+    print("  The file must include JWT_SECRET and PIPELINE_API_KEY.")
+    print("=" * 60 + "\n")
+    sys.exit(1)

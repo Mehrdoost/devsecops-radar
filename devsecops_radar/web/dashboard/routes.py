@@ -4,7 +4,8 @@ import os
 from flask import Blueprint, jsonify, render_template_string, request, send_file
 
 from devsecops_radar.core.auth import require_api_key
-from devsecops_radar.core.database import get_all_scans, get_findings_paginated
+from devsecops_radar.core.database import db_session, get_findings_paginated
+from devsecops_radar.core.models import Scan
 from devsecops_radar.core.rag import rag_search
 from devsecops_radar.core.reporting import generate_pdf_report
 
@@ -12,6 +13,9 @@ dashboard_bp = Blueprint('dashboard', __name__)
 
 FINDINGS_FILE = os.environ.get('FINDINGS_FILE', 'findings.json')
 
+# --------------------------------------------------------------------------
+# HTML template (unchanged except for the JavaScript parts noted below)
+# --------------------------------------------------------------------------
 DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en" data-theme="cyber">
 <head>
@@ -1572,6 +1576,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const tMedium = T[CL]?.medium || 'MEDIUM';
             const tLow = T[CL]?.low || 'LOW';
 
+            const safeScans = scans.map(s => ({
+                critical: Number(s.critical) || 0,
+                high: Number(s.high) || 0,
+                medium: Number(s.medium) || 0,
+                low: Number(s.low) || 0
+            }));
+
             const option = {
                 tooltip: {
                     trigger: 'axis',
@@ -1608,15 +1619,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     {
                         name: tCritical,
                         type: 'line',
-                        data: scans.map(s => s.critical),
+                        data: safeScans.map(s => s.critical),
                         smooth: 0.5,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        showSymbol: false,
+                        symbolSize: 6,
+                        showSymbol: true,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(255,77,109,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
                             {offset:0, color:'rgba(255,77,109,0.8)'},
-                            {offset:1, color:'rgba(255,77,109,0.01)'}
+                            {offset:1, color:'rgba(255,77,109,0.2)'}
                         ])},
                         itemStyle: { color: '#FF4D6D', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
@@ -1624,15 +1635,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     {
                         name: tHigh,
                         type: 'line',
-                        data: scans.map(s => s.high),
+                        data: safeScans.map(s => s.high),
                         smooth: 0.5,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        showSymbol: false,
+                        symbolSize: 6,
+                        showSymbol: true,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(255,177,0,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
                             {offset:0, color:'rgba(255,177,0,0.8)'},
-                            {offset:1, color:'rgba(255,177,0,0.01)'}
+                            {offset:1, color:'rgba(255,177,0,0.2)'}
                         ])},
                         itemStyle: { color: '#FFB100', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
@@ -1640,15 +1651,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     {
                         name: tMedium,
                         type: 'line',
-                        data: scans.map(s => s.medium),
+                        data: safeScans.map(s => s.medium),
                         smooth: 0.5,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        showSymbol: false,
+                        symbolSize: 6,
+                        showSymbol: true,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(0,180,216,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
                             {offset:0, color:'rgba(0,180,216,0.8)'},
-                            {offset:1, color:'rgba(0,180,216,0.01)'}
+                            {offset:1, color:'rgba(0,180,216,0.2)'}
                         ])},
                         itemStyle: { color: '#00B4D8', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
@@ -1656,15 +1667,15 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     {
                         name: tLow,
                         type: 'line',
-                        data: scans.map(s => s.low),
+                        data: safeScans.map(s => s.low),
                         smooth: 0.5,
                         symbol: 'circle',
-                        symbolSize: 8,
-                        showSymbol: false,
+                        symbolSize: 6,
+                        showSymbol: true,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(6,214,160,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
                             {offset:0, color:'rgba(6,214,160,0.8)'},
-                            {offset:1, color:'rgba(6,214,160,0.01)'}
+                            {offset:1, color:'rgba(6,214,160,0.2)'}
                         ])},
                         itemStyle: { color: '#06D6A0', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
@@ -1724,7 +1735,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         MEDIUM: '#00B4D8',
                         LOW: '#06D6A0'
                     };
-                    return colors[d.severity] || '#6c757d';
+                    return colors[d.severity] || 'var(--accent)';
                 })
                 .style('cursor', 'pointer')
                 .style('filter', 'drop-shadow(0 0 8px currentColor)')
@@ -1738,7 +1749,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                             <div>
                                 <strong style="font-size:1.2rem; color:var(--accent);">${d.id}</strong><br>
                                 <span class="badge bg-${sColor} mt-2 mb-2">${d.severity}</span><br>
-                                <span style="color:var(--text); font-weight:600;">${d.title}</span>
+                                <span style="color:var(--text); font-weight:600;">${d.title}</span><br>
+                                <small style="color:var(--text-secondary);">Target: ${d.target}</small>
                             </div>
                             <button class="btn-accent shadow-lg" onclick="simulateAttack(['${d.id}'])">
                                 ${btnTxt}
@@ -1842,7 +1854,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             .then(r => r.json())
             .then(sc => {
                 if (sc.length) {
-                    const labels = sc.map(s => s.timestamp.substring(0, 10));
+                    const labels = sc.map(s => s.timestamp ? s.timestamp.substring(0, 10) : '');
                     createTrendChart(labels, sc);
                 }
             });
@@ -1901,14 +1913,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         fetch('/api/attack-paths', { headers: getHeaders() })
             .then(r => r.json())
             .then(d => {
-                if (d.error) {
+                if (d.nodes && d.nodes.length) {
+                    drawAttackGraph(d);
+                } else {
                     const errEl = document.getElementById('attack-error');
                     if (errEl) {
                         errEl.style.display = 'block';
-                        errEl.textContent = '⚠️ ' + (T[CL]?.no_ai || 'Run with --analyze');
+                        errEl.textContent = '⚠️ ' + (d.error || 'No findings to display.');
                     }
-                } else if (d.nodes && d.nodes.length) {
-                    drawAttackGraph(d);
                 }
             });
 
@@ -2044,7 +2056,55 @@ def api_findings():
 @dashboard_bp.route('/api/history')
 @require_api_key
 def api_history():
-    return jsonify(get_all_scans())
+    session = db_session()
+    try:
+        scans = session.query(Scan).order_by(Scan.timestamp.desc()).all()
+        result = []
+        for s in scans:
+            counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+            for f in s.findings:
+                sev = str(f.severity).upper()
+                counts[sev] = counts.get(sev, 0) + 1
+            result.append({
+                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                "risk_score": s.risk_score,
+                "critical": counts["CRITICAL"],
+                "high": counts["HIGH"],
+                "medium": counts["MEDIUM"],
+                "low": counts["LOW"],
+            })
+        return jsonify(result)
+    finally:
+        session.close()
+
+@dashboard_bp.route('/api/attack-paths')
+@require_api_key
+def api_attack_paths():
+    """
+    Generate an interactive graph of all findings (nodes = findings, links = simple chain).
+    """
+    findings = load_findings()
+    if not findings:
+        return jsonify({"nodes": [], "links": []})
+
+    nodes = []
+    links = []
+    for f in findings:
+        node_id = f.get("id", "UNKNOWN")
+        nodes.append({
+            "id": node_id,
+            "severity": f.get("severity", "LOW").upper(),
+            "title": f.get("title", ""),
+            "description": f.get("description", ""),
+            "target": f.get("target", ""),
+            "tool": f.get("tool", ""),
+        })
+
+    # simple chain links to make the graph visually connected
+    for i in range(len(nodes) - 1):
+        links.append({"source": nodes[i]["id"], "target": nodes[i+1]["id"]})
+
+    return jsonify({"nodes": nodes, "links": links})
 
 @dashboard_bp.route('/api/rag')
 @require_api_key
