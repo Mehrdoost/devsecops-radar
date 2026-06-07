@@ -3,12 +3,25 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, field_validator
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, create_engine
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    create_engine,
+    event,
+)
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
 Base = declarative_base()
 
+
 class FindingSchema(BaseModel):
+    """Schema for input validation (used by adapter.py)."""
     tool: str
     id: str
     severity: str
@@ -17,39 +30,95 @@ class FindingSchema(BaseModel):
     description: str | None = ""
     line: int | None = None
 
-    @field_validator('severity')
+    @field_validator("severity")
     @classmethod
     def severity_upper(cls, v: str) -> str:
         return v.upper()
 
+    @field_validator("tool", "id", "target", "title")
+    @classmethod
+    def no_empty_strings(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Field cannot be empty")
+        return v.strip()
+
+
 class Scan(Base):
-    __tablename__ = 'scans'
+    __tablename__ = "scans"
+    __table_args__ = (
+        CheckConstraint(
+            "risk_score >= 0 AND risk_score <= 100", name="ck_risk_score_range"
+        ),
+    )
+
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
+    risk_score = Column(Float, nullable=True)
+    hardware_profile = Column(String, nullable=True)
+    execution_time = Column(String, nullable=True)
     findings_json = Column(JSON)
-    findings = relationship("Finding", back_populates="scan", cascade="all, delete-orphan")
+    findings = relationship(
+        "Finding", back_populates="scan", cascade="all, delete-orphan"
+    )
+
 
 class Finding(Base):
-    __tablename__ = 'findings'
+    __tablename__ = "findings"
+    __table_args__ = (
+        CheckConstraint(
+            "severity IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN')",
+            name="ck_valid_severity",
+        ),
+    )
+
     id = Column(Integer, primary_key=True)
-    scan_id = Column(Integer, ForeignKey('scans.id'), index=True)
-    tool = Column(String)
-    severity = Column(String, index=True)
-    target = Column(String)
-    title = Column(String)
-    description = Column(String)
-    line = Column(Integer)
+    scan_id = Column(Integer, ForeignKey("scans.id"), index=True)
+    tool = Column(String, nullable=False)
+    rule_id = Column(String, index=True, nullable=False)
+    severity = Column(String, index=True, nullable=False)
+    target = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    description = Column(String, default="")
+    line = Column(Integer, nullable=True)
     scan = relationship("Scan", back_populates="findings")
 
-DB_URL = os.environ.get("DATABASE_URL", "sqlite:///scan_history.db")
-engine = create_engine(DB_URL)
+
+# ==============================
+# Unified Database Engine (single source of truth)
+# ==============================
+DB_URL = os.environ.get("DATABASE_URL", "sqlite:///pipeline_sentinel.db")
+
+engine = create_engine(
+    DB_URL,
+    connect_args={"check_same_thread": False} if "sqlite" in DB_URL else {},
+    pool_pre_ping=True,
+    pool_size=5 if "sqlite" not in DB_URL else 0,
+    max_overflow=10,
+    pool_recycle=3600,
+)
+
+# WAL mode and foreign keys for SQLite
+if "sqlite" in DB_URL:
+
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.close()
+
+
 SessionLocal = sessionmaker(bind=engine)
 
+
 def init_db():
+    """Create all tables. Idempotent."""
     Base.metadata.create_all(engine)
+
 
 @contextmanager
 def get_session():
+    """Transactional context manager."""
     session = SessionLocal()
     try:
         yield session
@@ -59,23 +128,3 @@ def get_session():
         raise
     finally:
         session.close()
-
-def save_scan_to_db(findings: list) -> None:
-    validated = [FindingSchema(**f) for f in findings]
-    init_db()
-    with get_session() as session:
-        scan = Scan()
-        scan.findings_json = [f.model_dump() for f in validated]
-        session.add(scan)
-        session.flush()
-        for f in validated:
-            finding = Finding(
-                scan_id=scan.id,
-                tool=f.tool,
-                severity=f.severity,
-                target=f.target,
-                title=f.title,
-                description=f.description,
-                line=f.line
-            )
-            session.add(finding)

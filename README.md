@@ -2,7 +2,7 @@
 
 # 🛡️ Pipeline Sentinel
 
-**The Open‑Source DevSecOps Command Center — Unify, Analyse, Remediate.**
+### *The Open‑Source DevSecOps Command Center — Unify, Analyse, Remediate.*
 
 [![PyPI version](https://img.shields.io/pypi/v/devsecops-radar?style=for-the-badge&color=2196F3)](https://pypi.org/project/devsecops-radar/)
 [![License](https://img.shields.io/github/license/Mehrdoost/devsecops-radar?style=for-the-badge&color=4CAF50)](LICENSE)
@@ -31,24 +31,26 @@
 1. [What Is Pipeline Sentinel? (Simple Explanation)](#-what-is-pipeline-sentinel-simple-explanation)
 2. [Why You Need It](#-why-you-need-it)
 3. [Where to Run It in Your Network](#-where-to-run-it-in-your-network)
-4. [Dashboard Preview](#-dashboard-preview)
-5. [Quick Start](#-quick-start)
-6. [Prerequisites](#-prerequisites)
-7. [Installation](#-installation)
-8. [How to Use (Step‑by‑Step)](#-how-to-use-stepbystep)
-9. [Complete Command Reference](#-complete-command-reference)
-10. [Core Capabilities](#-core-capabilities)
-11. [Community Rules & Online Updates](#-community-rules--online-updates)
-12. [Attack Simulation & What‑If Analysis](#-attack-simulation--what‑if-analysis)
-13. [Security Hardening (v0.4.1)](#-security-hardening-v060)
-14. [Architecture](#-architecture)
-15. [Roadmap](#-roadmap)
-16. [Testing & CI](#-testing--ci)
-17. [Security Policy](#-security-policy)
-18. [Contributing](#-contributing)
-19. [Code of Conduct](#-code-of-conduct)
-20. [Author](#-author)
-21. [License](#-license)
+4. [Network Flow & Topology](#-network-flow--topology)
+5. [Dashboard Preview](#-dashboard-preview)
+6. [Quick Start](#-quick-start)
+7. [Prerequisites](#-prerequisites)
+8. [Installation](#-installation)
+9. [How to Use (Step‑by‑Step)](#-how-to-use-stepbystep)
+10. [Complete Command Reference](#-complete-command-reference)
+11. [Core Capabilities](#-core-capabilities)
+12. [Community Rules & Online Updates](#-community-rules--online-updates)
+13. [Attack Simulation & What‑If Analysis](#-attack-simulation--what‑if-analysis)
+14. [Security Improvements in v0.4.2](#-security-improvements-in-v042)
+15. [Architecture](#-architecture)
+16. [Roadmap](#-roadmap)
+17. [Testing & CI](#-testing--ci)
+18. [Security Policy](#-security-policy)
+19. [Contributing](#-contributing)
+20. [Code of Conduct](#-code-of-conduct)
+21. [Support Development](#-support-development)
+22. [Author](#-author)
+23. [License](#-license)
 
 </details>
 
@@ -71,43 +73,61 @@ Instead of digging through multiple JSON files, you get a **beautiful, dark‑mo
 In 2026, **supply chain attacks** have become the #1 threat. Tools like Trivy themselves were compromised, and attackers now inject malicious code directly into build pipelines. **You can no longer just scan your code; you must scan your pipeline.**
 
 **Pipeline Sentinel gives you:**
-- ✅ **One screen for all scanners** – stop juggling log files.
-- ✅ **AI that understands attack chains** – “A leaked secret + an old library = a disaster.”
-- ✅ **Automatic fixes** – with a single flag, it patches files and opens a pull request (with backup).
-- ✅ **Human review mode** – inspect each fix before applying.
-- ✅ **Compliance reports** – generate a PDF for your boss or auditor.
-- ✅ **Attack simulation** – tick a few findings and see a generated attack script.
-- ✅ **100% offline capable** – works in air‑gapped environments where security matters most.
-- ✅ **Interactive wizard** – one command to get everything running.
-- ✅ **Community rules marketplace** – pull curated detection rules from the community.
+* 🎯 **Unified Aggregation:** One screen for all scanners – stop juggling log files.
+* 🧠 **Graph AI Insights:** AI that understands attack chains – *"A leaked secret + an old library = a disaster."*
+* ⚡ **Auto-Remediation:** Automatically patches files and opens a pull request (with automated backups) with a single flag.
+* 👥 **Human Review Mode:** Step-by-step interactive interface to inspect each fix before applying it to production.
+* 📊 **Compliance-Ready Reports:** Instantly generate beautiful, executive-ready PDF summaries for auditors or stakeholders.
+* ⚔️ **Attack Simulation:** Select security findings and automatically generate operational proof-of-concept scripts.
+* 🔒 **Air-Gapped Privacy:** 100% offline capable. Perfect for highly restricted environments where data residency is paramount.
+* 🧙 **Interactive Wizard:** A single command leads you through the entire initialization and onboarding process.
+* 🛒 **Rules Marketplace:** Dynamically fetch and update curated detection definitions directly from the community.
 
 ---
 
 ## 📍 Where to Run It in Your Network
 
-Pipeline Sentinel is designed to be **flexible** — you decide where it fits best:
+Pipeline Sentinel is designed to adapt to your setup. You decide where it fits best:
 
-| Deployment | Description |
+| Deployment Mode | Operational Profile & Context |
 | :--- | :--- |
-| 🖥️ **Local Developer Machine** | Run the CLI and dashboard right on your laptop. Perfect for individual pentesters or developers who want instant feedback. |
-| 🔧 **CI/CD Runner** | Use the GitHub Action or call `devsecops-radar` directly in your Jenkins/GitLab CI scripts. It can fail the build if critical vulnerabilities exceed your policy (`--policy`). |
-| 🏢 **Central Security Server** | Install on a dedicated server (via Docker or pip) that collects scan results from multiple teams. The dashboard becomes a shared security operations console. |
-| 🌐 **Air‑Gapped Networks** | Copy the Docker image and sample data to an offline server. The dashboard works with zero external calls — all assets are embedded. |
+| 🖥️ **Local Dev Machine** | Run the CLI and dashboard right on your laptop. Perfect for individual pentesters or developers who want instant, localized feedback. |
+| 🔧 **CI/CD Runner Pipeline** | Integrate directly into Jenkins/GitLab CI or GitHub Actions. Fail builds automatically if critical vulnerabilities exceed your security policy rules. |
+| 🏢 **Central Security Operations** | Deploy via Docker on a central server to collect scan history across multiple teams, unifying visibility into a shared security console. |
+| 🌐 **Air‑Gapped Environments** | Air-gap friendly. Deploy the standalone Docker bundle to isolated networks with zero external asset dependencies or tracker requests. |
 
-<details>
-<summary><b>🔍 View Typical Network Flow</b></summary>
-<br>
+---
 
-```text
-[Trivy scan] ──┐
-[Semgrep scan] ─┤
-[Poutine scan] ─┼──> devsecops-radar (CLI) ──> findings.json ──> Dashboard (Flask) ──> Browser
-[Zizmor scan] ─┘
-[Gitleaks scan] ┘
+## 🔍 Network Flow & Topology
+
+### 🔄 Logical Data Lifecycle
+The functional flow below maps exactly how raw multi-scanner inputs route through our parsing engine to be normalized and centralized:
+
+```mermaid
+graph LR
+    subgraph Scanners [Multi-Scanner Core Inputs]
+        T[Trivy Scan] 
+        S[Semgrep Scan] 
+        P[Poutine Scan] 
+        Z[Zizmor Scan] 
+        G[Gitleaks Scan]
+    end
+
+    Scanners --->|Raw Reports| CLI(🛡️ devsecops-radar CLI Engine)
+    CLI --->|Normalize & Deduplicate| Out[findings.json]
+    Out ---> Web(📊 Flask Dashboard App)
+    Web ---> UI[🌐 Modern Browser Command Center]
+
+    style CLI fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,color:#cdd6f4
+    style Web fill:#1e1e2e,stroke:#10b981,stroke-width:2px,color:#cdd6f4
+    style Out fill:#181825,stroke:#fab387,stroke-width:1px,color:#a6e3a1
+    style UI fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4
 ```
-> **📌 Diagram Placeholder:** > ![Network Flow Diagram](docs/architecture-1.png)
 
-</details>
+### 🌐 Operational Infrastructure Mapping
+Once processed, the centralized findings are rendered inside your topology mapping network boundaries, visualising the operational relationship between distinct pipeline segments:
+
+![Network Flow Diagram](docs/architecture-1.png)
 
 ---
 
@@ -131,6 +151,7 @@ devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json
 # 3. Launch the dashboard
 devsecops-radar-web
 ```
+
 Open **http://localhost:8080** — your unified command center is live with sample findings.
 
 > [!TIP]
@@ -154,7 +175,7 @@ pip install devsecops-radar
 
 ### Option 2 — From Source
 ```bash
-git clone [https://github.com/Mehrdoost/devsecops-radar.git](https://github.com/Mehrdoost/devsecops-radar.git)
+git clone https://github.com/Mehrdoost/devsecops-radar.git
 cd devsecops-radar
 pip install -e ".[dev]"
 ```
@@ -175,7 +196,7 @@ docker compose up
 
 ### 🧙 One‑Command Install (curl)
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/Mehrdoost/devsecops-radar/main/install.sh](https://raw.githubusercontent.com/Mehrdoost/devsecops-radar/main/install.sh) | bash
+curl -fsSL https://raw.githubusercontent.com/Mehrdoost/devsecops-radar/main/install.sh | bash
 ```
 *This script installs Python dependencies, Ollama, pulls the AI model, and starts the wizard.*
 
@@ -222,19 +243,26 @@ devsecops-radar --trivy trivy.json --semgrep semgrep.json --poutine poutine.json
 </details>
 
 <details open>
-<summary><b>3. View the Dashboard</b></summary>
+<summary><b>3. View the Dashboard Engine</b></summary>
 <br>
 
+Execute the web wrapper to spin up your centralized analytics engine:
 ```bash
 devsecops-radar-web
 ```
-**The dashboard shows:**
-* **Severity Breakdown** – Doughnut chart with total count
-* **Trend Over Time** – Line chart from scan history
-* **Pipeline Security** – Poutine + Zizmor statistics card
-* **Attack Path Graph** – Interactive D3.js graph (click nodes for details)
-* **Executive Summary** – Risk score and AI‑generated summary
-* **Findings Table** – Searchable, filterable, paginated, with checkboxes for simulation
+
+### 📊 Tactical Web Console Architecture
+The single-page real-time dashboard elegantly partitions telemetry into high-impact actionable items:
+
+| Dashboard Component | Interface Visualization Type | Core Operational Value |
+| :--- | :--- | :--- |
+| **Severity Breakdown** | Dynamic Doughnut Charts | Instant tracking of global exposure density and total counts. |
+| **Trend Over Time** | Aggregated Line Timelines | Historical trajectory graphs drawn from persistent scan logs. |
+| **Pipeline Security** | Specialized Poutine + Zizmor Matrix | Micro-telemetry analyzing supply chain health and meta-workflows. |
+| **Attack Path Graph** | Interactive D3.js Force Nodes | Clickable chain mapping demonstrating structural flaw correlations. |
+| **Executive Summary** | Context-Rich Summary & Risk Scoring | Algorithmic threat intelligence translated into executive-ready metrics. |
+| **Findings Datagrid** | Searchable Paginated Checkbox Tables | Granular configuration control built for isolating entities for target simulations. |
+
 </details>
 
 <details>
@@ -261,7 +289,7 @@ devsecops-radar --trivy trivy.json --analyze --fix
 devsecops-radar --trivy trivy.json --analyze --fix --review
 ```
 > [!NOTE]
-> *All modified files are backed up to `~/.devsecops-radar/backups/`. The tool creates a new git branch `auto-fix` and pushes it for review.*
+> All modified files are backed up to `~/.devsecops-radar/backups/`. The tool creates a new git branch `auto-fix` and pushes it for review.
 </details>
 
 <details>
@@ -313,7 +341,7 @@ Embed a dynamic security badge in your README:
 
 Set environment variables to create issues automatically:
 ```bash
-export JIRA_URL="[https://your-domain.atlassian.net](https://your-domain.atlassian.net)"
+export JIRA_URL="https://your-domain.atlassian.net"
 export JIRA_TOKEN="your-api-token"
 devsecops-radar --trivy trivy.json --analyze --notify-jira
 
@@ -356,7 +384,7 @@ devsecops-radar --trivy trivy.json --analyze --notify-asana
 ### 📊 Reports & Exports
 | Flag | Description | Example |
 | :--- | :--- | :--- |
-| `--output` | Output JSON file (default: findings.json) | `--output` <kbd>merged.json</kbd> |
+| `--output` | Output JSON file (default: findings.json)| `--output` <kbd>merged.json</kbd> |
 | `--report` | Generate PDF/JSON/HTML report | `--report` <kbd>report.pdf</kbd> |
 | `--export-sarif`| Export findings as SARIF | `--export-sarif` <kbd>report.sarif</kbd> |
 | `--export-cyclonedx`| Export findings as CycloneDX | `--export-cyclonedx` <kbd>report.cdx</kbd> |
@@ -373,12 +401,13 @@ devsecops-radar --trivy trivy.json --analyze --notify-asana
 <br>
 
 > [!TIP]
-> ### `devsecops-radar-web` — Web Server Options
-> ```bash
-> devsecops-radar-web                       # Launch on http://localhost:8080
-> FINDINGS_FILE=my.json devsecops-radar-web # Use a custom findings file
-> PIPELINE_API_KEY=secret devsecops-radar-web  # Enable API authentication
-> ```
+> **`devsecops-radar-web` — Web Server Options**
+
+```bash
+devsecops-radar-web                         # Launch on http://localhost:8080
+FINDINGS_FILE=my.json devsecops-radar-web   # Use a custom findings file
+PIPELINE_API_KEY=secret devsecops-radar-web # Enable API authentication
+```
 
 </details>
 
@@ -386,24 +415,20 @@ devsecops-radar --trivy trivy.json --analyze --notify-asana
 
 ## ✨ Core Capabilities
 
-<details open>
-<summary><b>Explore the Engine Powering Pipeline Sentinel</b></summary>
-<br>
+### 🔌 Multi-Scanner Ingestion Engine
+* **Pluggable Architecture:** Native modular decoders ingest structured data seamlessly from Trivy, Semgrep, Poutine, Zizmor, and Gitleaks.
+* **Hybrid RuleFusion Layer:** Dynamically evaluation of custom local JSON policies mapped on top of live community-driven git feeds.
+* **Scan History Optimization:** Persistent historical compilation powered by SQLAlchemy featuring sub-second result slicing.
 
-* **🔌 Multi‑Scanner Plugin Architecture:** Built‑in support for Trivy (`--trivy`), Semgrep (`--semgrep`), Poutine (`--poutine`), Zizmor (`--zizmor`), and Gitleaks (`--gitleaks`).
-* **🧩 Hybrid RuleFusion Engine:** Load custom JSON rules locally or pull community‑curated rules from a configurable Git repository (`--update-rules`).
-* **🧠 LLM‑Powered Analysis:** Async, enriched context (NIST NVD/GitHub links), structured JSON with MITRE ATT&CK, risk scores, and step‑by‑step remediation. Supports Ollama and LiteLLM.
-* **🕸️ Multi‑Step Attack Path Visualization:** Interactive D3.js force graph that chains findings into realistic attack scenarios based on your network topology.
-* **🛡️ Policy‑as‑Code (JSON & Rego):** Define simple security gates or write complex rules in Rego for OPA to fail pipelines safely.
-* **🛠️ Auto‑Remediation:** AI‑suggested fixes applied automatically (`--fix`) or reviewed (`--review`). Every file is backed up safely in a new Git branch.
-* **📊 Compliance & Reports:** Professional reports in PDF, JSON, HTML (`--report`), plus SARIF and CycloneDX exports.
-* **📈 Scan History & Trends:** SQLAlchemy‑backed database with fast pagination and historical trend comparisons.
-* **🧪 SBOM & Dependency Confusion:** Generate CycloneDX SBOMs, apply VEX files, and detect impersonation risks.
-* **🔍 RAG‑Powered Security Search:** Ask natural language questions about your scan history.
-* **📉 Dynamic Risk Scoring:** Context-aware scoring based on asset exposure, exploit availability, and threat intelligence.
-* **🔒 Privacy & Offline‑First:** 100% embedded assets. LLM analysis runs locally via Ollama. No data leaves your network.
+### 🧠 Advanced Intelligence & Active Remediation
+* **Asynchronous Context Enriched LLM:** Multi-backend integration hooks (Ollama/LiteLLM) mapping structural CVE configurations to real-world MITRE ATT&CK vectors.
+* **Interactive Remediation Tracks:** Intelligent mutation options applying autonomous hotfixes (`--fix`) balanced by modular human verification checklines (`--review`).
+* **Exploit-Aware Scoring:** Modern analytical calculations analyzing vector severities alongside real-time asset exposure and dynamic surface reachability.
 
-</details>
+### 🛡️ Enterprise Policy & Supply-Chain Governance
+* **Policy-as-Code Frameworks:** Advanced control assertions parsing validation rules via strict local JSON constraints or distributed Open Policy Agent (OPA) Rego scripts.
+* **Supply Chain Verification:** Comprehensive CycloneDX SBOM data compilation complete with proactive VEX vulnerability masking layers.
+* **Air-Gapped Absolute Confidentiality:** Complete dependency localization guaranteeing data processing loops execute with zero external request callbacks.
 
 ---
 
@@ -420,8 +445,9 @@ Rules are stored locally in `~/.devsecops-radar/community-rules/`. To use them a
 ```bash
 devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 ```
+
 > [!NOTE]
-> *(You can even point to your own private repository via `COMMUNITY_RULES_REPO`!)*
+> You can even point to your own private repository via `COMMUNITY_RULES_REPO`!
 
 ---
 
@@ -436,22 +462,21 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-<details>
-<summary><b>🔐 Security Hardening (v0.4.1)</b></summary>
-<br>
+## 🔐 Security Improvements in v0.4.2
 
-Pipeline Sentinel now includes several important security improvements:
-* **Command injection prevention** – all scanner inputs and community repo URLs are strictly validated.
-* **Password hashing** – API keys are stored using Werkzeug’s secure hashing (no plaintext).
-* **Safe git staging** – only the files that were actually modified are committed, preventing accidental exposure of `.env` or other secrets.
-* **Consistent DB session management** – all database operations use the same context manager, preventing resource leaks.
-* **Specific exception handling** – bare `except` clauses have been replaced with targeted exceptions, improving debuggability.
-* **Removal of duplicated parsing code** – the deprecated `parser.py` module has been deleted.
-</details>
+- **Path Traversal Prevention:** All file operations (rules, manifests, SBOM, backups) now strictly validate that paths remain within the allowed base directory.
+- **Input Sanitization for Attack Simulation:** Bash script generation now safely escapes all user-controlled data, eliminating command injection risks in sandboxed PoCs.
+- **Hardened Docker Sandbox:** Attack simulation containers run with `--cap-drop=ALL`, `--read-only` filesystem, `--network=none`, and as non-root user `nobody`.
+- **Constant-time API Key Comparison:** Login and API key verification use `hmac.compare_digest` to prevent timing attacks.
+- **Database Connection Security:** SQLite WAL mode enabled, foreign keys enforced, and `pool_pre_ping` configured for connection health checks.
+- **Input Size Limits:** Payload size restricted (1MB), database field lengths truncated to prevent DoS and log bloat.
+- **Safe Community Rule Updates:** Git operations are restricted to whitelisted `https://github.com` URLs only, with strict argument validation.
+- **Secrets Redaction:** PDF reports and logs automatically redact passwords, tokens, and keys.
+- **Mandatory Environment Secrets:** JWT secret and API key must be provided; the server fails fast if they are missing or weak.
 
-<details>
-<summary><b>🏗️ Architecture</b></summary>
-<br>
+---
+
+## 🏗️ Architecture
 
 ```text
 devsecops_radar/
@@ -466,13 +491,12 @@ devsecops_radar/
     ├── summary/
     └── sentry/     # Live webhook agent for CI/CD
 ```
-> **📌 Diagram Placeholder:**
-> ![Network Flow Diagram](docs/architecture-2.png)
-</details>
 
-<details>
-<summary><b>🗺️ Roadmap</b></summary>
-<br>
+![Architecture Diagram](docs/architecture-2.png)
+
+---
+
+## 🗺️ Roadmap
 
 | Phase | Feature | Status |
 | :--- | :--- | :--- |
@@ -484,12 +508,12 @@ devsecops_radar/
 | 🔲 **Phase 5** | Rule marketplace with YAML | Planned |
 | 🔲 **Phase 5** | Pull Request assistant (GitHub App) | Planned |
 
+> [!NOTE]
 > See the [open issues](https://github.com/Mehrdoost/devsecops-radar/issues) for a full list of proposed features.
-</details>
 
-<details>
-<summary><b>🧪 Testing & CI</b></summary>
-<br>
+---
+
+## 🧪 Testing & CI
 
 Pipeline Sentinel is thoroughly tested to ensure reliability for production use.
 * **Unit & Integration Tests:** 23+ tests covering scanners, rule engine, database, analyzer, API, and CLI.
@@ -503,20 +527,23 @@ pytest tests/ -v --cov=devsecops_radar --cov-report=term-missing
 ruff check .
 mypy .
 ```
-</details>
 
 ---
 
 ## 🤝 Community & Support
 
-<details>
-<summary><b>Contributing, Security Policy, & Code of Conduct</b></summary>
-<br>
-
 * **Security Policy:** We take security seriously. If you discover a vulnerability, please report it privately. See our full Security Policy for details.
 * **Contributing:** We welcome contributions of all kinds! Please read our Contributing Guide. For adding new rules, see the Community Rules section.
 * **Code of Conduct:** This project adheres to the Contributor Covenant Code of Conduct. By participating, you are expected to uphold this code.
-</details>
+
+---
+
+## ⚡ Support Development
+
+Sponsor this project with a crypto donation.  
+All funds go directly to the developer.
+
+**[🔗 Donate USDC (Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](donate-qr.png)</sub>
 
 ---
 

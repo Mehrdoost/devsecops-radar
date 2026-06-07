@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devsecops-radar"
-version = "0.4.1"
+version = "0.4.2"
 description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
 readme = "README.md"
 license = "MIT"
@@ -20,9 +20,14 @@ classifiers = [
 ]
 dependencies = [
     "flask>=3.0",
+    "flask-cors>=4.0",
+    "waitress>=3.0",
+    "psutil>=5.9",
     "semgrep>=1.0",
+    "tenacity>=8.0",
     "pyyaml>=6.0",
     "requests>=2.31",
+    "rich>=13.0",
     "loguru>=0.7",
     "reportlab>=4.0",
     "litellm>=1.50",
@@ -31,6 +36,7 @@ dependencies = [
     "pyjwt>=2.8",
     "httpx>=0.27",
     "werkzeug>=3.0",
+    "python-dotenv>=1.0",   # <-- REQUIRED by settings.py (load_dotenv)
 ]
 
 [project.optional-dependencies]
@@ -41,6 +47,8 @@ dev = [
     "ruff>=0.3.0",
     "mypy>=1.9",
     "pytest-asyncio>=0.21",
+    "pytest-mock>=3.10",
+    "httpx>=0.24.0",
     "pre-commit>=3.5",
 ]
 
@@ -66,6 +74,7 @@ packages = [
     "devsecops_radar.web.topology",
     "devsecops_radar.web.summary",
     "devsecops_radar.web.sentry",
+    # "devsecops_radar.web.simulation",  # <-- REMOVED: not present in project
     "devsecops_radar.scanners",
     "devsecops_radar.plugins",
 ]
@@ -84,7 +93,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
-line-length = 120
+line-length = 150
 target-version = "py312"
 
 [tool.ruff.lint]

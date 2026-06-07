@@ -3,7 +3,7 @@ import os
 
 from flask import Blueprint, jsonify, render_template_string, request, send_file
 
-from devsecops_radar.core.auth import login_required
+from devsecops_radar.core.auth import require_api_key
 from devsecops_radar.core.database import get_all_scans, get_findings_paginated
 from devsecops_radar.core.rag import rag_search
 from devsecops_radar.core.reporting import generate_pdf_report
@@ -1808,7 +1808,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         fetch('/api/findings', { headers: getHeaders() })
             .then(r => r.json())
             .then(data => {
-                allFindings = data.items;
+                allFindings = data.data || [];
                 filteredFindings = allFindings;
                 currentPage = 1;
                 renderTable();
@@ -2035,19 +2035,19 @@ def index():
     )
 
 @dashboard_bp.route('/api/findings')
-@login_required
+@require_api_key
 def api_findings():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
     return jsonify(get_findings_paginated(page, per_page))
 
 @dashboard_bp.route('/api/history')
-@login_required
+@require_api_key
 def api_history():
     return jsonify(get_all_scans())
 
 @dashboard_bp.route('/api/rag')
-@login_required
+@require_api_key
 def api_rag():
     q = request.args.get('q', '')
     if not q:
@@ -2055,7 +2055,7 @@ def api_rag():
     return jsonify(rag_search(q))
 
 @dashboard_bp.route('/api/simulate', methods=['POST'])
-@login_required
+@require_api_key
 def api_simulate():
     data = request.get_json(force=True)
     finding_ids = data.get('finding_ids', [])
@@ -2087,7 +2087,7 @@ def api_simulate():
     })
 
 @dashboard_bp.route('/api/report')
-@login_required
+@require_api_key
 def api_report():
     fmt = request.args.get('format', 'pdf')
     findings = load_findings()

@@ -1,35 +1,111 @@
 from typing import Any
 
+from loguru import logger
+
+# --- Valuation Constants (Inspired by CVSS Modifiers) ---
+# Base scores mapped to standard severities
+BASE_SEVERITY_SCORES: dict[str, float] = {
+    "CRITICAL": 9.0,
+    "HIGH": 7.0,
+    "MEDIUM": 4.0,
+    "LOW": 1.5,
+    "UNKNOWN": 1.0,
+}
+
+# Environmental Multipliers (Applied via max() to prevent exponential explosion)
+EXPOSURE_MULTIPLIER = 1.3       # Asset is publicly exposed
+SENSITIVE_DATA_MULTIPLIER = 1.2 # Asset contains sensitive/PII data
+
+# Threat Intelligence Multipliers
+EXPLOIT_AVAILABLE_MULT = 1.2    # Public PoC exists
+ACTIVE_THREAT_MULT = 1.5        # Actively exploited in the wild (CISA KEV, etc.)
+
+MAX_RISK_SCORE = 10.0
+MIN_RISK_SCORE = 0.0
+
 
 def compute_dynamic_risk_score(
     finding: dict[str, Any],
     topology: dict[str, Any] | None = None,
     threat_intel: dict[str, Any] | None = None
 ) -> float:
-    severity_weights = {'CRITICAL': 10.0, 'HIGH': 7.0, 'MEDIUM': 4.0, 'LOW': 1.0}
-    base = severity_weights.get(finding.get('severity', 'LOW'), 1.0)
+    """
+    Computes a dynamic, context-aware risk score (0.0 to 10.0) for a security finding.
 
-    exposure_mult = 1.0
-    if topology:
-        target = finding.get('target', '')
-        for server in topology.get('servers', []):
-            if server.get('name') in target:
-                if server.get('exposed', False):
-                    exposure_mult = 2.5
-                if server.get('data_classification') == 'sensitive':
-                    exposure_mult *= 1.5
-                break
+    The formula uses a base score derived from the finding's severity, and applies
+    environmental multipliers (from topology) and threat multipliers (from threat intel).
 
-    likelihood_mult = 1.0
-    if finding.get('exploit_available', False):
-        likelihood_mult *= 2.0
+    Args:
+        finding: Dictionary containing vulnerability details (severity, target, id).
+        topology: Optional dictionary defining the infrastructure layout and asset metadata.
+        threat_intel: Optional dictionary containing active threat data and known exploits.
 
-    # Threat intelligence multiplier (e.g., actively exploited in the wild)
-    if threat_intel:
-        for intel in threat_intel.get("active_threats", []):
-            if intel.get("cve_id") == finding.get("id"):
-                likelihood_mult *= 2.5
-                break
+    Returns:
+        float: A normalized risk score between 0.0 and 10.0.
+    """
+    if not isinstance(finding, dict):
+        logger.error("Invalid finding format provided to valuation engine. Expected a dictionary.")
+        return 0.0
 
-    score = base * exposure_mult * likelihood_mult
-    return round(min(10.0, score), 1)
+    # 1. Base Score Calculation
+    raw_severity = finding.get("severity", "LOW")
+    severity = str(raw_severity).strip().upper()
+
+    if severity not in BASE_SEVERITY_SCORES:
+        logger.warning(f"Unknown severity '{severity}' for finding ID {finding.get('id', 'N/A')}. Defaulting to UNKNOWN.")
+        severity = "UNKNOWN"
+
+    base_score = BASE_SEVERITY_SCORES[severity]
+    target = finding.get("target", "")
+
+    # 2. Environmental Multipliers (Topology context)
+    env_mult = 1.0
+    if topology and isinstance(topology, dict):
+        # Dynamically search across common topology grouping keys
+        asset_lists = [
+            topology.get("assets", []),
+            topology.get("servers", []),
+            topology.get("services", []),
+            topology.get("nodes", [])
+        ]
+
+        for asset_group in asset_lists:
+            if not isinstance(asset_group, list):
+                continue
+
+            for asset in asset_group:
+                asset_name = asset.get("name", "")
+                asset_id = asset.get("identifier", "")
+
+                # Strict matching to prevent false positives (exact match or strict boundary)
+                if (target and (target == asset_name or target == asset_id)) or \
+                   (asset_name and f"/{asset_name}/" in f"/{target}/"):
+
+                    if asset.get("exposed") is True:
+                        env_mult = max(env_mult, EXPOSURE_MULTIPLIER)
+
+                    if asset.get("data_classification") == "sensitive":
+                        env_mult = max(env_mult, SENSITIVE_DATA_MULTIPLIER)
+
+    # 3. Threat Intelligence Multipliers
+    threat_mult = 1.0
+    if finding.get("exploit_available") is True:
+        threat_mult = max(threat_mult, EXPLOIT_AVAILABLE_MULT)
+
+    if threat_intel and isinstance(threat_intel, dict):
+        finding_id = finding.get("id")
+        active_threats = threat_intel.get("active_threats", [])
+
+        if isinstance(active_threats, list) and finding_id:
+            for threat in active_threats:
+                if threat.get("cve_id") == finding_id or threat.get("rule_id") == finding_id:
+                    threat_mult = max(threat_mult, ACTIVE_THREAT_MULT)
+                    break # Break early here is safe as we found the highest multiplier for this finding
+
+    # 4. Final Calculation & Normalization
+    final_score = base_score * env_mult * threat_mult
+
+    # Cap the score precisely between 0.0 and 10.0
+    normalized_score = max(MIN_RISK_SCORE, min(final_score, MAX_RISK_SCORE))
+
+    return round(normalized_score, 1)

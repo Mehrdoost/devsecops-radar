@@ -16,7 +16,7 @@ def load_findings():
         return json.load(f)
 
 
-@attack_paths_bp.route('/api/attack-paths')
+@attack_paths_bp.route('/attack-paths')
 def api_attack_paths():
     """
     Return attack‑path graph data only from the cached AI summary.

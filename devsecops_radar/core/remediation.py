@@ -1,85 +1,192 @@
 import os
+import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-BACKUP_DIR = Path.home() / ".devsecops-radar" / "backups"
-_TRACKED_FILES: set[str] = set()
+# Secure backup directory initialization
+BACKUP_DIR = Path.cwd() / ".sentinel_backups"
 
 
-def _backup_file(target_file: str) -> None:
-    backup_path = BACKUP_DIR / (Path(target_file).name + ".bak")
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(target_file, backup_path)
-    _TRACKED_FILES.add(target_file)
+def _init_backup_dir() -> None:
+    if not BACKUP_DIR.exists():
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def apply_remediation(finding: dict[str, Any], ai_fix: str) -> bool:
-    logger.info(f"Applying fix for {finding['id']}...")
-    target_file = finding.get('target', '')
-    line = finding.get('line')
-    if target_file and line and os.path.exists(target_file):
-        _backup_file(target_file)
-        with open(target_file) as f:
-            lines = f.readlines()
-        line_index = line - 1
-        if 0 <= line_index < len(lines):
-            lines[line_index] = ai_fix + '\n'
-            with open(target_file, 'w') as f:
-                f.writelines(lines)
-            return True
-    return False
+def _is_safe_path(target_file: str, base_dir: Path | None = None) -> bool:
+    """
+    Prevents Path Traversal attacks (e.g., trying to access /etc/passwd).
+    Ensures the target file is strictly within the allowed base directory.
+    """
+    if base_dir is None:
+        base_dir = Path.cwd()
 
-
-def auto_fix(findings: list[dict[str, Any]], ai_summary: dict[str, Any]) -> list[str]:
-    fixed = []
-    remediations = ai_summary.get('top_remediations', [])
-    for rem in remediations:
-        fid = rem.get('finding_id')
-        action = rem.get('action', '')
-        finding = next((f for f in findings if f.get('id') == fid), None)
-        if finding and action:
-            success = apply_remediation(finding, action)
-            if success:
-                fixed.append(fid)
-    return fixed
-
-
-def generate_fix_commands(findings: list[dict[str, Any]], ai_summary: dict[str, Any]) -> str:
-    commands = []
-    for rem in ai_summary.get('top_remediations', []):
-        fid = rem.get('finding_id')
-        action = rem.get('action', '')
-        finding = next((f for f in findings if f.get('id') == fid), None)
-        if finding:
-            target = finding.get('target', '')
-            if 'requirements.txt' in target:
-                commands.append(f"# Update {target}\npip install --upgrade {finding.get('package', '')}")
-            elif 'package.json' in target:
-                commands.append(f"# Update {target}\nnpm update {finding.get('package', '')}")
-            elif 'dockerfile' in target.lower():
-                commands.append(
-                    f"# Fix {target}\nsed -i "
-                    f"'s/{finding.get('installed_version')}/{finding.get('fixed_version')}/' {target}"
-                )
-            else:
-                commands.append(f"# Manual fix for {fid}: {action}")
-    return '\n'.join(commands)
-
-
-def generate_pr(findings_file: str, branch: str = "auto-fix") -> None:
     try:
-        subprocess.run(['git', 'checkout', '-b', branch], check=True)
-        if _TRACKED_FILES:
-            subprocess.run(['git', 'add'] + list(_TRACKED_FILES), check=True)
+        abs_target = Path(target_file).resolve(strict=False)
+        return abs_target.is_relative_to(base_dir.resolve())
+    except Exception as e:
+        logger.error(f"Path resolution error for {target_file}: {e}")
+        return False
+
+
+def _backup_file(target_file: str) -> Path | None:
+    """Creates a backup of the file before any modification."""
+    _init_backup_dir()
+    source_path = Path(target_file)
+
+    if not source_path.exists():
+        return None
+
+    backup_path = BACKUP_DIR / f"{source_path.name}.bak"
+    try:
+        shutil.copy2(source_path, backup_path)
+        logger.debug(f"Backed up {source_path} to {backup_path}")
+        return backup_path
+    except Exception as e:
+        logger.error(f"Backup failed for {target_file}: {e}")
+        return None
+
+
+def apply_patch(finding: dict[str, Any], patch_content: str, base_dir: Path | None = None) -> bool:
+    """
+    Safely applies a string patch/fix to a specific line in a file using Atomic Writes.
+    """
+    target_file = finding.get('target', '')
+    raw_line = finding.get('line')
+
+    if not target_file or raw_line is None:
+        logger.warning("Finding is missing 'target' or 'line'. Cannot apply patch.")
+        return False
+
+    try:
+        line_num = int(raw_line)
+    except ValueError:
+        logger.error(f"Invalid line number format: {raw_line}")
+        return False
+
+    if not _is_safe_path(target_file, base_dir):
+        logger.error(f"Security Error: Target {target_file} is outside the allowed directory.")
+        return False
+
+    target_path = Path(target_file)
+    if not target_path.exists():
+        logger.error(f"Target file does not exist: {target_file}")
+        return False
+
+    backup_path = _backup_file(target_file)
+    if not backup_path:
+        return False
+
+    # Atomic Write Pattern
+    temp_fd, temp_path = tempfile.mkstemp(dir=target_path.parent, text=True)
+    try:
+        with open(target_path, encoding='utf-8') as f:
+            lines = f.readlines()
+
+        line_index = line_num - 1
+
+        # Sanitize patch content to prevent breaking the file structure
+        safe_patch = patch_content.replace('\r\n', '\n').rstrip('\n') + '\n'
+
+        if 0 <= line_index < len(lines):
+            lines[line_index] = safe_patch
         else:
-            logger.warning("No files were modified; skipping PR creation.")
-            return
-        subprocess.run(['git', 'commit', '-m', 'Auto-remediation by Pipeline Sentinel'], check=True)
-        subprocess.run(['git', 'push', 'origin', branch], check=True)
-        logger.info(f"Branch '{branch}' pushed. Create a PR manually or via GitHub CLI.")
+            logger.error(f"Line number {line_num} is out of bounds for {target_file}")
+            os.close(temp_fd)
+            os.remove(temp_path)
+            return False
+
+        # Write to temp file first
+        with os.fdopen(temp_fd, 'w', encoding='utf-8') as tf:
+            tf.writelines(lines)
+
+        # Atomic replace
+        os.replace(temp_path, target_path)
+        logger.info(f"Successfully patched {target_file} at line {line_num}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to apply patch to {target_file}: {e}")
+        # Rollback on failure
+        if backup_path and backup_path.exists():
+            shutil.copy2(backup_path, target_path)
+            logger.info(f"Rolled back {target_file} from backup.")
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        return False
+
+
+def generate_remediation_guide(ai_remediations: list[dict[str, Any]]) -> str:
+    """
+    Converts the AI's safe 'remediation_steps' into a human-readable CLI guide.
+    Replaces the dangerous 'generate_fix_commands' function.
+    """
+    if not ai_remediations:
+        return "No automated remediations provided by the AI."
+
+    guide = ["\n🛡️  PIPELINE SENTINEL - REMEDIATION GUIDE  🛡️", "="*45]
+
+    for rem in ai_remediations:
+        guide.append(f"\n[ID: {rem.get('finding_id', 'UNKNOWN')}] {rem.get('title', 'Fix Request')}")
+        steps = rem.get('remediation_steps', [])
+        if not steps:
+            guide.append("  - Manual investigation required.")
+        for idx, step in enumerate(steps, 1):
+            guide.append(f"  {idx}. {step}")
+
+    return "\n".join(guide)
+
+
+def auto_fix(findings: list[dict[str, Any]], ai_summary: dict[str, Any]) -> set[str]:
+    """
+    Attempts to apply automated patches and returns a set of modified files.
+    No longer uses global state.
+    """
+    modified_files = set()
+    ai_rems = {r.get('finding_id'): r for r in ai_summary.get('top_remediations', [])}
+
+    for f in findings:
+        fid = f.get('id')
+        if fid in ai_rems:
+            # We assume AI generated a specific 'patch_content' for auto-fixing
+            # If not, we skip. AI now strictly separates "steps" (human) and "patch_content" (code)
+            patch = ai_rems[fid].get('patch_content')
+            if patch and apply_patch(f, patch):
+                modified_files.add(f.get('target'))
+
+    return modified_files
+
+
+def generate_pr(modified_files: set[str], branch: str = "sentinel-auto-fix") -> None:
+    """
+    Commits modified files and creates a PR branch.
+    Strictly validates branch names to prevent command injection.
+    """
+    if not modified_files:
+        logger.info("No files were modified. Skipping PR generation.")
+        return
+
+    # Security: Strict Branch Name Validation (Anti Command Injection)
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", branch):
+        logger.error(f"Invalid branch name '{branch}'. Aborting PR generation to prevent command injection.")
+        return
+
+    try:
+        subprocess.run(['git', 'checkout', '-b', branch], check=True, capture_output=True, text=True)
+
+        # Add files safely
+        for file in modified_files:
+            subprocess.run(['git', 'add', file], check=True, capture_output=True, text=True)
+
+        subprocess.run(['git', 'commit', '-m', 'Security Fixes applied by Pipeline Sentinel'], check=True, capture_output=True, text=True)
+        subprocess.run(['git', 'push', '-u', 'origin', branch], check=True, capture_output=True, text=True)
+        logger.info(f"✅ Successfully pushed automated fixes to branch: {branch}")
+
     except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to create PR: {e}")
+        logger.error(f"Git operation failed during PR generation:\n{e.stderr}")
+    except FileNotFoundError:
+        logger.error("Git executable not found. Ensure git is installed.")

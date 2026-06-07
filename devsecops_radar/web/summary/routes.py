@@ -7,7 +7,7 @@ summary_bp = Blueprint('summary', __name__)
 
 AI_SUMMARY_FILE = os.environ.get('AI_SUMMARY_FILE', 'findings_ai_summary.json')
 
-@summary_bp.route('/api/summary')
+@summary_bp.route('/summary')
 def api_summary():
     if os.path.exists(AI_SUMMARY_FILE):
         with open(AI_SUMMARY_FILE) as f:

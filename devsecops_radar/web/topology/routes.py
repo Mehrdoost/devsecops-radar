@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify
 
 topology_bp = Blueprint('topology', __name__)
 
-@topology_bp.route('/api/topology')
+@topology_bp.route('/topology')
 def api_topology():
     topo_file = os.environ.get("TOPOLOGY_FILE", "topology.json")
     if os.path.exists(topo_file):

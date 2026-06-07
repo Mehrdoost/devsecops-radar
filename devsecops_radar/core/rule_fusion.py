@@ -1,288 +1,179 @@
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from loguru import logger
+from pydantic import BaseModel, Field, ValidationError
 
 
-class RuleFusion:
+# --- Strict Schemas for Input Validation ---
+class CustomRuleSchema(BaseModel):
+    """Pydantic model to enforce strict validation on custom JSON rules."""
+    id: str = Field(..., description="Unique identifier for the rule")
+    tool: str = Field(default="Custom Rule", description="Name of the scanning tool")
+    target: str = Field(..., description="File path or target affected")
+    severity: str = Field(..., description="Risk severity: CRITICAL, HIGH, MEDIUM, LOW")
+    title: str = Field(..., description="Short title of the vulnerability")
+    description: str = Field(default="", description="Detailed explanation")
+
+
+class RuleFusionEngine:
     """
-    A hybrid rule engine that loads custom rules from local directories
-    and can optionally pull community-curated rules from a git repository.
-    Also supports policy-as-code evaluation and OPA Rego policies.
+    Engine responsible for aggregating, validating, and merging custom security rules.
+    It does NOT parse Trivy or Semgrep outputs (that is the Adapters' job).
     """
 
-    def __init__(
-        self,
-        local_rules_path: str = None,
-        community_repo: str = None,
-    ):
-        self.local_rules_path = (
-            Path(local_rules_path) if local_rules_path else None
-        )
-        self.community_repo = community_repo or os.environ.get(
-            "COMMUNITY_RULES_REPO",
-            "https://github.com/Mehrdoost/devsecops-radar-rules.git"
-        )
+    def __init__(self, rules_dir: str = "custom_rules", max_file_size_mb: int = 10) -> None:
+        self.rules_dir = Path(rules_dir).resolve()
+        self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
         self.findings: list[dict[str, Any]] = []
 
-    # ── public API ──────────────────────────────────────────────
+        # Ensure rules directory exists securely
+        if not self.rules_dir.exists():
+            self.rules_dir.mkdir(parents=True, exist_ok=True)
+
+    def _is_safe_path(self, target_path: Path) -> bool:
+        """Prevent Path Traversal and Symlink attacks."""
+        try:
+            resolved_target = target_path.resolve(strict=False)
+            return resolved_target.is_relative_to(self.rules_dir)
+        except Exception as e:
+            logger.error(f"Path resolution error: {e}")
+            return False
+
+    def update_community_rules(self) -> None:
+        """
+        Securely clones community rules from a whitelisted GitHub repository.
+        Prevents SSRF and Command Injection.
+        """
+        repo_url = os.environ.get("COMMUNITY_RULES_REPO", "")
+        if not repo_url:
+            logger.info("No community repository configured. Skipping update.")
+            return
+
+        # 1. URL Validation (SSRF Protection)
+        parsed_url = urlparse(repo_url)
+        if parsed_url.scheme != "https" or parsed_url.netloc != "github.com":
+            logger.error("Security Error: Community repo must be a valid https://github.com URL.")
+            return
+
+        # 2. Path Validation (Ensure no dangerous characters)
+        if not repo_url.endswith(".git") or ";" in repo_url or " " in repo_url:
+            logger.error(f"Security Error: Invalid characters in repo URL: {repo_url}")
+            return
+
+        target_dir = self.rules_dir / "community"
+
+        # Safe Cloning using subprocess with strict arguments
+        try:
+            if target_dir.exists():
+                logger.info("Updating existing community rules...")
+                subprocess.run(["git", "-C", str(target_dir), "pull", "origin", "main"],
+                               check=True, capture_output=True, timeout=30)
+            else:
+                logger.info(f"Cloning community rules from {repo_url}...")
+                subprocess.run(["git", "clone", "--depth", "1", repo_url, str(target_dir)],
+                               check=True, capture_output=True, timeout=60)
+        except subprocess.TimeoutExpired:
+            logger.error("Git operation timed out.")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Git operation failed: {e.stderr.decode('utf-8', errors='ignore')}")
+        except Exception as e:
+            logger.error(f"Unexpected error during community rules update: {e}")
+
+    def _load_and_validate_json(self, file_path: Path) -> None:
+        """Reads a single JSON file with size limits and strict schema validation."""
+        if not file_path.is_file():
+            return
+
+        # DoS Protection: Check file size before reading
+        if file_path.stat().st_size > self.max_file_size_bytes:
+            logger.warning(f"File {file_path.name} exceeds size limit. Skipping.")
+            return
+
+        try:
+            with open(file_path, encoding='utf-8') as f:
+                data = json.load(f)
+
+            # Normalize to list
+            if isinstance(data, dict):
+                data = data.get("findings", data.get("results", [data]))
+
+            if not isinstance(data, list):
+                logger.warning(f"Invalid JSON structure in {file_path.name}: Expected a list.")
+                return
+
+            valid_count = 0
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    # Strict validation using Pydantic
+                    valid_rule = CustomRuleSchema(**item)
+                    self.findings.append(valid_rule.model_dump())
+                    valid_count += 1
+                except ValidationError as e:
+                    logger.debug(f"Skipped invalid rule in {file_path.name}: {e.errors()[0]['msg']}")
+
+            if valid_count > 0:
+                logger.info(f"Loaded {valid_count} valid custom rules from {file_path.name}")
+
+        except json.JSONDecodeError:
+            logger.error(f"Malformed JSON in {file_path.name}. Skipping.")
+        except Exception as e:
+            logger.error(f"Error processing {file_path.name}: {e}")
 
     def load_all_rules(self) -> list[dict[str, Any]]:
-        if self.local_rules_path and self.local_rules_path.exists():
-            self._load_from_directory(self.local_rules_path)
+        """Safely iterates through the rules directory and loads JSON findings."""
+        if not self.rules_dir.exists():
+            return self.findings
 
-        community_dir = Path.home() / ".devsecops-radar" / "community-rules"
-        if community_dir.exists():
-            self._load_from_directory(community_dir)
+        # Limit total files to prevent DoS via directory traversing
+        file_count = 0
+        for json_file in self.rules_dir.rglob("*.json"):
+            if file_count > 1000:
+                logger.warning("File limit exceeded (1000). Stopping rule loading to prevent memory exhaustion.")
+                break
+
+            if self._is_safe_path(json_file):
+                self._load_and_validate_json(json_file)
+                file_count += 1
+            else:
+                logger.warning(f"Skipping unsafe path: {json_file}")
 
         return self.findings
 
-    def update_community_rules(self) -> None:
-        """Clone or pull the latest community rules repository."""
-        repo = self.community_repo
-        # Validate the repository URL
-        if not re.match(r'^https://github\.com/[\w.-]+/[\w.-]+\.git$', repo):
-            logger.error(f"Invalid community rules repository URL: {repo}")
-            return
+    def evaluate_policy(self, policy_file: str) -> bool:
+        """
+        Evaluates findings against a simple JSON policy file securely.
+        (OPA Rego logic is moved to a dedicated sandbox or adapter).
+        """
+        policy_path = Path(policy_file)
+        if not self._is_safe_path(policy_path) or not policy_path.exists():
+            logger.warning(f"Policy file not found or unsafe: {policy_file}. Policy evaluation skipped.")
+            return True
 
-        target_dir = Path.home() / ".devsecops-radar" / "community-rules"
-        target_dir.parent.mkdir(parents=True, exist_ok=True)
-
-        if (target_dir / ".git").exists():
-            logger.info("Updating community rules...")
-            try:
-                subprocess.run(["git", "-C", str(target_dir), "pull"], check=True)
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to update community rules: {e}")
-        else:
-            logger.info("Downloading community rules for the first time...")
-            try:
-                subprocess.run(["git", "clone", repo, str(target_dir)], check=True)
-            except subprocess.CalledProcessError as e:
-                logger.error(f"Failed to clone community rules: {e}")
-                return
-
-        logger.info(f"Community rules updated at {target_dir}")
-        logger.info(
-            f"To use them, run: devsecops-radar --trivy ... --rules {target_dir}"
-        )
-
-    def generate_template(self, scanner_name: str) -> str:
-        template = {
-            "findings": [
-                {
-                    "tool": scanner_name,
-                    "target": "path/to/target_file",
-                    "id": "CUSTOM-2026-001",
-                    "severity": "MEDIUM",
-                    "title": "Short description of the finding",
-                    "description": (
-                        "Detailed description of the vulnerability "
-                        "and how to fix it."
-                    ),
-                    "line": 1,
-                }
-            ]
-        }
-        return json.dumps(template, indent=2)
-
-    # ── policy engine ─────────────────────────────────────────
-
-    @staticmethod
-    def evaluate_policy(
-        findings: list[dict[str, Any]], policy_file: str
-    ) -> tuple[bool, str]:
-        if not os.path.exists(policy_file):
-            return True, (
-                f"Policy file '{policy_file}' not found. "
-                "Skipping evaluation."
-            )
-
-        with open(policy_file) as f:
-            policy = json.load(f)
-
-        critical_count = sum(
-            1 for f in findings if f.get("severity") == "CRITICAL"
-        )
-        max_critical = policy.get("max_critical")
-        if max_critical is not None and critical_count > max_critical:
-            action = policy.get("on_violation", "fail")
-            msg = (
-                f"Policy violation: CRITICAL findings ({critical_count}) "
-                f"exceeds maximum allowed ({max_critical})."
-            )
-            if action == "fail":
-                return False, msg
-            else:
-                return True, f"WARNING: {msg}"
-
-        return True, "Policy checks passed."
-
-    @staticmethod
-    def evaluate_rego_policy(
-        findings: list[dict[str, Any]], rego_policy_file: str
-    ) -> tuple[bool, str]:
-        """Evaluate findings using an OPA Rego policy file."""
-        import shutil
-
-        if not shutil.which("opa"):
-            return True, "OPA not installed; skipping Rego evaluation."
         try:
-            result = subprocess.run(
-                ["opa", "eval", "--data", rego_policy_file, "--input", "/dev/stdin"],
-                input=json.dumps({"findings": findings}),
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode != 0:
-                return True, f"OPA evaluation error: {result.stderr}"
-            data = json.loads(result.stdout)
-            if data.get("result", [{}])[0].get("expressions", [{}])[0].get("value", False):
-                return False, "Rego policy violated."
-            return True, "Rego policy passed."
-        except Exception as e:
-            logger.error(f"OPA evaluation failed: {e}")
-            return True, f"OPA evaluation failed: {e}"
+            with open(policy_path, encoding='utf-8') as f:
+                policy = json.load(f)
 
-    # ── internal helpers ────────────────────────────────────────
-
-    def _load_from_directory(self, directory: Path) -> None:
-        for json_file in sorted(directory.rglob("*.json")):
-            try:
-                with open(json_file, encoding="utf-8") as f:
-                    data = json.load(f)
-            except json.JSONDecodeError:
-                logger.warning(f"Skipping invalid JSON: {json_file.name}")
-                continue
-            except Exception as e:
-                logger.error(f"Error reading {json_file.name}: {e}")
-                continue
-
-            if not self._validate_json(data, json_file.name):
-                continue
-
-            parsed = self._parse_scanner_output(data, json_file.name)
-            self.findings.extend(parsed)
-            logger.info(f"Loaded {len(parsed)} findings from {json_file.name}")
-
-    def _validate_json(self, data: Any, filename: str) -> bool:
-        if isinstance(data, list):
-            if len(data) == 0:
-                logger.warning(f"{filename}: empty list, skipping")
-                return False
-            for item in data:
-                if isinstance(item, dict) and self._is_finding(item):
-                    return True
-            logger.warning(f"{filename}: list items do not look like findings, skipping")
-            return False
-        if isinstance(data, dict):
-            known_keys = {"Results", "results", "findings"}
-            if any(k in data for k in known_keys):
+            max_critical = policy.get("max_critical")
+            if max_critical is None:
+                logger.warning("Policy file missing 'max_critical' threshold. Passing by default.")
                 return True
-            logger.warning(f"{filename}: unrecognised JSON structure, skipping")
+
+            critical_count = sum(1 for f in self.findings if f.get("severity", "").upper() == "CRITICAL")
+
+            if critical_count > max_critical:
+                logger.error(f"Policy Violation! Found {critical_count} CRITICAL issues (Max allowed: {max_critical}).")
+                return False
+
+            logger.info("Security policy checks passed.")
+            return True
+
+        except Exception as e:
+            logger.error(f"Policy evaluation failed: {e}")
             return False
-        logger.warning(f"{filename}: unexpected JSON type, skipping")
-        return False
-
-    def _parse_scanner_output(
-        self, data: Any, filename: str
-    ) -> list[dict[str, Any]]:
-        findings: list[dict[str, Any]] = []
-
-        if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and self._is_finding(item):
-                    findings.append(self._normalize(item, filename))
-            return findings
-
-        if not isinstance(data, dict):
-            return findings
-
-        for result in data.get("Results", []):
-            for vuln in result.get("Vulnerabilities", []):
-                findings.append(
-                    {
-                        "tool": "Trivy",
-                        "target": result.get("Target", filename),
-                        "id": vuln.get("VulnerabilityID", ""),
-                        "severity": vuln.get("Severity", "UNKNOWN").upper(),
-                        "title": vuln.get("Title", ""),
-                        "description": vuln.get("Description", ""),
-                        "package": vuln.get("PkgName", ""),
-                        "installed_version": vuln.get("InstalledVersion", ""),
-                        "fixed_version": vuln.get("FixedVersion", ""),
-                    }
-                )
-
-        for result in data.get("results", []):
-            findings.append(
-                {
-                    "tool": "Semgrep",
-                    "target": result.get("path", filename),
-                    "id": result.get("check_id", ""),
-                    "severity": (
-                        result.get("extra", {}).get("severity", "WARNING")
-                    ).upper(),
-                    "title": result.get("check_id", ""),
-                    "description": result.get("extra", {}).get("message", ""),
-                    "line": (result.get("start", {}) or {}).get("line", 0),
-                }
-            )
-
-        for item in data.get("findings", []):
-            if isinstance(item, dict):
-                findings.append(self._normalize(item, filename))
-
-        return findings
-
-    def _is_finding(self, item: dict) -> bool:
-        return any(
-            k in item
-            for k in (
-                "severity",
-                "Severity",
-                "rule_id",
-                "check_id",
-                "VulnerabilityID",
-            )
-        )
-
-    def _normalize(self, raw: dict, filename: str) -> dict[str, Any]:
-        return {
-            "tool": raw.get("tool", "Custom Rule"),
-            "target": (
-                raw.get("target")
-                or raw.get("path")
-                or (raw.get("location") or {}).get("file")
-                or filename
-            ),
-            "id": (
-                raw.get("id")
-                or raw.get("rule_id")
-                or raw.get("check_id")
-                or raw.get("VulnerabilityID")
-                or "CUSTOM-001"
-            ),
-            "severity": (
-                raw.get("severity") or raw.get("Severity") or "MEDIUM"
-            ).upper(),
-            "title": (
-                raw.get("title")
-                or raw.get("message")
-                or raw.get("Title")
-                or "Custom Rule Finding"
-            ),
-            "description": (
-                raw.get("description")
-                or raw.get("Description")
-                or (raw.get("extra") or {}).get("message", "")
-            ),
-            "line": (
-                raw.get("line")
-                or (raw.get("location") or {}).get("line")
-                or (raw.get("start") or {}).get("line")
-            ),
-        }
