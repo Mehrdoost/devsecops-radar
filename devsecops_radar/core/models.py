@@ -84,21 +84,19 @@ class Finding(Base):
 
 
 # ==============================
-# Unified Database Engine (single source of truth)
+# Unified Database Engine
 # ==============================
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///pipeline_sentinel.db")
 
-engine = create_engine(
-    DB_URL,
-    connect_args={"check_same_thread": False} if "sqlite" in DB_URL else {},
-    pool_pre_ping=True,
-    pool_size=5 if "sqlite" not in DB_URL else 0,
-    max_overflow=10,
-    pool_recycle=3600,
-)
+engine_kwargs = {
+    "pool_pre_ping": True,
+    "pool_recycle": 3600,
+}
 
-# WAL mode and foreign keys for SQLite
 if "sqlite" in DB_URL:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+    # WAL mode and foreign keys
+    engine = create_engine(DB_URL, **engine_kwargs)
 
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -106,6 +104,13 @@ if "sqlite" in DB_URL:
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA foreign_keys=ON;")
         cursor.close()
+else:
+    engine_kwargs.update({
+        "pool_size": 5,
+        "max_overflow": 10,
+        "pool_timeout": 30,
+    })
+    engine = create_engine(DB_URL, **engine_kwargs)
 
 
 SessionLocal = sessionmaker(bind=engine)
