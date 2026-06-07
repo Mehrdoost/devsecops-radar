@@ -543,7 +543,7 @@ mypy .
 
 如果您认可本项目的开源价值、或它实实在在地提升了您团队的流水线安全指数，欢迎通过加密货代通证赞助核心开源团队。
 
-**[🔗 捐赠 USDC (Polygon 链网络)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](donate-qr.png)</sub>
+**[🔗 捐赠 USDC (Polygon 链网络)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](docs/donate-qr.png)</sub>
 
 ---
 

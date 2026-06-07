@@ -544,7 +544,7 @@ mypy .
 
 Если вы цените вклад этого проекта в open-source или он помог защитить конвейеры сборки вашей команды, вы можете выразить благодарность разработчикам, отправив криптовалютный перевод:
 
-**[🔗 Пожертвовать USDC (в сети Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](donate-qr.png)</sub>
+**[🔗 Пожертвовать USDC (в сети Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](docs/donate-qr.png)</sub>
 
 ---
 

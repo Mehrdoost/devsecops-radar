@@ -543,7 +543,7 @@ mypy .
 Sponsor this project with a crypto donation.  
 All funds go directly to the developer.
 
-**[🔗 Donate USDC (Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](donate-qr.png)</sub>
+**[🔗 Donate USDC (Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](docs/donate-qr.png)</sub>
 
 ---
 

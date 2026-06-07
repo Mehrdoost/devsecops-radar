@@ -544,7 +544,7 @@ mypy .
 
 إذا كنت تؤمن بالقيمة المضافة لهذا المشروع المفتوح المصدر، أو ساهم بشكل فعال في حماية خطوط بناء برمجيات فريقك، يمكنك التعبير عن تقديرك ودعمك المالي لفريق التطوير عبر إرسال مساهمات مشفرة:
 
-**[🔗 التبرع بعملة USDC (عبر شبكة Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](donate-qr.png)</sub>
+**[🔗 التبرع بعملة USDC (عبر شبكة Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub>![QR](docs/donate-qr.png)</sub>
 
 ---
 

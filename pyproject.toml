@@ -74,7 +74,6 @@ packages = [
     "devsecops_radar.web.topology",
     "devsecops_radar.web.summary",
     "devsecops_radar.web.sentry",
-    # "devsecops_radar.web.simulation",  # <-- REMOVED: not present in project
     "devsecops_radar.scanners",
     "devsecops_radar.plugins",
 ]
