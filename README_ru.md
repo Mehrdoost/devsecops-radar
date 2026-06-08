@@ -19,9 +19,7 @@
 
 *Круговая диаграмма критичности, график трендов, граф путей атак (кликабельные узлы), просмотр топологии, резюме для руководства и панель симуляции атак — полностью автономно (offline).*
 
-<video src="docs/demo_small.mp4" muted autoplay loop playsinline width="100%" poster="docs/demo_thumb.png">
-  Your browser does not support the video tag.
-</video>
+![Pipeline Sentinel Dashboard](docs/demo.gif)
 
 </div>
 

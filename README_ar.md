@@ -19,9 +19,7 @@
 
 *مخطط دائري لشدة الثغرات، رسم بياني لخط الاتجاه، مخطط مسار الهجوم (عقد قابلة للنقر)، عرض الطوبولوجيا، ملخص تنفيذي، ولوحة محاكاة الهجوم — كل ذلك دون الحاجة للاتصال بالإنترنت تماماً.*
 
-<video src="docs/demo_small.mp4" muted autoplay loop playsinline width="100%" poster="docs/demo_thumb.png">
-  Your browser does not support the video tag.
-</video>
+![Pipeline Sentinel Dashboard](docs/demo.gif)
 
 </div>
 

@@ -19,9 +19,7 @@
 
 *严重性圆环图、趋势折线图、攻击路径图（可点击节点）、拓扑视图、高管摘要和攻击模拟面板 — 全面支持离线。*
 
-<video src="docs/demo_small.mp4" muted autoplay loop playsinline width="100%" poster="docs/demo_thumb.png">
-  Your browser does not support the video tag.
-</video>
+![Pipeline Sentinel Dashboard](docs/demo.gif)
 
 </div>
 
