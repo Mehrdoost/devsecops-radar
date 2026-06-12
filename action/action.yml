@@ -1,5 +1,5 @@
 name: 'Pipeline Sentinel CI/CD Scan'
-description: 'Aggregate security findings from Trivy, Semgrep, Poutine, and Zizmor'
+description: 'Aggregate security findings from Trivy, Semgrep, Poutine, Zizmor, and Gitleaks'
 author: 'Mehrdoost'
 branding:
   icon: 'shield'
@@ -22,6 +22,10 @@ inputs:
     description: 'Path to Zizmor JSON report'
     required: false
     default: ''
+  gitleaks_report:
+    description: 'Path to Gitleaks JSON report'
+    required: false
+    default: ''
   findings_file:
     description: 'Output filename for merged findings'
     required: false
@@ -34,19 +38,22 @@ outputs:
   high_count:
     description: 'Number of HIGH findings'
     value: ${{ steps.parse.outputs.high_count }}
+  total_count:
+    description: 'Total number of findings'
+    value: ${{ steps.parse.outputs.total_count }}
 
 runs:
   using: 'composite'
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v5
       with:
         python-version: '3.12'
 
-    - name: Install dependencies and project
+    - name: Install project (including the CLI)
       shell: bash
       run: |
-        pip install -e ${{ github.action_path }}/..
+        pip install -e "${{ github.action_path }}/.."
 
     - name: Merge findings
       shell: bash
@@ -56,10 +63,11 @@ runs:
           --semgrep "${{ inputs.semgrep_report }}" \
           --poutine "${{ inputs.poutine_report }}" \
           --zizmor "${{ inputs.zizmor_report }}" \
+          --gitleaks "${{ inputs.gitleaks_report }}" \
           --output "${{ inputs.findings_file }}"
 
-    - name: Generate summary
+    - name: Generate summary and outputs
       id: parse
       shell: bash
       run: |
-        python ${{ github.action_path }}/comment_on_pr.py "${{ inputs.findings_file }}"
+        python "${{ github.action_path }}/comment_on_pr.py" "${{ inputs.findings_file }}"

@@ -4,26 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devsecops-radar"
-version = "0.4.3"
+version = "0.4.4"
 description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
 readme = "README.md"
-license = "MIT"
+license = {text = "MIT"}
 authors = [
     {name = "Mehrdoost", email = "70381337+Mehrdoost@users.noreply.github.com"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
     "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
 ]
 dependencies = [
     "flask>=3.0",
     "flask-cors>=4.0",
     "waitress>=3.0",
     "psutil>=5.9",
-    "semgrep>=1.0",
     "tenacity>=8.0",
     "pyyaml>=6.0",
     "requests>=2.31",
@@ -36,7 +40,7 @@ dependencies = [
     "pyjwt>=2.8",
     "httpx>=0.27",
     "werkzeug>=3.0",
-    "python-dotenv>=1.0",   # <-- REQUIRED by settings.py (load_dotenv)
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -50,6 +54,13 @@ dev = [
     "pytest-mock>=3.10",
     "httpx>=0.24.0",
     "pre-commit>=3.5",
+    "bandit>=1.7",
+    "safety>=2.3",
+]
+# Optional: if users want to run Semgrep via CLI, they must install it separately
+# semgrep can be added here for optional install, but it's very large
+extra = [
+    "semgrep>=1.0",
 ]
 
 [project.urls]
@@ -92,11 +103,13 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
-line-length = 150
+line-length = 120                        # Reduced from 150 for readability
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "B", "C4"]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "S"]   # Added "S" for security checks
 
 [tool.ruff.format]
 quote-style = "double"
@@ -104,3 +117,7 @@ quote-style = "double"
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv"]
+skips = ["B101", "B311"]    # Exclude assert_used and random if needed

@@ -37,18 +37,24 @@ def get_gpu_status() -> bool:
     try:
         sys_os = platform.system()
         if sys_os in ["Windows", "Linux"]:
-            # Check for NVIDIA safely
-            result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                ['nvidia-smi'], capture_output=True, text=True, check=False
+            )
             return result.returncode == 0
         elif sys_os == "Darwin":
-            result = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                ['sysctl', '-n', 'machdep.cpu.brand_string'],
+                capture_output=True, text=True, check=False
+            )
             return 'apple' in result.stdout.lower()
     except Exception:
         pass
     return False
 
 
-def estimate_analysis(findings_count: int, model: str, backend: str, force_ai: bool = False) -> tuple[bool, float, int, str]:
+def estimate_analysis(
+    findings_count: int, model: str, backend: str, force_ai: bool = False
+) -> tuple[bool, float, int, str]:
     """Provides a safe hardware analysis and dynamic chunking strategy."""
     ram = get_system_ram_gb()
     has_gpu = get_gpu_status()
@@ -67,11 +73,17 @@ def estimate_analysis(findings_count: int, model: str, backend: str, force_ai: b
         base_time = 2.0 if has_gpu else 8.0
 
         if not has_gpu:
-            warnings.append("WARNING: No GPU detected. Local AI analysis will be slow. Consider using --llm-backend litellm.")
+            warnings.append(
+                "WARNING: No GPU detected. Local AI analysis will be slow. "
+                "Consider using --llm-backend litellm."
+            )
 
         if ram < 4.0:
             if not force_ai:
-                warnings.append("FATAL: System RAM < 4GB. Aborting local LLM to prevent system crash. Use --force-ai to override.")
+                warnings.append(
+                    "FATAL: System RAM < 4GB. Aborting local LLM to prevent "
+                    "system crash. Use --force-ai to override."
+                )
                 can_run = False
             else:
                 warnings.append("WARNING: Force AI active on low RAM. Risk of freezing.")
@@ -117,7 +129,9 @@ def discover_plugins() -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Pipeline Sentinel - Unified CI/CD Security Dashboard')
+    parser = argparse.ArgumentParser(
+        description='Pipeline Sentinel - Unified CI/CD Security Dashboard'
+    )
     # Inputs
     parser.add_argument('--trivy', type=str)
     parser.add_argument('--semgrep', type=str)
@@ -131,20 +145,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--output', type=str, default='findings.json')
     parser.add_argument('--analyze', action='store_true', help='Run AI analysis on findings')
     parser.add_argument('--force-ai', action='store_true', help='Force AI execution bypassing limits')
-    parser.add_argument('--llm-backend', type=str, default='ollama', choices=['ollama', 'litellm'])
+    parser.add_argument(
+        '--llm-backend', type=str, default='ollama', choices=['ollama', 'litellm']
+    )
     parser.add_argument('--llm-model', type=str, default='llama3.2')
 
     # Policy and Remediation
     parser.add_argument('--policy', type=str, help='Path to strict JSON policy limits')
     parser.add_argument('--fix', action='store_true', help='Auto-apply AI suggested patches')
-    parser.add_argument('--review', action='store_true', help='Interactively review each patch before applying')
+    parser.add_argument(
+        '--review', action='store_true',
+        help='Interactively review each patch before applying'
+    )
     parser.add_argument('--report', type=str, help='Generate PDF report to specified path')
     parser.add_argument('--wizard', action='store_true', help='Safe interactive first-time setup')
 
     return parser.parse_args()
 
 
-async def run_scanner_async(name: str, target: str, adapter: ScannerAdapter) -> list[dict[str, Any]]:
+async def run_scanner_async(
+    name: str, target: str, adapter: ScannerAdapter
+) -> list[dict[str, Any]]:
     try:
         if Path(target).is_file():
             logger.info(f"Parsing {name} report: {target}")
@@ -152,14 +173,17 @@ async def run_scanner_async(name: str, target: str, adapter: ScannerAdapter) -> 
         else:
             logger.info(f"Running {name} scan on: {target}")
             validated = await asyncio.to_thread(adapter.run, target)
-        # Using model_dump() if Pydantic v2, else dict()
-        return [v.model_dump() if hasattr(v, 'model_dump') else v.dict() for v in validated]
+        return [
+            v.model_dump() if hasattr(v, 'model_dump') else v.dict() for v in validated
+        ]
     except Exception as e:
         logger.error(f"{name} plugin execution failed: {e}")
         return []
 
 
-async def run_all_scanners(args: argparse.Namespace, plugins: dict[str, Any]) -> list[dict[str, Any]]:
+async def run_all_scanners(
+    args: argparse.Namespace, plugins: dict[str, Any]
+) -> list[dict[str, Any]]:
     scanner_targets = {
         'trivy': args.trivy,
         'semgrep': args.semgrep,
@@ -199,11 +223,12 @@ def sort_findings_by_risk(findings: list[dict[str, Any]]) -> list[dict[str, Any]
     )
 
 
-async def execute_ai_analysis(args: argparse.Namespace, findings: list[dict[str, Any]], topology: dict[str, Any]) -> dict[str, Any]:
+async def execute_ai_analysis(
+    args: argparse.Namespace, findings: list[dict[str, Any]], topology: dict[str, Any]
+) -> dict[str, Any]:
     if not args.analyze or not findings:
         return {}
 
-    # Prioritize findings before truncating (Fixes the critical LLM blindspot)
     sorted_findings = sort_findings_by_risk(findings)
     base_max = int(os.environ.get("ANALYZER_MAX_FINDINGS", "100"))
     selected_findings = sorted_findings[:base_max]
@@ -217,7 +242,10 @@ async def execute_ai_analysis(args: argparse.Namespace, findings: list[dict[str,
 
     if not can_run:
         fallback = {
-            "executive_summary": "Analysis aborted due to low system resources. Use --force-ai to bypass.",
+            "executive_summary": (
+                "Analysis aborted due to low system resources. "
+                "Use --force-ai to bypass."
+            ),
             "risk_score": 0.0,
             "hardware_profile": hw_type
         }
@@ -230,7 +258,6 @@ async def execute_ai_analysis(args: argparse.Namespace, findings: list[dict[str,
 
     try:
         analyzer = get_analyzer(backend=args.llm_backend, model=args.llm_model)
-        # Assuming the analyzer's run method is asynchronous
         analysis = await analyzer.run(selected_findings, topology, chunk_size=chunk_size)
     except Exception as e:
         logger.error(f"AI Engine crashed during analysis: {e}")
@@ -247,8 +274,17 @@ async def execute_ai_analysis(args: argparse.Namespace, findings: list[dict[str,
     return analysis
 
 
-def interactive_remediation(findings: list[dict[str, Any]], ai_summary: dict[str, Any]) -> None:
-    """Safe, step-by-step interactive patch review."""
+def interactive_remediation(
+    findings: list[dict[str, Any]], ai_summary: dict[str, Any]
+) -> None:
+    """Safe, step-by-step interactive patch review (only if TTY is available)."""
+    if not sys.stdin.isatty():
+        logger.warning(
+            "No TTY detected; interactive review disabled. "
+            "Use --fix without --review for non-interactive auto-fix."
+        )
+        return
+
     remediations = ai_summary.get('top_remediations', [])
     if not remediations:
         logger.info("No AI remediations available to apply.")
@@ -269,7 +305,12 @@ def interactive_remediation(findings: list[dict[str, Any]], ai_summary: dict[str
         logger.info(f"\n--- Proposed Patch for {fid} ---")
         logger.info(patch)
 
-        choice = input("Apply this patch securely? [y/N/q(uit)]: ").strip().lower()
+        try:
+            choice = input("Apply this patch securely? [y/N/q(uit)]: ").strip().lower()
+        except EOFError:
+            logger.warning("Input stream closed; aborting interactive review.")
+            break
+
         if choice == 'q':
             logger.warning("Aborting interactive review.")
             break
@@ -280,7 +321,6 @@ def interactive_remediation(findings: list[dict[str, Any]], ai_summary: dict[str
             logger.info(f"Patch {fid} rejected.")
 
     if approved_fixes:
-        # Create a tailored summary containing only approved fixes
         tailored_summary = {"top_remediations": approved_fixes}
         modified_files = auto_fix(findings, tailored_summary)
         if modified_files:
@@ -319,16 +359,21 @@ async def run_app() -> None:
         return
 
     logger.remove()
-    logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
+    logger.add(
+        sys.stderr,
+        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}"
+    )
 
     # 1. Gather Findings from Plugins and Custom Rules
     plugins = discover_plugins()
     findings = await run_all_scanners(args, plugins)
 
+    # Load custom rules if provided, and reuse the engine instance
+    rule_engine = None
     if args.rules:
-        engine = RuleFusionEngine(rules_dir=args.rules)
-        engine.load_all_rules()
-        findings.extend(engine.findings)
+        rule_engine = RuleFusionEngine(rules_dir=args.rules)
+        rule_engine.load_all_rules()
+        findings.extend(rule_engine.findings)
 
     if not findings:
         logger.info("No findings were discovered or loaded. Exiting gracefully.")
@@ -348,15 +393,17 @@ async def run_app() -> None:
     for f in findings:
         f['dynamic_risk_score'] = compute_dynamic_risk_score(f, topology)
 
-    # 3. Policy Evaluation
-    if args.policy and args.rules:
-        engine = RuleFusionEngine(rules_dir=args.rules)
-        engine.findings = findings
-        if not engine.evaluate_policy(args.policy):
+    # 3. Policy Evaluation (independent of custom rules)
+    if args.policy:
+        # Use existing engine if available, otherwise create a temporary one
+        if rule_engine is None:
+            rule_engine = RuleFusionEngine(rules_dir=".")  # fallback to CWD
+        rule_engine.findings = findings
+        if not rule_engine.evaluate_policy(args.policy):
             logger.error("Build failed due to strict policy violations.")
             sys.exit(1)
 
-    # 4. Save Raw Results
+    # 4. Save Raw Results (after policy check)
     try:
         with open(args.output, 'w', encoding='utf-8') as f:
             json.dump(findings, f, indent=2)
@@ -387,7 +434,6 @@ async def run_app() -> None:
 def main() -> None:
     """Entry point."""
     try:
-        # One unified event loop for the entire execution
         asyncio.run(run_app())
     except KeyboardInterrupt:
         logger.warning("Execution interrupted by user.")

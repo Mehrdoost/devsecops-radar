@@ -2,14 +2,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from loguru import logger
-from sqlalchemy import text
 from sqlalchemy.orm import scoped_session
 
 from devsecops_radar.core.models import (
     Finding,
     Scan,
     SessionLocal,
-    engine,
 )
 from devsecops_radar.core.models import (
     init_db as models_init_db,
@@ -18,20 +16,20 @@ from devsecops_radar.core.models import (
 # Scoped session for thread‑safe web requests
 db_session = scoped_session(SessionLocal)
 
+# Track whether tables have already been created (idempotent but avoid repeated effort)
+_tables_initialized = False
+
 
 def init_db() -> None:
     """
     Ensure all tables exist. Safe to call multiple times.
-    Also enables foreign keys on the current connection.
+    Also enforces foreign keys on the current connection (redundant with event listener,
+    but kept for explicit certainty).
     """
-    models_init_db()  # uses the same engine now
-    try:
-        session = db_session()
-        if "sqlite" in str(engine.url):
-            session.execute(text("PRAGMA foreign_keys=ON"))
-        session.close()
-    except Exception as e:
-        logger.warning(f"Could not enforce foreign keys: {e}")
+    global _tables_initialized
+    if not _tables_initialized:
+        models_init_db()
+        _tables_initialized = True
     logger.info("Database tables and constraints verified.")
 
 
@@ -79,55 +77,48 @@ def save_scan(
         session.rollback()
         logger.error(f"Failed to save scan: {e}")
         raise
-    finally:
-        session.close()
+    # Do NOT close the scoped session manually; it will be cleaned up by the registry.
 
 
 def get_all_scans() -> list[dict[str, Any]]:
     session = db_session()
-    try:
-        scans = session.query(Scan).order_by(Scan.timestamp.desc()).all()
-        return [
-            {
-                "scan_id": s.id,
-                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
-                "risk_score": s.risk_score,
-                "hardware_profile": s.hardware_profile,
-            }
-            for s in scans
-        ]
-    finally:
-        session.close()
+    scans = session.query(Scan).order_by(Scan.timestamp.desc()).all()
+    return [
+        {
+            "scan_id": s.id,
+            "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+            "risk_score": s.risk_score,
+            "hardware_profile": s.hardware_profile,
+        }
+        for s in scans
+    ]
 
 
 def get_scan_by_id(scan_id: int) -> dict[str, Any] | None:
     session = db_session()
-    try:
-        scan = session.query(Scan).filter(Scan.id == scan_id).first()
-        if not scan:
-            return None
-        findings_list = [
-            {
-                "finding_db_id": f.id,
-                "tool": f.tool,
-                "id": f.rule_id,
-                "severity": f.severity,
-                "target": f.target,
-                "title": f.title,
-                "description": f.description,
-            }
-            for f in scan.findings
-        ]
-        return {
-            "scan_id": scan.id,
-            "timestamp": scan.timestamp.isoformat() if scan.timestamp else None,
-            "risk_score": scan.risk_score,
-            "hardware_profile": scan.hardware_profile,
-            "execution_time": scan.execution_time,
-            "findings": findings_list,
+    scan = session.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        return None
+    findings_list = [
+        {
+            "finding_db_id": f.id,
+            "tool": f.tool,
+            "id": f.rule_id,
+            "severity": f.severity,
+            "target": f.target,
+            "title": f.title,
+            "description": f.description,
         }
-    finally:
-        session.close()
+        for f in scan.findings
+    ]
+    return {
+        "scan_id": scan.id,
+        "timestamp": scan.timestamp.isoformat() if scan.timestamp else None,
+        "risk_score": scan.risk_score,
+        "hardware_profile": scan.hardware_profile,
+        "execution_time": scan.execution_time,
+        "findings": findings_list,
+    }
 
 
 def get_findings_paginated(page: int = 1, per_page: int = 50) -> dict[str, Any]:
@@ -135,33 +126,30 @@ def get_findings_paginated(page: int = 1, per_page: int = 50) -> dict[str, Any]:
     page = max(1, page)
 
     session = db_session()
-    try:
-        total = session.query(Finding).count()
-        findings = (
-            session.query(Finding)
-            .order_by(Finding.id.desc())
-            .offset((page - 1) * per_page)
-            .limit(per_page)
-            .all()
-        )
-        return {
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "data": [
-                {
-                    "scan_id": f.scan_id,
-                    "tool": f.tool,
-                    "id": f.rule_id,
-                    "severity": f.severity,
-                    "target": f.target,
-                    "title": f.title,
-                }
-                for f in findings
-            ],
-        }
-    finally:
-        session.close()
+    total = session.query(Finding).count()
+    findings = (
+        session.query(Finding)
+        .order_by(Finding.id.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "data": [
+            {
+                "scan_id": f.scan_id,
+                "tool": f.tool,
+                "id": f.rule_id,
+                "severity": f.severity,
+                "target": f.target,
+                "title": f.title,
+            }
+            for f in findings
+        ],
+    }
 
 
 def compare_scans(scan_id1: int, scan_id2: int) -> dict[str, Any]:
@@ -172,8 +160,8 @@ def compare_scans(scan_id1: int, scan_id2: int) -> dict[str, Any]:
 
     def _make_hash(finding: dict) -> str:
         return (
-            f"{finding.get('tool')}|{finding.get('id')}|"
-            f"{finding.get('target')}|{finding.get('severity')}"
+            f"{finding.get('tool','')}|{finding.get('id','')}|"
+            f"{finding.get('target','')}|{finding.get('severity','')}"
         )
 
     hashes1 = {_make_hash(f): f for f in s1.get("findings", [])}

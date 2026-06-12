@@ -36,7 +36,9 @@ def redact_sensitive(text: str, patterns: list[str] | None = None) -> str:
         patterns = [
             r'(?i)(password|secret|token|key)\s*[:=]\s*\S+',
             r'ghp_[a-zA-Z0-9]{36}',
-            r'eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+'
+            r'eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+',
+            r'glpat-[a-zA-Z0-9\-_]+',           # GitLab personal access tokens
+            r'AKIA[0-9A-Z]{16}',                 # AWS Access Key IDs (mask)
         ]
     for pat in patterns:
         text = re.sub(pat, '***REDACTED***', text)
@@ -91,7 +93,7 @@ def generate_pdf_report(
     )
 
     elements.append(Paragraph("Pipeline Sentinel — Security Report", title_style))
-    # Use UTC aware timestamp
+    # Use timezone-aware UTC timestamp
     generated_time = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     elements.append(Paragraph(f"Generated: {generated_time}", styles["Normal"]))
     elements.append(Spacer(1, 20))
@@ -126,19 +128,29 @@ def generate_pdf_report(
         table_data.append(header)
 
         for f in findings[:50]:
+            # Redact all text fields that could contain secrets
+            tool = f.get("tool", "")
+            fid = f.get("id", "")
             title = f.get("title", "")
-            if redact:
-                title = redact_sensitive(title)
             target = f.get("target", "")
+            description = f.get("description", "")
+
             if redact:
+                tool = redact_sensitive(tool)
+                fid = redact_sensitive(fid)
+                title = redact_sensitive(title)
                 target = redact_sensitive(target)
+                description = redact_sensitive(description)
 
             row = [
-                Paragraph(f.get("tool", ""), cell_style),
-                Paragraph(f.get("id", ""), cell_style),
+                Paragraph(tool, cell_style),
+                Paragraph(fid, cell_style),
                 Paragraph(f.get("severity", ""), cell_style),
                 Paragraph(target, cell_style),
-                Paragraph(title[:100], cell_style),
+                Paragraph(
+                    (title[:100] + "..." if len(title) > 100 else title),
+                    cell_style,
+                ),
             ]
             table_data.append(row)
 
@@ -171,5 +183,9 @@ def generate_pdf_report(
     else:
         elements.append(Paragraph("No findings.", styles["Normal"]))
 
-    doc.build(elements)
-    logger.success(f"PDF report saved to {safe_path}")
+    try:
+        doc.build(elements)
+        logger.success(f"PDF report saved to {safe_path}")
+    except Exception as e:
+        logger.error(f"Failed to build PDF report: {e}")
+        raise RuntimeError("PDF generation failed") from e

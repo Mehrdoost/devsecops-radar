@@ -3,7 +3,6 @@ from typing import Any
 from loguru import logger
 from sqlalchemy.exc import SQLAlchemyError
 
-# Import the secure scoped_session we built in database.py
 from devsecops_radar.core.database import db_session
 from devsecops_radar.core.models import Finding
 
@@ -32,10 +31,16 @@ def rag_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
         # 2. Database Query
         # Note: ILIKE with leading '%' causes Full Table Scans.
         # Fine for SQLite/MVP, but needs Full-Text Search (FTS) in enterprise Postgres.
-        results = session.query(Finding).filter(
-            (Finding.title.ilike(f'%{sanitized_query}%')) |
-            (Finding.description.ilike(f'%{sanitized_query}%'))
-        ).order_by(Finding.id.desc()).limit(safe_limit).all()
+        results = (
+            session.query(Finding)
+            .filter(
+                (Finding.title.ilike(f"%{sanitized_query}%"))
+                | (Finding.description.ilike(f"%{sanitized_query}%"))
+            )
+            .order_by(Finding.id.desc())
+            .limit(safe_limit)
+            .all()
+        )
 
         # 3. Data Mapping (Aligned with the new model schema)
         findings = [
@@ -46,12 +51,15 @@ def rag_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
                 "target": f.target,
                 "title": f.title,
                 "description": f.description,
-                "line": getattr(f, 'line', None) # Safely get line if it exists
+                "line": getattr(f, "line", None),  # Safely get line if it exists
             }
             for f in results
         ]
 
-        logger.info(f"RAG Search found {len(findings)} results for query: '{sanitized_query}'")
+        logger.info(
+            f"RAG Search found {len(findings)} results for query: "
+            f"'{sanitized_query}'"
+        )
         return findings
 
     except SQLAlchemyError as e:
@@ -60,6 +68,5 @@ def rag_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
     except Exception as e:
         logger.error(f"Unexpected error during RAG search: {e}")
         return []
-    finally:
-        # 4. GUARANTEED Cleanup (Fixes the Connection Leak vulnerability)
-        session.close()
+    # Session cleanup is handled centrally by app.teardown_appcontext or
+    # by the scoped session registry; do NOT close it here.

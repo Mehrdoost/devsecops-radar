@@ -17,20 +17,43 @@ class TrivyScanner(BaseScanner):
 
     def _validate_image_target(self, target: str) -> str:
         """
-        Validates a container image tag (e.g., 'nginx:latest', 'repo/image:tag').
+        Validates a container image reference (e.g., 'nginx:latest',
+        'repo/image:tag', 'ubuntu@sha256:...').
         Prevents Argument Injection and restricts to safe characters.
         """
         target = target.strip()
 
         # Prevent Argument Injection (e.g., passing "--help" or other flags)
         if target.startswith("-"):
-            logger.error("Security Violation: Target cannot start with a hyphen.")
+            logger.error(
+                "Security Violation: Target cannot start with a hyphen."
+            )
             return ""
 
-        # Allowed characters in container registries: alphanumeric, ., _, -, /, :
-        if not re.match(r"^[a-zA-Z0-9_.:/-]+$", target):
-            logger.error("Security Violation: Target contains invalid characters for a container image.")
+        # Allowed: alphanumeric, ., _, -, /, :, @
+        # '@' is needed for image digests (e.g. ubuntu@sha256:abc...)
+        if not re.match(r"^[a-zA-Z0-9_.:/@-]+$", target):
+            logger.error(
+                "Security Violation: Target contains invalid characters "
+                "for a container image reference."
+            )
             return ""
+
+        # Ensure '@' only appears at most once (digest separator)
+        if target.count("@") > 1:
+            logger.error(
+                "Security Violation: Target contains multiple '@' characters."
+            )
+            return ""
+
+        # If '@' is present, it must separate image name from digest
+        if "@" in target:
+            parts = target.split("@")
+            if len(parts) != 2 or not parts[0] or not parts[1]:
+                logger.error(
+                    "Security Violation: Invalid digest format in target."
+                )
+                return ""
 
         return target
 
@@ -40,23 +63,33 @@ class TrivyScanner(BaseScanner):
         if not safe_target:
             return []
 
-        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(
+            suffix=".json", delete=False
+        ) as tmp:
             outfile = Path(tmp.name)
 
         try:
             # 2. Secure command execution without shell=True
-            # Added --no-progress to prevent CI/CD log pollution
             cmd = [
                 self.binary_path,
-                'image',
-                '--format', 'json',
-                '--output', str(outfile),
-                '--no-progress',
-                safe_target
+                "image",
+                "--format", "json",
+                "--output", str(outfile),
+                "--no-progress",
+                safe_target,
             ]
 
             # 3. Timeouts and execution handled safely by BaseScanner
-            self._safe_run_command(cmd)
+            result = self._safe_run_command(cmd)
+
+            # 4. Check return code before attempting to parse
+            if result.returncode != 0:
+                logger.error(
+                    f"Trivy exited with code {result.returncode}: "
+                    f"{result.stderr[:300]}"
+                )
+                return []
+
             return self.parse(str(outfile))
 
         except Exception as e:
@@ -64,21 +97,39 @@ class TrivyScanner(BaseScanner):
             return []
         finally:
             if outfile.exists():
-                outfile.unlink()
+                try:
+                    outfile.unlink()
+                except OSError as e:
+                    logger.warning(
+                        f"Could not delete temporary file {outfile}: {e}"
+                    )
 
     def parse(self, file_path: str) -> list[ScannerFinding]:
-        path = Path(file_path)
+        # 1. Path safety validation (prevent Path Traversal)
+        safe_path = self._validate_target_path(file_path)
+        if not safe_path:
+            return []
+
+        path = Path(safe_path)
 
         if not path.exists() or not path.is_file():
+            logger.error(f"Trivy report not found: {file_path}")
             return []
 
-        # 4. Memory Exhaustion Protection (50MB limit)
-        if path.stat().st_size > 50 * 1024 * 1024:
-            logger.error(f"Trivy report {path.name} is too large. Skipping.")
-            return []
-
+        # 2. Memory Exhaustion Protection (50MB limit)
         try:
-            with open(path, encoding='utf-8') as f:
+            if path.stat().st_size > 50 * 1024 * 1024:
+                logger.error(
+                    f"Trivy report {path.name} is too large. Skipping."
+                )
+                return []
+        except OSError as e:
+            logger.error(f"Cannot stat file {path}: {e}")
+            return []
+
+        # 3. Parse JSON safely
+        try:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.error(f"Could not parse Trivy output: {e}")
@@ -94,7 +145,7 @@ class TrivyScanner(BaseScanner):
                 if not isinstance(vuln, dict):
                     continue
 
-                # 5. Enrich description with package and version details securely
+                # 4. Enrich description with package and version details
                 pkg_name = vuln.get("PkgName", "")
                 installed = vuln.get("InstalledVersion", "")
                 fixed = vuln.get("FixedVersion", "")
@@ -113,7 +164,7 @@ class TrivyScanner(BaseScanner):
                     "severity": str(vuln.get("Severity", "UNKNOWN")).upper(),
                     "title": vuln.get("Title", ""),
                     "description": enriched_desc,
-                    "line": 0
+                    "line": None,  # Container scans have no line number
                 })
 
         return findings

@@ -1,15 +1,14 @@
 import os
-from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from pydantic import BaseModel, field_validator
 from sqlalchemy import (
-    JSON,
     CheckConstraint,
     Column,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     create_engine,
@@ -49,14 +48,15 @@ class Scan(Base):
         CheckConstraint(
             "risk_score >= 0 AND risk_score <= 100", name="ck_risk_score_range"
         ),
+        Index("ix_scans_timestamp", "timestamp"),
     )
 
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
     risk_score = Column(Float, nullable=True)
     hardware_profile = Column(String, nullable=True)
-    execution_time = Column(String, nullable=True)
-    findings_json = Column(JSON)
+    execution_time = Column(Float, nullable=True)   # Stored as seconds
+    # Redundant findings_json column removed
     findings = relationship(
         "Finding", back_populates="scan", cascade="all, delete-orphan"
     )
@@ -95,7 +95,6 @@ engine_kwargs = {
 
 if "sqlite" in DB_URL:
     engine_kwargs["connect_args"] = {"check_same_thread": False}
-    # WAL mode and foreign keys
     engine = create_engine(DB_URL, **engine_kwargs)
 
     @event.listens_for(engine, "connect")
@@ -119,17 +118,3 @@ SessionLocal = sessionmaker(bind=engine)
 def init_db():
     """Create all tables. Idempotent."""
     Base.metadata.create_all(engine)
-
-
-@contextmanager
-def get_session():
-    """Transactional context manager."""
-    session = SessionLocal()
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()

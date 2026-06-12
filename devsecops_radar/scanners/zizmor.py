@@ -20,21 +20,30 @@ class ZizmorScanner(BaseScanner):
         if not safe_target:
             return []
 
-        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
             outfile = Path(tmp.name)
 
         try:
             # 2. Secure command construction (no shell=True)
             cmd = [
                 self.binary_path,
-                'scan',
+                "scan",
                 safe_target,
-                '--output', str(outfile),
-                '--format', 'json'
+                "--output", str(outfile),
+                "--format", "json",
             ]
 
-            # 3. Execution handled by the parent class with built-in timeouts
-            self._safe_run_command(cmd)
+            # 3. Execution with built-in timeouts
+            result = self._safe_run_command(cmd)
+
+            # 4. Check return code
+            if result.returncode != 0:
+                logger.error(
+                    f"Zizmor exited with code {result.returncode}: "
+                    f"{result.stderr[:300]}"
+                )
+                return []
+
             return self.parse(str(outfile))
 
         except Exception as e:
@@ -42,21 +51,39 @@ class ZizmorScanner(BaseScanner):
             return []
         finally:
             if outfile.exists():
-                outfile.unlink()
+                try:
+                    outfile.unlink()
+                except OSError as e:
+                    logger.warning(
+                        f"Could not delete temporary file {outfile}: {e}"
+                    )
 
     def parse(self, file_path: str) -> list[ScannerFinding]:
-        path = Path(file_path)
+        # 1. Path safety validation (prevent Path Traversal)
+        safe_path = self._validate_target_path(file_path)
+        if not safe_path:
+            return []
+
+        path = Path(safe_path)
 
         if not path.exists() or not path.is_file():
+            logger.error(f"Zizmor report not found: {file_path}")
             return []
 
-        # 4. Memory Exhaustion Protection (50MB limit)
-        if path.stat().st_size > 50 * 1024 * 1024:
-            logger.error(f"Zizmor report {path.name} is too large. Skipping.")
-            return []
-
+        # 2. Memory Exhaustion Protection (50MB limit)
         try:
-            with open(path, encoding='utf-8') as f:
+            if path.stat().st_size > 50 * 1024 * 1024:
+                logger.error(
+                    f"Zizmor report {path.name} is too large. Skipping."
+                )
+                return []
+        except OSError as e:
+            logger.error(f"Cannot stat file {path}: {e}")
+            return []
+
+        # 3. Parse JSON safely
+        try:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.error(f"Could not parse Zizmor output: {e}")
@@ -69,6 +96,7 @@ class ZizmorScanner(BaseScanner):
             if not isinstance(result, dict):
                 continue
 
+            loc = result.get("location", {})
             findings.append({
                 "tool": self.name,
                 "target": result.get("path", ""),
@@ -76,7 +104,7 @@ class ZizmorScanner(BaseScanner):
                 "severity": str(result.get("severity", "UNKNOWN")).upper(),
                 "title": result.get("message", ""),
                 "description": result.get("description", ""),
-                "line": result.get("location", {}).get("line", 0)
+                "line": loc.get("line") if isinstance(loc, dict) else None,
             })
 
         return findings

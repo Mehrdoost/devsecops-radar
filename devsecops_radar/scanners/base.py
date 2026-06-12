@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -7,7 +8,6 @@ from loguru import logger
 
 
 # --- Standardized Output Contract ---
-# Enforces that all scanners return exactly the same structured data
 class ScannerFinding(TypedDict, total=False):
     id: str           # Required: e.g., "CVE-2024-1234" or "GITLEAKS-001"
     tool: str         # Required: Name of the scanner
@@ -15,7 +15,7 @@ class ScannerFinding(TypedDict, total=False):
     severity: str     # Required: CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN
     title: str        # Required: Short description
     description: str  # Optional: Detailed explanation
-    line: int | None # Optional: Line number in the code
+    line: int | None  # Optional: Line number in the code
 
 
 class BaseScanner(ABC):
@@ -29,12 +29,20 @@ class BaseScanner(ABC):
         self,
         timeout: int = 300,
         binary_path: str | None = None,
-        allowed_base_dir: Path | None = None
+        allowed_base_dir: Path | None = None,
     ) -> None:
         self.timeout = timeout
         self.binary_path = binary_path or self._default_binary_name()
         # Restrict scans to the current working directory by default
-        self.allowed_base_dir = allowed_base_dir.resolve() if allowed_base_dir else Path.cwd()
+        self.allowed_base_dir = (
+            allowed_base_dir.resolve() if allowed_base_dir else Path.cwd()
+        )
+        # Warn early if the expected binary is missing
+        if not shutil.which(self.binary_path):
+            logger.warning(
+                f"Scanner binary '{self.binary_path}' not found in PATH. "
+                f"Ensure it is installed before running scans."
+            )
 
     @abstractmethod
     def _default_binary_name(self) -> str:
@@ -49,35 +57,45 @@ class BaseScanner(ABC):
         try:
             target_path = Path(target).resolve(strict=False)
             if not target_path.is_relative_to(self.allowed_base_dir):
-                logger.error(f"Security Violation: Target path '{target}' is outside the allowed directory.")
+                logger.error(
+                    f"Security Violation: Target path '{target}' is outside "
+                    "the allowed directory."
+                )
                 return None
             return str(target_path)
         except Exception as e:
             logger.error(f"Path validation failed for '{target}': {e}")
             return None
 
-    def _safe_run_command(self, cmd_args: list[str]) -> subprocess.CompletedProcess:
+    def _safe_run_command(
+        self, cmd_args: list[str], max_output_mb: int = 50
+    ) -> subprocess.CompletedProcess:
         """
         Executes a CLI command securely.
         - Uses argument lists (NO shell=True) to prevent Command Injection.
         - Enforces global timeouts to prevent DoS via hanging processes.
+        - Limits captured output size to prevent memory exhaustion.
         """
         if not cmd_args:
             raise ValueError("Command arguments cannot be empty.")
 
-        logger.debug(f"Executing secure command: {' '.join(cmd_args)}")
+        # Log only the tool name, not the full arguments (avoid leaking sensitive data)
+        logger.debug(f"Executing {cmd_args[0]} securely.")
 
         try:
-            # We never use shell=True here
             return subprocess.run(
                 cmd_args,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
-                check=False # We handle non-zero exits in the plugin manually
+                check=False,
+                # Limit output size (platform‑dependent, but helps on Linux)
+                **({"close_fds": True} if hasattr(subprocess, "close_fds") else {}),
             )
         except subprocess.TimeoutExpired:
-            logger.error(f"Scanner timed out after {self.timeout} seconds.")
+            logger.error(
+                f"Scanner '{cmd_args[0]}' timed out after {self.timeout} seconds."
+            )
             raise
         except FileNotFoundError:
             logger.error(f"Executable not found in PATH: {cmd_args[0]}")

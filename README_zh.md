@@ -41,7 +41,7 @@
 11. [核心能力](#-核心能力)
 12. [社区规则与在线更新](#-社区规则与在线更新)
 13. [攻击模拟与 “如果...怎么办” 分析](#-攻击模拟与-如果怎么办-分析)
-14. [v0.4.3 版本安全提升](#-v043-版本安全提升)
+14. [v0.4.4 版本安全提升](#-v044-版本安全提升)
 15. [项目架构](#-项目架构)
 16. [发展路线图](#-发展路线图)
 17. [测试与 CI](#-测试与-ci)
@@ -412,6 +412,7 @@ devsecops-radar-web                         # 在 http://localhost:8080 启动
 FINDINGS_FILE=my.json devsecops-radar-web   # 使用自定义的 findings 文件
 PIPELINE_API_KEY=secret devsecops-radar-web # 开启 API 访问鉴权密钥
 ```
+![Login](docs/Login_env.png)
 
 </details>
 
@@ -468,17 +469,56 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## 🔐 v0.4.3 版本安全提升
+## 🔐 v0.4.4 中的安全加固与生产就绪
 
-- **路径遍历全面防御：** 对所有涉及规则文件、清单、SBOM 及备份的底层文件操作执行前置宿主基准路径锁闭校验。
-- **攻击模拟输入净化：** 针对自动生成 Exploit 脚本的流控制模块引入高烈度控制数据转义，杜绝沙箱外的指令注入隐患。
-- **加固级 Docker 沙箱：** 所有的渗透模拟脚本强制限制于带有 `--cap-drop=ALL`、`--read-only` 只读文件系统、`--network=none` 网络隔离且以非 root 用户 `nobody` 运行。
-- **恒定时间 API 密钥比对：** 登录模块全面采用 `hmac.compare_digest` 算法进行控制验证，从架构上封堵了针对鉴权接口的时序攻击。
-- **数据库链路安全加固：** SQLite 默认开启 WAL 高性能日志模式、强制执行外键级联检查，并配置 `pool_pre_ping` 以进行常态化长连接健康探活。
-- **高烈度输入带宽截断：** 单一 Payload 载荷强制限制为最高 1MB，并自动截断长表单字段长度，彻底免除 DoS 攻击和日志膨胀风险。
-- **社区规则安全同步线：** Git 拉取底层操作严格绑定于高度受信的 `[https://github.com](https://github.com)` 白名单内，严禁恶意参数传递。
-- **敏感凭据深度脱敏：** 生成的 PDF 报告以及内部扫描日志模块引入无感凭据审查，自动遮蔽各类密码、身份 Token 以及私钥。
-- **系统及环境变量强制锁：** JWT 加密种子及全局管理 API Key 执行强存在校验，若检测到空值、默认值或弱秘钥系统将执行熔断快速失败。
+此版本是一次全面的安全性和稳定性改造。已修复 Web 界面、API 和扫描器逻辑中的
+所有已知漏洞。项目现已满足企业级安全要求，尤其是在气隙（air‑gapped）环境中。
+
+### 🔐 安全修复（严重和高危）
+- 存储型 XSS – 仪表板表格行和详情视图不再将原始发现数据注入 DOM；所有值均
+  正确转义。
+- 路径遍历 – 数据文件（findings.json、AI 摘要、拓扑数据）会验证是否位于
+  工作目录内。通过环境变量读取任意文件已被阻止。
+- 认证绕过 – 端点 `/api/attack-paths`、`/api/summary`、`/api/topology` 和
+  `/api/scan-result` 现在正确强制要求 API‑key 认证。
+- API 密钥泄露 – 仪表板不再在页面源代码中渲染真实的 API 密钥。
+- 攻击模拟中的命令注入 – 脚本生成现在仅允许安全的字符子集；多行和特殊字符
+  会被删除。
+- 报告中的密钥泄露 – Gitleaks 发现结果不再在描述中包含实际密钥；PDF/HTML
+  报告会在所有字段中脱敏常见令牌模式（GitHub、GitLab、AWS、JWT）。
+
+### 🧱 架构与性能
+- 速率限制 – 登录及所有受 API‑key 保护的端点均已限流（内存级，线程安全）。
+- 会话管理 – 不再手动关闭数据库作用域会话，避免多步请求中的 “instance not
+  bound” 错误。
+- 数据库模式 – `execution_time` 现存储为 `Float`（秒）；删除了冗余列
+  `findings_json`；在 `scans.timestamp` 上添加了索引。
+- AI 分析器 – 并发块处理限制为 5；Ollama 端点限制为 `localhost`，以确保符合
+  气隙要求。
+- 策略引擎 – 新增 `on_violation` 字段（`warn` / `fail`），允许灵活的策略
+  执行。
+
+### 🛡 扫描器改进
+- 所有扫描器（`trivy`、`semgrep`、`zizmor`、`poutine`、`gitleaks`）现在在
+  解析任何文件前都会调用 `_validate_target_path`，在适配器层阻止路径遍历。
+- `Trivy` 现在支持镜像摘要（`repo@sha256:...`）。
+- `Semgrep` 和 `Gitleaks` 能正确处理表示发现结果的非零退出码。
+
+### 🎨 开发者与运维
+- `semgrep` 已移至可选依赖项
+  （`pip install devsecops-radar[extra]`）。
+- 启用了 `Ruff` 并配置了安全规则（S）；行长度设置为 120。
+- Jira 项目键和问题类型可通过 `JIRA_PROJECT_KEY` 和 `JIRA_ISSUE_TYPE` 配置。
+- CORS 来源由 `CORS_ORIGINS` 环境变量控制（不再是 `*`）。
+- 所有 Python 文件已按新标准格式化。
+
+### ⬆️ 升级说明
+1. 拉取最新镜像或更新软件包：
+   `pip install --upgrade devsecops-radar`
+2. 检查 `.env` 文件 – 确保 `JWT_SECRET` 和 `PIPELINE_API_KEY` 足够强
+   （≥ 32 个字符）。
+3. 如果使用 Jira，请设置 `JIRA_PROJECT_KEY` 和 `JIRA_ISSUE_TYPE`。
+4. 重启 Web 服务器。
 
 ---
 

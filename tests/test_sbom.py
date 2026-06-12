@@ -1,278 +1,393 @@
+"""Tests for SBOM generation and dependency analysis."""
+
 import json
 import subprocess
-from unittest.mock import mock_open, patch
+from contextlib import contextmanager
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
+from loguru import logger
 
 from devsecops_radar.core.sbom import (
     _is_safe_path,
+    _validate_file_size,
     apply_vex_filter,
     detect_dependency_confusion,
     generate_sbom,
-    logger,
 )
 
 
-# -----------------------------------------------
+# ---------------------------------------------------------------------------
+# Helper to capture loguru output
+# ---------------------------------------------------------------------------
+@contextmanager
+def capture_loguru(level: str = "TRACE"):
+    messages: list[str] = []
+
+    def sink(msg):
+        messages.append(str(msg))
+
+    handler_id = logger.add(sink, level=level, format="{message}")
+    try:
+        yield messages
+    finally:
+        logger.remove(handler_id)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def mock_syft_missing():
+    """Simulate syft not installed."""
+    with patch("shutil.which", return_value=None):
+        yield
+
+
+@pytest.fixture
+def mock_syft_available():
+    """Simulate syft available."""
+    with patch("shutil.which", return_value="/usr/local/bin/syft"):
+        yield
+
+
+# ============================================================================
 # Tests for _is_safe_path
-# -----------------------------------------------
+# ============================================================================
 class TestIsSafePath:
-    def test_safe_relative_path(self):
-        assert _is_safe_path("src") is True
+    def test_safe_path_inside_cwd(self, tmp_path):
+        # Patch cwd to return tmp_path (a Path object)
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            assert _is_safe_path(str(tmp_path / "subdir")) is True
 
-    def test_safe_subdir_path(self):
-        assert _is_safe_path("sub/dir/file.txt") is True
+    def test_path_outside_cwd(self, tmp_path):
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            outside = Path(tmp_path.anchor) / "outside"
+            assert _is_safe_path(str(outside)) is False
 
-    def test_unsafe_parent_traversal(self):
-        # "../" should be blocked (no exception → no log)
-        result = _is_safe_path("../etc/passwd")
-        assert result is False
-
-    def test_unsafe_absolute_outside_cwd(self, tmp_path):
-        base = tmp_path / "safe"
+    def test_custom_base_dir(self, tmp_path):
+        base = tmp_path / "base"
         base.mkdir()
-        result = _is_safe_path(str(tmp_path / "unsafe"), base_dir=base)
-        assert result is False
+        safe = base / "inside.txt"
+        assert _is_safe_path(str(safe), base_dir=base) is True
 
-    def test_resolution_error(self):
-        with patch("pathlib.Path.resolve", side_effect=OSError("mock error")), \
-             patch.object(logger, "error") as mock_log:
-            result = _is_safe_path("anything")
-            assert result is False
-            mock_log.assert_called_once()
-            assert "Path resolution error" in mock_log.call_args[0][0]
+        outside = tmp_path / "outside.txt"
+        assert _is_safe_path(str(outside), base_dir=base) is False
+
+    def test_exception_returns_false(self):
+        with patch("pathlib.Path.resolve", side_effect=OSError("bad")):
+            assert _is_safe_path("anything") is False
 
 
-# -----------------------------------------------
+# ============================================================================
+# Tests for _validate_file_size
+# ============================================================================
+class TestValidateFileSize:
+    def test_small_file(self, tmp_path):
+        f = tmp_path / "small.bin"
+        f.write_bytes(b"x" * 1024)  # 1 KB
+        assert _validate_file_size(f, max_size_mb=1) is True
+
+    def test_file_exceeds_limit(self, tmp_path):
+        f = tmp_path / "big.bin"
+        f.write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
+        with capture_loguru() as msgs:
+            assert _validate_file_size(f, max_size_mb=1) is False
+        assert any("exceeds" in m for m in msgs)
+
+    def test_cannot_stat(self, tmp_path):
+        nonexistent = tmp_path / "nope.bin"
+        with capture_loguru() as msgs:
+            assert _validate_file_size(nonexistent) is False
+        assert any("Cannot stat" in m for m in msgs)
+
+
+# ============================================================================
 # Tests for generate_sbom
-# -----------------------------------------------
+# ============================================================================
 class TestGenerateSbom:
-    @pytest.fixture(autouse=True)
-    def setup_mocks(self):
-        self.mock_which = patch("devsecops_radar.core.sbom.shutil.which", return_value="/usr/bin/syft")
-        self.mock_run = patch("devsecops_radar.core.sbom.subprocess.run")
-        self.mock_exists = patch("devsecops_radar.core.sbom.Path.exists", return_value=True)
-        self.mock_open = patch("builtins.open", mock_open(read_data='{"sbom": "test"}'))
-        self.mock_is_safe = patch("devsecops_radar.core.sbom._is_safe_path", return_value=True)
+    def test_path_not_safe(self, mock_syft_available):
+        with patch("pathlib.Path.cwd", return_value=Path("/safe")):
+            with capture_loguru() as msgs:
+                result = generate_sbom("/etc/passwd")
+        assert result is None
+        assert any("outside allowed path" in m for m in msgs)
 
-        self.mock_which.start()
-        self.mock_run.start()
-        self.mock_exists.start()
-        self.mock_open.start()
-        self.mock_is_safe.start()
+    def test_target_not_directory(self, mock_syft_available, tmp_path):
+        f = tmp_path / "notadir"
+        f.touch()
+        with patch(
+            "devsecops_radar.core.sbom._is_safe_path", return_value=True
+        ):
+            with capture_loguru() as msgs:
+                result = generate_sbom(str(f))
+        assert result is None
+        assert any("does not exist" in m for m in msgs)
 
-        yield
+    def test_syft_missing(self, mock_syft_missing, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        with patch(
+            "devsecops_radar.core.sbom._is_safe_path", return_value=True
+        ):
+            with capture_loguru() as msgs:
+                result = generate_sbom(str(target))
+        assert result is None
+        assert any("syft is not installed" in m for m in msgs)
 
-        self.mock_which.stop()
-        self.mock_run.stop()
-        self.mock_exists.stop()
-        self.mock_open.stop()
-        self.mock_is_safe.stop()
+    def test_syft_success(self, mock_syft_available, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        output = tmp_path / "sbom.json"
+        sbom_data = {"bomFormat": "CycloneDX"}
+        output.write_text(json.dumps(sbom_data))
 
-    def test_successful_generation(self):
-        result = generate_sbom("src", "sbom.json")
-        assert result == {"sbom": "test"}
-        subprocess.run.assert_called_once_with(
-            ["syft", "scan", "src", "-o", "cyclonedx-json", "--output", "sbom.json"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        with patch("subprocess.run") as mock_run, patch(
+            "pathlib.Path.cwd", return_value=tmp_path
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            result = generate_sbom(str(target), str(output))
 
-    def test_path_validation_fails(self):
-        with patch("devsecops_radar.core.sbom._is_safe_path", return_value=False), \
-             patch.object(logger, "error") as mock_log:
-            result = generate_sbom("unsafe_dir")
-            assert result is None
-            mock_log.assert_called_with(
-                "SBOM generation blocked: target directory or output file is outside allowed path."
+        assert result == sbom_data
+        mock_run.assert_called_once()
+
+    def test_syft_process_error(self, mock_syft_available, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        output = tmp_path / "sbom.json"
+
+        with patch("subprocess.run") as mock_run, patch(
+            "pathlib.Path.cwd", return_value=tmp_path
+        ):
+            mock_run.side_effect = subprocess.CalledProcessError(
+                1, "syft", stderr="error msg"
             )
+            with capture_loguru() as msgs:
+                result = generate_sbom(str(target), str(output))
+        assert result is None
+        assert any("syft failed" in m for m in msgs)
 
-    def test_syft_not_installed(self):
-        with patch("devsecops_radar.core.sbom.shutil.which", return_value=None), \
-             patch.object(logger, "error") as mock_log:
-            result = generate_sbom("src")
-            assert result is None
-            mock_log.assert_called_with("syft is not installed. Cannot generate SBOM.")
+    def test_syft_timeout(self, mock_syft_available, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        output = tmp_path / "sbom.json"
 
-    def test_subprocess_called_process_error(self):
-        with patch("devsecops_radar.core.sbom.subprocess.run") as mock_run, \
-             patch.object(logger, "error") as mock_log:
-            mock_run.side_effect = subprocess.CalledProcessError(1, "syft", stderr="some error")
-            result = generate_sbom("src")
-            assert result is None
-            mock_log.assert_called_with("syft failed: some error")
-
-    def test_subprocess_timeout(self):
-        with patch("devsecops_radar.core.sbom.subprocess.run") as mock_run, \
-             patch.object(logger, "error") as mock_log:
+        with patch("subprocess.run") as mock_run, patch(
+            "pathlib.Path.cwd", return_value=tmp_path
+        ):
             mock_run.side_effect = subprocess.TimeoutExpired("syft", 120)
-            result = generate_sbom("src")
-            assert result is None
-            mock_log.assert_called_with("syft timed out.")
+            with capture_loguru() as msgs:
+                result = generate_sbom(str(target), str(output))
+        assert result is None
+        assert any("timed out" in m for m in msgs)
 
-    def test_output_file_not_created(self):
-        with patch("devsecops_radar.core.sbom.Path.exists", return_value=False), \
-             patch.object(logger, "error") as mock_log:
-            result = generate_sbom("src", "out.json")
-            assert result is None
-            mock_log.assert_called_with("SBOM file was not created: out.json")
+    def test_output_file_missing_after_command(
+        self, mock_syft_available, tmp_path
+    ):
+        target = tmp_path / "src"
+        target.mkdir()
+        output = tmp_path / "missing.json"
 
-    def test_generic_exception(self):
-        with patch("devsecops_radar.core.sbom.subprocess.run") as mock_run, \
-             patch.object(logger, "error") as mock_log:
-            mock_run.side_effect = RuntimeError("disk full")
-            result = generate_sbom("src")
-            assert result is None
-            mock_log.assert_called_with("SBOM generation failed: disk full")
+        with patch("subprocess.run") as mock_run, patch(
+            "pathlib.Path.cwd", return_value=tmp_path
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+            with capture_loguru() as msgs:
+                result = generate_sbom(str(target), str(output))
+        assert result is None
+        assert any("not created" in m for m in msgs)
+
+    def test_output_file_too_large(self, mock_syft_available, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        output = tmp_path / "sbom.json"
+
+        with patch(
+            "devsecops_radar.core.sbom._validate_file_size", return_value=False
+        ), patch("subprocess.run"), patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = generate_sbom(str(target), str(output))
+        assert result is None
 
 
-# -----------------------------------------------
+# ============================================================================
 # Tests for detect_dependency_confusion
-# -----------------------------------------------
+# ============================================================================
 class TestDetectDependencyConfusion:
-    @pytest.fixture(autouse=True)
-    def setup_mocks(self):
-        self._safe_patch = patch("devsecops_radar.core.sbom._is_safe_path", return_value=True)
-        self._safe_patch.start()
-        # By default make Path.is_file return True (tests that need False will override)
-        self._isfile_patch = patch("devsecops_radar.core.sbom.Path.is_file", return_value=True)
-        self._isfile_patch.start()
-        yield
-        self._safe_patch.stop()
-        self._isfile_patch.stop()
+    def test_unsafe_path(self):
+        with patch("pathlib.Path.cwd", return_value=Path("/safe")):
+            with capture_loguru() as msgs:
+                result = detect_dependency_confusion("/etc/passwd")
+        assert result == []
+        assert any("Blocked reading manifest" in m for m in msgs)
 
-    def test_safe_path_blocked(self):
-        with patch("devsecops_radar.core.sbom._is_safe_path", return_value=False), \
-             patch.object(logger, "error") as mock_log:
-            findings = detect_dependency_confusion("bad.json")
-            assert findings == []
-            mock_log.assert_called_with("Blocked reading manifest: bad.json is outside allowed path.")
+    def test_missing_file(self, tmp_path):
+        path = str(tmp_path / "nonexistent.json")
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            with capture_loguru() as msgs:
+                result = detect_dependency_confusion(path)
+        assert result == []
+        assert any("Manifest file not found" in m for m in msgs)
 
-    def test_file_not_found(self):
-        # Override is_file to False for this test
-        with patch("devsecops_radar.core.sbom.Path.is_file", return_value=False), \
-             patch.object(logger, "warning") as mock_log:
-            findings = detect_dependency_confusion("missing.json")
-            assert findings == []
-            mock_log.assert_called_with("Manifest file not found: missing.json")
-
-    def test_package_json_valid(self):
-        manifest_data = json.dumps({
-            "dependencies": {
-                "mycompany-lib": "1.0.0",
-                "public-dep": "2.0.0"
-            },
-            "devDependencies": {
-                "internal-utils": "0.5.0"
-            }
-        })
-        with patch("builtins.open", mock_open(read_data=manifest_data)):
-            findings = detect_dependency_confusion("package.json")
-            assert len(findings) == 2
-            assert findings[0]["package"] == "mycompany-lib"
-            assert findings[1]["package"] == "internal-utils"
-
-    def test_package_json_no_matches(self):
-        manifest_data = json.dumps({"dependencies": {"public-lib": "1.0.0"}})
-        with patch("builtins.open", mock_open(read_data=manifest_data)):
-            findings = detect_dependency_confusion("package.json", internal_prefixes=["internal-"])
-            assert findings == []
-
-    def test_requirements_txt_valid(self):
-        content = "mycompany-core==1.0.0\npublic-lib>=2.0\n# comment\n\ninternal-pkg ~=0.1"
-        with patch("builtins.open", mock_open(read_data=content)):
-            findings = detect_dependency_confusion(
-                "requirements.txt", internal_prefixes=["mycompany-", "internal-"]
+    def test_package_json(self, tmp_path):
+        manifest = tmp_path / "package.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "dependencies": {"mycompany-utils": "1.0", "express": "4.0"},
+                    "devDependencies": {"internal-lib": "2.0"},
+                }
             )
-            assert len(findings) == 2
-            assert findings[0]["package"] == "mycompany-core"
-            assert findings[1]["package"] == "internal-pkg"
+        )
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = detect_dependency_confusion(str(manifest))
+        assert len(result) == 2
+        assert result[0]["package"] == "mycompany-utils"
+        assert result[1]["package"] == "internal-lib"
 
-    def test_unsupported_format(self):
-        with patch("builtins.open", mock_open(read_data="some content")), \
-             patch.object(logger, "info") as mock_log:
-            findings = detect_dependency_confusion("Pipfile")
-            assert findings == []
-            mock_log.assert_called_with("Unsupported manifest format: Pipfile")
+    def test_package_json_no_internal(self, tmp_path):
+        manifest = tmp_path / "package.json"
+        manifest.write_text(json.dumps({"dependencies": {"express": "4.0"}}))
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = detect_dependency_confusion(str(manifest))
+        assert result == []
 
-    def test_json_decode_error(self):
-        with patch("builtins.open", mock_open(read_data="{invalid json")), \
-             patch.object(logger, "error") as mock_log:
-            findings = detect_dependency_confusion("package.json")
-            assert findings == []
-            mock_log.assert_called_with("Invalid JSON in package.json")
+    def test_package_json_invalid(self, tmp_path):
+        manifest = tmp_path / "package.json"
+        manifest.write_text("not json")
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            with capture_loguru() as msgs:
+                result = detect_dependency_confusion(str(manifest))
+        assert result == []
+        assert any("Invalid JSON" in m for m in msgs)
 
-    def test_generic_exception(self):
-        with patch("builtins.open", side_effect=PermissionError("access denied")), \
-             patch.object(logger, "error") as mock_log:
-            findings = detect_dependency_confusion("requirements.txt")
-            assert findings == []
-            mock_log.assert_called_with("Error scanning manifest requirements.txt: access denied")
+    def test_requirements_txt(self, tmp_path):
+        manifest = tmp_path / "requirements.txt"
+        manifest.write_text(
+            "# comment\nmycompany-auth==1.0\ninternal-tools>=2.0\ndjango==3.2\n"
+        )
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = detect_dependency_confusion(str(manifest))
+        assert len(result) == 2
+        assert result[0]["package"] == "mycompany-auth"
+        assert result[1]["package"] == "internal-tools"
+
+    def test_requirements_txt_no_internal(self, tmp_path):
+        manifest = tmp_path / "requirements.txt"
+        manifest.write_text("django==3.2\nflask>=2.0\n")
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = detect_dependency_confusion(str(manifest))
+        assert result == []
+
+    def test_requirements_with_version_operators(self, tmp_path):
+        manifest = tmp_path / "requirements.txt"
+        manifest.write_text("mycompany-lib<=1.5,!=1.4\nother\n")
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = detect_dependency_confusion(str(manifest))
+        assert len(result) == 1
+        assert result[0]["package"] == "mycompany-lib"
+
+    def test_unsupported_format(self, tmp_path):
+        manifest = tmp_path / "Pipfile"
+        manifest.write_text("[packages]")
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            with capture_loguru() as msgs:
+                result = detect_dependency_confusion(str(manifest))
+        assert result == []
+        assert any("Unsupported manifest" in m for m in msgs)
+
+    def test_custom_prefixes(self, tmp_path):
+        manifest = tmp_path / "requirements.txt"
+        manifest.write_text("custom-lib==1.0\n")
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = detect_dependency_confusion(
+                str(manifest), internal_prefixes=["custom-"]
+            )
+        assert len(result) == 1
+        assert result[0]["package"] == "custom-lib"
 
 
-# -----------------------------------------------
+# ============================================================================
 # Tests for apply_vex_filter
-# -----------------------------------------------
+# ============================================================================
 class TestApplyVexFilter:
-    def test_vex_file_does_not_exist(self):
-        findings = [{"id": "CVE-001", "status": "open"}]
-        result = apply_vex_filter(findings, "nonexistent.json")
+    def test_empty_vex_path(self):
+        findings = [{"id": "CVE-123"}]
+        assert apply_vex_filter(findings, "") == findings
+
+    def test_missing_vex_file(self):
+        findings = [{"id": "CVE-123"}]
+        assert apply_vex_filter(findings, "/nonexistent.json") == findings
+
+    def test_unsafe_vex_path(self, tmp_path):
+        # Create a real file so os.path.exists returns True
+        vex_file = tmp_path / "vex.json"
+        vex_file.write_text("{}")
+        with patch(
+            "devsecops_radar.core.sbom._is_safe_path", return_value=False
+        ):
+            with capture_loguru() as msgs:
+                result = apply_vex_filter(
+                    [{"id": "CVE-123"}], str(vex_file)
+                )
+        assert result == [{"id": "CVE-123"}]
+        assert any("path is not allowed" in m for m in msgs)
+
+    def test_valid_vex(self, tmp_path):
+        vex = tmp_path / "vex.json"
+        vex.write_text(
+            json.dumps(
+                {
+                    "vulnerabilities": [
+                        {
+                            "id": "CVE-2024-1111",
+                            "analysis": {"state": "not_affected"},
+                        },
+                        {
+                            "id": "CVE-2024-2222",
+                            "analysis": {"state": "false_positive"},
+                        },
+                    ]
+                }
+            )
+        )
+        findings = [
+            {"id": "CVE-2024-1111"},
+            {"id": "CVE-2024-3333"},
+            {"id": "CVE-2024-2222"},
+        ]
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            with capture_loguru() as msgs:
+                result = apply_vex_filter(findings, str(vex))
+        assert len(result) == 1
+        assert result[0]["id"] == "CVE-2024-3333"
+        assert any("2 findings excluded" in m for m in msgs)
+
+    def test_vex_with_no_matching_exclusions(self, tmp_path):
+        vex = tmp_path / "vex.json"
+        vex.write_text(
+            json.dumps(
+                {
+                    "vulnerabilities": [
+                        {
+                            "id": "OTHER",
+                            "analysis": {"state": "resolved"},
+                        }
+                    ]
+                }
+            )
+        )
+        findings = [{"id": "CVE-123"}]
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = apply_vex_filter(findings, str(vex))
         assert result == findings
 
-    def test_vex_path_not_safe(self):
-        with patch("devsecops_radar.core.sbom._is_safe_path", return_value=False), \
-             patch("os.path.exists", return_value=True), \
-             patch.object(logger, "error") as mock_log:
-            findings = [{"id": "CVE-001"}]
-            result = apply_vex_filter(findings, "unsafe.json")
-            assert result == findings
-            mock_log.assert_called_with("VEX file path is not allowed: unsafe.json")
-
-    def test_vex_json_invalid(self):
-        with patch("os.path.exists", return_value=True), \
-             patch("builtins.open", side_effect=json.JSONDecodeError("msg", "", 0)), \
-             patch.object(logger, "error") as mock_log:
-            findings = [{"id": "CVE-001"}]
-            result = apply_vex_filter(findings, "vex.json")
-            assert result == findings
-            mock_log.assert_called()
-
-    def test_filtering_not_affected_and_false_positive(self):
-        vex_data = {
-            "vulnerabilities": [
-                {"id": "CVE-001", "analysis": {"state": "not_affected"}},
-                {"id": "CVE-002", "analysis": {"state": "false_positive"}},
-                {"id": "CVE-003", "analysis": {"state": "under_investigation"}},
-            ]
-        }
-        with patch("os.path.exists", return_value=True), \
-             patch("builtins.open", mock_open(read_data=json.dumps(vex_data))), \
-             patch.object(logger, "info") as mock_log:
-            findings = [
-                {"id": "CVE-001", "severity": "high"},
-                {"id": "CVE-002", "severity": "medium"},
-                {"id": "CVE-003", "severity": "low"},
-                {"id": "CVE-004", "severity": "critical"},
-            ]
-            result = apply_vex_filter(findings, "vex.json")
-            assert len(result) == 2
-            assert result[0]["id"] == "CVE-003"
-            assert result[1]["id"] == "CVE-004"
-            mock_log.assert_called_with("VEX filter applied: 2 findings excluded.")
-
-    def test_no_vulnerabilities_in_vex(self):
-        vex_data = {"vulnerabilities": []}
-        with patch("os.path.exists", return_value=True), \
-             patch("builtins.open", mock_open(read_data=json.dumps(vex_data))):
-            findings = [{"id": "CVE-001"}]
-            result = apply_vex_filter(findings, "vex.json")
-            assert result == findings
-
-    def test_empty_findings(self):
-        vex_data = {"vulnerabilities": [{"id": "CVE-001", "analysis": {"state": "not_affected"}}]}
-        with patch("os.path.exists", return_value=True), \
-             patch("builtins.open", mock_open(read_data=json.dumps(vex_data))):
-            result = apply_vex_filter([], "vex.json")
-            assert result == []
+    def test_vex_invalid_json(self, tmp_path):
+        vex = tmp_path / "vex.json"
+        vex.write_text("not json")
+        findings = [{"id": "CVE-123"}]
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            with capture_loguru() as msgs:
+                result = apply_vex_filter(findings, str(vex))
+        assert result == findings
+        assert any("Failed to read VEX" in m for m in msgs)

@@ -1,3 +1,4 @@
+import os
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -11,7 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 # Validation helpers
 # ---------------------------------------------------------------------------
 def _validate_jira_url(url: str) -> str | None:
-    """Ensure the Jira URL is a valid HTTPS endpoint without path traversal."""
+    """Ensure the Jira URL is a valid HTTPS endpoint with an optional path."""
     if not url:
         return None
     url = url.strip().rstrip("/")
@@ -20,9 +21,9 @@ def _validate_jira_url(url: str) -> str | None:
         if parsed.scheme != "https" or not parsed.netloc:
             logger.error("Jira URL must use HTTPS and contain a valid hostname.")
             return None
-        # Reject URLs with dangerous characters or extra paths beyond the base
-        if not re.match(r"^https://[a-zA-Z0-9._-]+(?::\d+)?$", url):
-            logger.error("Jira URL contains unexpected path or characters.")
+        # Allow an optional path (e.g., /jira) but forbid fragments or query strings
+        if not re.match(r"^https://[a-zA-Z0-9._-]+(?::\d+)?(?:/[a-zA-Z0-9._/-]*)?$", url):
+            logger.error("Jira URL contains invalid characters or structure.")
             return None
         return url
     except Exception:
@@ -45,9 +46,14 @@ async def _create_jira_issue(
     base_url: str,
     finding: dict,
     api_token: str,
+    project_key: str,
+    issue_type: str,
 ) -> None:
     """Attempt to create a single Jira issue (with retry on transient errors)."""
-    summary = _truncate(f"[Pipeline Sentinel] {finding.get('id', 'UNKNOWN')}: {finding.get('title', 'No Title')}", 255)
+    summary = _truncate(
+        f"[Pipeline Sentinel] {finding.get('id', 'UNKNOWN')}: {finding.get('title', 'No Title')}",
+        255,
+    )
     description_text = (
         f"Severity: {finding.get('severity', 'UNKNOWN')}\n"
         f"Target: {finding.get('target', 'UNKNOWN')}\n\n"
@@ -57,21 +63,25 @@ async def _create_jira_issue(
 
     payload = {
         "fields": {
-            "project": {"key": "SEC"},
+            "project": {"key": project_key},
             "summary": summary,
             "description": description_text,
-            "issuetype": {"name": "Bug"},
+            "issuetype": {"name": issue_type},
         }
     }
-    headers = {"Authorization": f"Bearer {api_token}", "Content-Type": "application/json"}
-    resp = await client.post(f"{base_url}/rest/api/2/issue", json=payload, headers=headers)
+    headers = {
+        "Authorization": f"Bearer {api_token}",
+        "Content-Type": "application/json",
+    }
+    resp = await client.post(
+        f"{base_url}/rest/api/2/issue", json=payload, headers=headers
+    )
     if resp.status_code == 201:
         logger.info(f"Created Jira issue for {finding.get('id')}")
     else:
-        # Avoid leaking token in logs: only log status and a snippet of the response
         logger.warning(
-            f"Failed to create Jira issue for {finding.get('id')} (HTTP {resp.status_code}): "
-            f"{resp.text[:200]}"
+            f"Failed to create Jira issue for {finding.get('id')} "
+            f"(HTTP {resp.status_code}): {resp.text[:200]}"
         )
 
 
@@ -83,7 +93,10 @@ async def _create_asana_task(
     workspace_gid: str,
 ) -> None:
     """Attempt to create a single Asana task (with retry on transient errors)."""
-    name = _truncate(f"[Pipeline Sentinel] {finding.get('id', 'UNKNOWN')}: {finding.get('title', 'No Title')}", 255)
+    name = _truncate(
+        f"[Pipeline Sentinel] {finding.get('id', 'UNKNOWN')}: {finding.get('title', 'No Title')}",
+        255,
+    )
     notes = (
         f"Severity: {finding.get('severity', 'UNKNOWN')}\n"
         f"Target: {finding.get('target', 'UNKNOWN')}\n\n"
@@ -98,14 +111,19 @@ async def _create_asana_task(
             "notes": notes,
         }
     }
-    headers = {"Authorization": f"Bearer {asana_token}", "Content-Type": "application/json"}
-    resp = await client.post("https://app.asana.com/api/1.0/tasks", json=payload, headers=headers)
+    headers = {
+        "Authorization": f"Bearer {asana_token}",
+        "Content-Type": "application/json",
+    }
+    resp = await client.post(
+        "https://app.asana.com/api/1.0/tasks", json=payload, headers=headers
+    )
     if resp.status_code == 201:
         logger.info(f"Created Asana task for {finding.get('id')}")
     else:
         logger.warning(
-            f"Failed to create Asana task for {finding.get('id')} (HTTP {resp.status_code}): "
-            f"{resp.text[:200]}"
+            f"Failed to create Asana task for {finding.get('id')} "
+            f"(HTTP {resp.status_code}): {resp.text[:200]}"
         )
 
 
@@ -126,13 +144,21 @@ async def notify_jira(
         logger.warning("Jira API token not configured. Skipping Jira notification.")
         return
 
+    # Load project key and issue type from environment, fallback to defaults
+    project_key = os.environ.get("JIRA_PROJECT_KEY", "SEC")
+    issue_type = os.environ.get("JIRA_ISSUE_TYPE", "Bug")
+
     async with httpx.AsyncClient() as client:
         for f in findings:
             if str(f.get("severity", "")).upper() == "CRITICAL":
                 try:
-                    await _create_jira_issue(client, safe_url, f, api_token)
+                    await _create_jira_issue(
+                        client, safe_url, f, api_token, project_key, issue_type
+                    )
                 except Exception as e:
-                    logger.error(f"Jira notification ultimately failed for {f.get('id')}: {e}")
+                    logger.error(
+                        f"Jira notification ultimately failed for {f.get('id')}: {e}"
+                    )
 
 
 async def notify_asana(
@@ -142,9 +168,10 @@ async def notify_asana(
 ) -> None:
     """Send CRITICAL findings to Asana."""
     if not asana_token or not workspace_gid:
-        logger.warning("Asana token or workspace GID not configured. Skipping Asana notification.")
+        logger.warning(
+            "Asana token or workspace GID not configured. Skipping Asana notification."
+        )
         return
-    # Basic validation of workspace_gid (must be a non‑empty string of digits)
     if not re.match(r"^\d+$", workspace_gid):
         logger.error("Invalid Asana workspace GID format. Skipping.")
         return
@@ -155,4 +182,6 @@ async def notify_asana(
                 try:
                     await _create_asana_task(client, f, asana_token, workspace_gid)
                 except Exception as e:
-                    logger.error(f"Asana notification ultimately failed for {f.get('id')}: {e}")
+                    logger.error(
+                        f"Asana notification ultimately failed for {f.get('id')}: {e}"
+                    )

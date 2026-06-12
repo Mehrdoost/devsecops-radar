@@ -15,7 +15,9 @@ class CustomRuleSchema(BaseModel):
     id: str = Field(..., description="Unique identifier for the rule")
     tool: str = Field(default="Custom Rule", description="Name of the scanning tool")
     target: str = Field(..., description="File path or target affected")
-    severity: str = Field(..., description="Risk severity: CRITICAL, HIGH, MEDIUM, LOW")
+    severity: str = Field(
+        ..., description="Risk severity: CRITICAL, HIGH, MEDIUM, LOW"
+    )
     title: str = Field(..., description="Short title of the vulnerability")
     description: str = Field(default="", description="Detailed explanation")
 
@@ -26,20 +28,30 @@ class RuleFusionEngine:
     It does NOT parse Trivy or Semgrep outputs (that is the Adapters' job).
     """
 
-    def __init__(self, rules_dir: str = "custom_rules", max_file_size_mb: int = 10) -> None:
+    def __init__(
+        self, rules_dir: str = "custom_rules", max_file_size_mb: int = 10
+    ) -> None:
         self.rules_dir = Path(rules_dir).resolve()
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
         self.findings: list[dict[str, Any]] = []
+        self._loaded = False   # Prevent duplicate loads
 
         # Ensure rules directory exists securely
         if not self.rules_dir.exists():
             self.rules_dir.mkdir(parents=True, exist_ok=True)
 
-    def _is_safe_path(self, target_path: Path) -> bool:
-        """Prevent Path Traversal and Symlink attacks."""
+    def _is_safe_path(
+        self, target_path: Path, base_dir: Path | None = None
+    ) -> bool:
+        """
+        Prevent Path Traversal and Symlink attacks.
+        If base_dir is omitted, uses self.rules_dir.
+        """
+        if base_dir is None:
+            base_dir = self.rules_dir
         try:
             resolved_target = target_path.resolve(strict=False)
-            return resolved_target.is_relative_to(self.rules_dir)
+            return resolved_target.is_relative_to(base_dir)
         except Exception as e:
             logger.error(f"Path resolution error: {e}")
             return False
@@ -57,12 +69,17 @@ class RuleFusionEngine:
         # 1. URL Validation (SSRF Protection)
         parsed_url = urlparse(repo_url)
         if parsed_url.scheme != "https" or parsed_url.netloc != "github.com":
-            logger.error("Security Error: Community repo must be a valid https://github.com URL.")
+            logger.error(
+                "Security Error: Community repo must be a valid "
+                "https://github.com URL."
+            )
             return
 
         # 2. Path Validation (Ensure no dangerous characters)
         if not repo_url.endswith(".git") or ";" in repo_url or " " in repo_url:
-            logger.error(f"Security Error: Invalid characters in repo URL: {repo_url}")
+            logger.error(
+                f"Security Error: Invalid characters in repo URL: {repo_url}"
+            )
             return
 
         target_dir = self.rules_dir / "community"
@@ -71,18 +88,26 @@ class RuleFusionEngine:
         try:
             if target_dir.exists():
                 logger.info("Updating existing community rules...")
-                subprocess.run(["git", "-C", str(target_dir), "pull", "origin", "main"],
-                               check=True, capture_output=True, timeout=30)
+                subprocess.run(
+                    ["git", "-C", str(target_dir), "pull", "origin", "main"],
+                    check=True, capture_output=True, timeout=30
+                )
             else:
                 logger.info(f"Cloning community rules from {repo_url}...")
-                subprocess.run(["git", "clone", "--depth", "1", repo_url, str(target_dir)],
-                               check=True, capture_output=True, timeout=60)
+                subprocess.run(
+                    ["git", "clone", "--depth", "1", repo_url, str(target_dir)],
+                    check=True, capture_output=True, timeout=60
+                )
         except subprocess.TimeoutExpired:
             logger.error("Git operation timed out.")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Git operation failed: {e.stderr.decode('utf-8', errors='ignore')}")
+            logger.error(
+                f"Git operation failed: {e.stderr.decode('utf-8', errors='ignore')}"
+            )
         except Exception as e:
-            logger.error(f"Unexpected error during community rules update: {e}")
+            logger.error(
+                f"Unexpected error during community rules update: {e}"
+            )
 
     def _load_and_validate_json(self, file_path: Path) -> None:
         """Reads a single JSON file with size limits and strict schema validation."""
@@ -91,7 +116,9 @@ class RuleFusionEngine:
 
         # DoS Protection: Check file size before reading
         if file_path.stat().st_size > self.max_file_size_bytes:
-            logger.warning(f"File {file_path.name} exceeds size limit. Skipping.")
+            logger.warning(
+                f"File {file_path.name} exceeds size limit. Skipping."
+            )
             return
 
         try:
@@ -103,7 +130,9 @@ class RuleFusionEngine:
                 data = data.get("findings", data.get("results", [data]))
 
             if not isinstance(data, list):
-                logger.warning(f"Invalid JSON structure in {file_path.name}: Expected a list.")
+                logger.warning(
+                    f"Invalid JSON structure in {file_path.name}: Expected a list."
+                )
                 return
 
             valid_count = 0
@@ -116,10 +145,16 @@ class RuleFusionEngine:
                     self.findings.append(valid_rule.model_dump())
                     valid_count += 1
                 except ValidationError as e:
-                    logger.debug(f"Skipped invalid rule in {file_path.name}: {e.errors()[0]['msg']}")
+                    logger.debug(
+                        f"Skipped invalid rule in {file_path.name}: "
+                        f"{e.errors()[0]['msg']}"
+                    )
 
             if valid_count > 0:
-                logger.info(f"Loaded {valid_count} valid custom rules from {file_path.name}")
+                logger.info(
+                    f"Loaded {valid_count} valid custom rules from "
+                    f"{file_path.name}"
+                )
 
         except json.JSONDecodeError:
             logger.error(f"Malformed JSON in {file_path.name}. Skipping.")
@@ -128,14 +163,22 @@ class RuleFusionEngine:
 
     def load_all_rules(self) -> list[dict[str, Any]]:
         """Safely iterates through the rules directory and loads JSON findings."""
+        if self._loaded:
+            return self.findings
+
         if not self.rules_dir.exists():
             return self.findings
 
-        # Limit total files to prevent DoS via directory traversing
+        # Clear any previously loaded findings (reload fresh)
+        self.findings.clear()
+
         file_count = 0
         for json_file in self.rules_dir.rglob("*.json"):
             if file_count > 1000:
-                logger.warning("File limit exceeded (1000). Stopping rule loading to prevent memory exhaustion.")
+                logger.warning(
+                    "File limit exceeded (1000). Stopping rule loading to "
+                    "prevent memory exhaustion."
+                )
                 break
 
             if self._is_safe_path(json_file):
@@ -144,16 +187,29 @@ class RuleFusionEngine:
             else:
                 logger.warning(f"Skipping unsafe path: {json_file}")
 
+        self._loaded = True
         return self.findings
 
     def evaluate_policy(self, policy_file: str) -> bool:
         """
         Evaluates findings against a simple JSON policy file securely.
-        (OPA Rego logic is moved to a dedicated sandbox or adapter).
+        Supports 'on_violation' field: 'fail' (default) or 'warn'.
+        Uses a safe base directory (CWD) for the policy file.
         """
         policy_path = Path(policy_file)
-        if not self._is_safe_path(policy_path) or not policy_path.exists():
-            logger.warning(f"Policy file not found or unsafe: {policy_file}. Policy evaluation skipped.")
+        # Allow policy file anywhere under current working directory
+        if not self._is_safe_path(policy_path, base_dir=Path.cwd()):
+            logger.warning(
+                f"Policy file is outside the allowed base directory: "
+                f"{policy_file}. Policy evaluation skipped."
+            )
+            return True
+
+        if not policy_path.exists():
+            logger.warning(
+                f"Policy file not found: {policy_file}. "
+                "Policy evaluation skipped."
+            )
             return True
 
         try:
@@ -162,14 +218,33 @@ class RuleFusionEngine:
 
             max_critical = policy.get("max_critical")
             if max_critical is None:
-                logger.warning("Policy file missing 'max_critical' threshold. Passing by default.")
+                logger.warning(
+                    "Policy file missing 'max_critical' threshold. "
+                    "Passing by default."
+                )
                 return True
 
-            critical_count = sum(1 for f in self.findings if f.get("severity", "").upper() == "CRITICAL")
+            critical_count = sum(
+                1 for f in self.findings
+                if f.get("severity", "").upper() == "CRITICAL"
+            )
 
             if critical_count > max_critical:
-                logger.error(f"Policy Violation! Found {critical_count} CRITICAL issues (Max allowed: {max_critical}).")
-                return False
+                action = str(policy.get("on_violation", "fail")).lower()
+                if action == "warn":
+                    logger.warning(
+                        f"Policy warning: Found {critical_count} CRITICAL "
+                        f"issues (max allowed: {max_critical}). "
+                        "Continuing per 'on_violation: warn' setting."
+                    )
+                    return True
+                else:
+                    # Default to fail (explicit "fail" or missing key)
+                    logger.error(
+                        f"Policy Violation! Found {critical_count} CRITICAL "
+                        f"issues (Max allowed: {max_critical})."
+                    )
+                    return False
 
             logger.info("Security policy checks passed.")
             return True

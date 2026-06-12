@@ -1,20 +1,44 @@
 import json
 import os
+from html import escape as html_escape
+from pathlib import Path
 
 from flask import Blueprint, jsonify, render_template_string, request, send_file
 
-from devsecops_radar.core.auth import require_api_key
+from devsecops_radar.core.auth import require_any_auth
 from devsecops_radar.core.database import db_session, get_findings_paginated
 from devsecops_radar.core.models import Scan
 from devsecops_radar.core.rag import rag_search
-from devsecops_radar.core.reporting import generate_pdf_report
+from devsecops_radar.core.reporting import generate_pdf_report, redact_sensitive
 
-dashboard_bp = Blueprint('dashboard', __name__)
+dashboard_bp = Blueprint("dashboard", __name__)
 
-FINDINGS_FILE = os.environ.get('FINDINGS_FILE', 'findings.json')
+_ALLOWED_DATA_DIR = Path.cwd().resolve()
+FINDINGS_FILE = os.environ.get("FINDINGS_FILE", "findings.json")
+
+
+def _safe_data_path(filename: str) -> Path | None:
+    """Validate that the data file is within the allowed directory."""
+    file_path = (_ALLOWED_DATA_DIR / filename).resolve()
+    try:
+        if file_path.is_relative_to(_ALLOWED_DATA_DIR):
+            return file_path
+    except ValueError:
+        pass
+    return None
+
+
+def load_findings():
+    """Load findings from the validated JSON file."""
+    safe_path = _safe_data_path(FINDINGS_FILE)
+    if not safe_path or not safe_path.exists():
+        return []
+    with open(safe_path, encoding="utf-8") as f:
+        return json.load(f)
+
 
 # --------------------------------------------------------------------------
-# HTML template (unchanged except for the JavaScript parts noted below)
+# COMPLETE HTML TEMPLATE – login, auto‑relogin, logout, full dashboard
 # --------------------------------------------------------------------------
 DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en" data-theme="cyber">
@@ -458,6 +482,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             font-size: 0.8rem; font-weight: 700; padding: 6px 12px; border-radius: 12px;
             display: flex; align-items: center; gap: 6px;
         }
+
+        /* LOGIN MODAL STYLES */
+        .login-modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.85); backdrop-filter: blur(20px);
+            z-index: 5000; display: flex; align-items: center; justify-content: center;
+        }
+        .login-card {
+            background: var(--glass); border: 1px solid var(--glass-border);
+            border-radius: 28px; padding: 40px 35px; max-width: 440px; width: 90%;
+            backdrop-filter: blur(30px); box-shadow: 0 0 80px var(--accent-glow);
+        }
     </style>
 </head>
 <body>
@@ -467,17 +503,41 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="orb orb-2"></div>
     </div>
     <canvas id="particles-canvas"></canvas>
+
+    <!-- LOGIN MODAL (hidden after auth) -->
+    <div class="login-modal-overlay" id="loginModalOverlay" style="display:flex;">
+        <div class="login-card animate-pop">
+            <div class="text-center mb-4">
+                <div style="font-size:3rem;">🛡️</div>
+                <h2 style="color:var(--accent); font-weight:800;">Pipeline Sentinel</h2>
+                <p style="color:var(--text-secondary);">Enter your API key to unlock the command center</p>
+            </div>
+            <div class="input-group mb-3">
+                <span class="input-group-text" style="background:var(--bg-tertiary); border-color:var(--glass-border);">🔑</span>
+                <input type="password" id="loginPassword" class="form-control"
+                       placeholder="API Key / Password"
+                       style="background:var(--bg-secondary); color:var(--text); border-color:var(--glass-border);">
+            </div>
+            <button id="loginBtn" class="btn-accent w-100">
+                <span id="loginSpinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
+                Authenticate
+            </button>
+            <p id="loginError" class="text-danger mt-3 text-center" style="display:none;"></p>
+            <div class="mt-4 text-center">
+                <small style="color:var(--text-secondary);">
+                    The key was set by your administrator in the <code>.env</code> file.
+                </small>
+            </div>
+        </div>
+    </div>
+
+    <!-- REST OF THE DASHBOARD (identical to original) -->
     <div class="theme-strip animate-pop" id="theme-strip" role="group" aria-label="Theme Selection">
-        <span class="theme-dot active" data-theme="cyber" style="background:#00E5FF;"
-              onclick="switchTheme('cyber')"></span>
-        <span class="theme-dot" data-theme="midnight" style="background:#6366F1;"
-              onclick="switchTheme('midnight')"></span>
-        <span class="theme-dot" data-theme="arctic" style="background:#0284C7;"
-              onclick="switchTheme('arctic')"></span>
-        <span class="theme-dot" data-theme="forest" style="background:#34D399;"
-              onclick="switchTheme('forest')"></span>
-        <span class="theme-dot" data-theme="dark" style="background:#FAFAFA;"
-              onclick="switchTheme('dark')"></span>
+        <span class="theme-dot active" data-theme="cyber" style="background:#00E5FF;" onclick="switchTheme('cyber')"></span>
+        <span class="theme-dot" data-theme="midnight" style="background:#6366F1;" onclick="switchTheme('midnight')"></span>
+        <span class="theme-dot" data-theme="arctic" style="background:#0284C7;" onclick="switchTheme('arctic')"></span>
+        <span class="theme-dot" data-theme="forest" style="background:#34D399;" onclick="switchTheme('forest')"></span>
+        <span class="theme-dot" data-theme="dark" style="background:#FAFAFA;" onclick="switchTheme('dark')"></span>
     </div>
     <main class="content-layer">
     <nav class="navbar animate-pop">
@@ -488,37 +548,34 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 border:1px solid var(--accent); padding:4px 10px; border-radius:20px; font-weight:700;">
                 COMMAND CENTER</small>
             </span>
-            <div class="top-controls position-relative">
-                <div class="clock-display" id="clock-display" aria-live="polite">
-                    <span class="time-icon" aria-hidden="true">⏳</span>
-                    <span id="clock-text">--:--:--</span>
+            <div class="d-flex align-items-center gap-3">
+                <div class="top-controls position-relative">
+                    <div class="clock-display" id="clock-display" aria-live="polite">
+                        <span class="time-icon" aria-hidden="true">⏳</span>
+                        <span id="clock-text">--:--:--</span>
+                    </div>
+                    <button class="lang-selector" id="langDropdownBtn" aria-haspopup="true" onclick="toggleLangMenu()">
+                        <span id="current-lang-icon">🇬🇧</span> <span id="current-lang-label">EN</span>
+                        <span class="chevron" aria-hidden="true">▼</span>
+                    </button>
+                    <div class="lang-menu" id="langMenu" role="menu">
+                        <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('en')">🇬🇧 English</div>
+                        <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('ru')">🇷🇺 Русский</div>
+                        <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('zh')">🇨🇳 中文</div>
+                        <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('ar')">🇸🇦 العربية</div>
+                    </div>
                 </div>
-                <button class="lang-selector" id="langDropdownBtn" aria-haspopup="true" onclick="toggleLangMenu()">
-                    <span id="current-lang-icon">🇬🇧</span> <span id="current-lang-label">EN</span>
-                    <span class="chevron" aria-hidden="true">▼</span>
+                <button class="btn btn-sm" id="logoutBtn"
+                        style="background:var(--bg-tertiary); border:1px solid var(--glass-border); color:var(--text); border-radius:8px; padding:6px 14px; font-size:0.8rem;">
+                    🔒 Logout
                 </button>
-                <div class="lang-menu" id="langMenu" role="menu">
-                    <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('en')">
-                        🇬🇧 English
-                    </div>
-                    <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('ru')">
-                        🇷🇺 Русский
-                    </div>
-                    <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('zh')">
-                        🇨🇳 中文
-                    </div>
-                    <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('ar')">
-                        🇸🇦 العربية
-                    </div>
-                </div>
             </div>
         </div>
     </nav>
     <div class="container py-3">
         <div class="row g-3 mb-4 animate-pop delay-1" id="stats-row">
             <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0"
-                     onclick="filterBySeverity('CRITICAL')">
+                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('CRITICAL')">
                     <div class="stat-pill text-danger inner-content">
                         <div class="icon" aria-hidden="true">🔥</div><span id="stat-critical">0</span>
                         <small data-i18n="critical" class="fw-bold mt-1 d-block">CRITICAL</small>
@@ -526,8 +583,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0"
-                     onclick="filterBySeverity('HIGH')">
+                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('HIGH')">
                     <div class="stat-pill text-warning inner-content">
                         <div class="icon" aria-hidden="true">⚠️</div><span id="stat-high">0</span>
                         <small data-i18n="high" class="fw-bold mt-1 d-block">HIGH</small>
@@ -535,8 +591,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0"
-                     onclick="filterBySeverity('MEDIUM')">
+                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('MEDIUM')">
                     <div class="stat-pill text-info inner-content">
                         <div class="icon" aria-hidden="true">📊</div><span id="stat-medium">0</span>
                         <small data-i18n="medium" class="fw-bold mt-1 d-block">MEDIUM</small>
@@ -544,8 +599,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
             <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0"
-                     onclick="filterBySeverity('LOW')">
+                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('LOW')">
                     <div class="stat-pill text-success inner-content">
                         <div class="icon" aria-hidden="true">🛡️</div><span id="stat-low">0</span>
                         <small data-i18n="low" class="fw-bold mt-1 d-block">LOW</small>
@@ -595,13 +649,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                             </button>
                         </div>
                     </div>
-                    <div id="attack-graph" class="mt-3 shadow-inner"
-                         style="width:100%; height:450px; position:relative;"></div>
-                    <div id="attack-detail" class="mt-3 p-4 rounded"
-                         style="display:none; background:var(--bg-secondary); border:1px solid var(--glass-border);"
-                         aria-live="polite"></div>
-                    <div id="attack-error" class="text-warning fw-bold mt-2"
-                         style="display:none;" aria-live="polite"></div>
+                    <div id="attack-graph" class="mt-3 shadow-inner" style="width:100%; height:450px; position:relative;"></div>
+                    <div id="attack-detail" class="mt-3 p-4 rounded" style="display:none; background:var(--bg-secondary); border:1px solid var(--glass-border);" aria-live="polite"></div>
+                    <div id="attack-error" class="text-warning fw-bold mt-2" style="display:none;" aria-live="polite"></div>
                 </div>
             </div>
         </div>
@@ -614,33 +664,26 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                                 🧠 <span data-i18n="ai_summary">AI Executive Summary</span>
                             </h5>
                            <div id="ai-meta-info" class="d-flex gap-2" style="display:none !important;">
-                                <div class="ai-meta-badge shadow-sm"
-                                     style="background:var(--bg-secondary); border:1px solid var(--glass-border);">
+                                <div class="ai-meta-badge shadow-sm" style="background:var(--bg-secondary); border:1px solid var(--glass-border);">
                                     ⚙️ <span id="ai-hardware">CPU</span>
                                 </div>
-                                <div class="ai-meta-badge shadow-sm"
-                                     style="background:var(--accent-glow); color:var(--accent);
-                                            border:1px solid var(--accent);">
+                                <div class="ai-meta-badge shadow-sm" style="background:var(--accent-glow); color:var(--accent); border:1px solid var(--accent);">
                                     ⏱️ <span id="ai-time">0s</span>
                                 </div>
                             </div>
                         </div>
-                        <div class="bg-secondary p-4 rounded shadow-inner"
-                             style="background:var(--bg-secondary) !important; border:1px solid var(--glass-border);">
-                            <div id="exec-summary" class="text-muted typewriter-cursor" data-i18n="no_ai"
-                                 style="font-size:1.1rem; line-height:1.8; color:var(--text) !important;">
+                        <div class="bg-secondary p-4 rounded shadow-inner" style="background:var(--bg-secondary) !important; border:1px solid var(--glass-border);">
+                            <div id="exec-summary" class="text-muted typewriter-cursor" data-i18n="no_ai" style="font-size:1.1rem; line-height:1.8; color:var(--text) !important;">
                                 No AI analysis available. Run with --analyze.
                             </div>
                         </div>
                         <div id="risk-score-container" class="mt-4" style="display:none;">
                             <div class="d-flex justify-content-between align-items-end mb-1">
-                                <span class="fw-bold" style="color:var(--text-secondary); font-size:0.8rem;"
-                                      data-i18n="ai_risk_score">AI Risk Score</span>
+                                <span class="fw-bold" style="color:var(--text-secondary); font-size:0.8rem;" data-i18n="ai_risk_score">AI Risk Score</span>
                                 <span id="risk-score-text" class="fw-bold fs-5">0/100</span>
                             </div>
                             <div class="custom-progress shadow-sm">
-                                <div id="risk-score-bar" class="custom-progress-bar"
-                                     role="progressbar" style="width:0%;"></div>
+                                <div id="risk-score-bar" class="custom-progress-bar" role="progressbar" style="width:0%;"></div>
                             </div>
                         </div>
                     </div>
@@ -668,9 +711,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <div class="card p-4 mb-4 animate-pop delay-4" id="findings-section">
             <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
                 <div class="d-flex align-items-center gap-3">
-                    <button class="btn btn-sm" id="search-toggle-btn"
-                            style="font-size:1.3rem; color:var(--text-secondary); background:var(--bg-secondary);
-                            border:1px solid var(--glass-border); border-radius:10px; padding:6px 12px;">🔍</button>
+                    <button class="btn btn-sm" id="search-toggle-btn" style="font-size:1.3rem; color:var(--text-secondary); background:var(--bg-secondary); border:1px solid var(--glass-border); border-radius:10px; padding:6px 12px;">🔍</button>
                     <h5 class="card-title mb-0" style="color:var(--accent); font-weight:800; font-size:1.4rem;">
                         <span data-i18n="findings">Findings</span>
                     </h5>
@@ -685,8 +726,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
             <div id="search-input-row" class="mb-4">
-                <input type="text" id="searchInput" class="shadow-inner" data-i18n-placeholder="search_placeholder"
-                       placeholder="Search findings...">
+                <input type="text" id="searchInput" class="shadow-inner" data-i18n-placeholder="search_placeholder" placeholder="Search findings...">
             </div>
             <div class="findings-table-container shadow-sm">
                 <div class="table-responsive">
@@ -718,17 +758,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 <button class="sim-close" onclick="closeSimPanel()">&times;</button>
                 <div id="sim-panel-content">
                     <div class="text-center py-5">
-                        <div class="spinner-border"
-                             style="color:var(--accent); width:3.5rem; height:3.5rem; border-width:4px;"></div>
-                        <h4 class="mt-4" id="sim-title" data-i18n="simulating"
-                            style="color:var(--text); font-weight:700;">Simulating attack chain...</h4>
+                        <div class="spinner-border" style="color:var(--accent); width:3.5rem; height:3.5rem; border-width:4px;"></div>
+                        <h4 class="mt-4" id="sim-title" data-i18n="simulating" style="color:var(--text); font-weight:700;">Simulating attack chain...</h4>
                         <p class="text-muted mt-2 fw-bold" data-i18n="sim_sub">Executing sandbox PoC environment</p>
                     </div>
                 </div>
                 <div class="sim-footer">
-                    <button class="btn btn-outline-secondary px-4 py-2 fw-bold"
-                            style="border-radius:12px; color:var(--text); border-color:var(--glass-border);"
-                            onclick="closeSimPanel()" data-i18n="close">Close</button>
+                    <button class="btn btn-outline-secondary px-4 py-2 fw-bold" style="border-radius:12px; color:var(--text); border-color:var(--glass-border);" onclick="closeSimPanel()" data-i18n="close">Close</button>
                 </div>
             </div>
         </div>
@@ -755,35 +791,129 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="d-flex justify-content-end gap-3 mt-4">
-                    <button class="btn btn-outline-secondary px-4 py-2"
-                            style="border-radius:12px; color:var(--text);"
-                            onclick="closeReportModal()" data-i18n="close">Close</button>
-                    <button class="btn-accent px-4 py-2" id="modal-download-btn"
-                            onclick="executeModalDownload()" disabled>
+                    <button class="btn btn-outline-secondary px-4 py-2" style="border-radius:12px; color:var(--text);" onclick="closeReportModal()" data-i18n="close">Close</button>
+                    <button class="btn-accent px-4 py-2" id="modal-download-btn" onclick="executeModalDownload()" disabled>
                         <span id="modal-download-spinner" class="spinner-border spinner-border-sm d-none"></span>
                         <span data-i18n="download_now">Download Now</span>
                     </button>
                 </div>
             </div>
         </div>
-        <div class="toast-container position-fixed bottom-0 end-0 p-4" id="toast-container"
-             style="z-index: 1060;"></div>
+        <div class="toast-container position-fixed bottom-0 end-0 p-4" id="toast-container" style="z-index: 1060;"></div>
         <footer class="text-center py-4 mt-5 animate-pop delay-4" style="border-top:1px solid var(--glass-border);">
             <small style="color:var(--text-secondary); font-size:0.9rem;">
                 🛡️ <strong style="color:var(--text); font-weight:800;">Pipeline Sentinel</strong> · crafted by
-                <a href="https://github.com/Mehrdoost" class="text-decoration-none fw-bold"
-                   style="color:var(--accent)" target="_blank">ReverseForge</a>
-                <span class="version-badge shadow-sm" style="background:var(--accent-2); color:#fff;">v0.4.3</span> ·
-                <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none fw-bold"
-                   style="color:var(--accent)" target="_blank">View on GitHub</a>
+                <a href="https://github.com/Mehrdoost" class="text-decoration-none fw-bold" style="color:var(--accent)" target="_blank">ReverseForge</a>
+                <span class="version-badge shadow-sm" style="background:var(--accent-2); color:#fff;">v0.4.4</span> ·
+                <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none fw-bold" style="color:var(--accent)" target="_blank">View on GitHub</a>
             </small>
         </footer>
     </div>
     </main>
+
     <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/echarts.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/d3.v7.min.js') }}"></script>
     <script>
+        // =====================================================
+        //  PRODUCTION-READY AUTHENTICATION & DASHBOARD LOGIC
+        // =====================================================
+
+        // -------- Token management ----------
+        let AUTH_TOKEN = localStorage.getItem('ps_token') || null;
+
+        function saveToken(token) {
+            AUTH_TOKEN = token;
+            localStorage.setItem('ps_token', token);
+        }
+
+        function clearToken() {
+            AUTH_TOKEN = null;
+            localStorage.removeItem('ps_token');
+        }
+
+        function getHeaders() {
+            if (AUTH_TOKEN) {
+                return {'Authorization': 'Bearer ' + AUTH_TOKEN};
+            }
+            return {};
+        }
+
+        // -------- Secure fetch wrapper (auto-relogin on 401) ----------
+        let _reloginInProgress = false;
+
+        function fetchWithAuth(url, options = {}) {
+            const headers = { ...options.headers, ...getHeaders() };
+            const opts = { ...options, headers };
+
+            return fetch(url, opts).then(async (resp) => {
+                if (resp.status === 401 && !_reloginInProgress) {
+                    _reloginInProgress = true;
+                    clearToken();
+                    showToast('Session expired. Please log in again.', 'warning');
+                    document.getElementById('loginModalOverlay').style.display = 'flex';
+                    document.getElementById('loginPassword').value = '';
+                    document.getElementById('loginError').style.display = 'none';
+                    setTimeout(() => { _reloginInProgress = false; }, 2000);
+                    throw new Error('Unauthorized');
+                }
+                return resp;
+            });
+        }
+
+        // -------- Logout ----------
+        function forceReLogin() {
+            clearToken();
+            document.getElementById('loginModalOverlay').style.display = 'flex';
+            document.getElementById('loginPassword').value = '';
+            document.getElementById('loginError').style.display = 'none';
+            // Clear dashboard visually
+            document.getElementById('tableBody').innerHTML = '';
+            document.querySelectorAll('#stats-row span[id^="stat-"]').forEach(el => el.textContent = '0');
+            if (severityChartInstance) severityChartInstance.dispose();
+            if (trendChartInstance) trendChartInstance.dispose();
+            document.getElementById('attack-graph').innerHTML = '';
+            document.getElementById('exec-summary').textContent = 'No AI analysis available. Run with --analyze.';
+        }
+
+        // -------- Login UI ----------
+        function showLoginError(msg) {
+            document.getElementById('loginError').textContent = msg;
+            document.getElementById('loginError').style.display = 'block';
+        }
+
+        function hideLoginError() {
+            document.getElementById('loginError').style.display = 'none';
+        }
+
+        async function performLogin(password) {
+            const btn = document.getElementById('loginBtn');
+            const spinner = document.getElementById('loginSpinner');
+            btn.disabled = true;
+            spinner.classList.remove('d-none');
+            try {
+                const resp = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({password: password})
+                });
+                const data = await resp.json();
+                if (resp.ok && data.token) {
+                    saveToken(data.token);
+                    document.getElementById('loginModalOverlay').style.display = 'none';
+                    loadDashboardData();
+                } else {
+                    showLoginError(data.error || 'Authentication failed');
+                }
+            } catch(e) {
+                showLoginError('Network error – please try again.');
+            } finally {
+                btn.disabled = false;
+                spinner.classList.add('d-none');
+            }
+        }
+
+        // -------- Internationalization (T object) ----------
         const T = {
             en: {
                 critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", low: "LOW",
@@ -986,8 +1116,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     const centerY = rect.height / 2;
                     const rotateX = ((y - centerY) / centerY) * -5;
                     const rotateY = ((x - centerX) / centerX) * 5;
-                    card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) ` +
-                                           `rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`;
+                    card.style.transform = `perspective(1000px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale3d(1.02, 1.02, 1.02)`;
                 });
                 card.addEventListener('mouseleave', () => {
                     card.style.transform = `perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)`;
@@ -1043,8 +1172,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         function toggleCLI() {
             const body = document.getElementById('cli-ref-body');
             const toggle = document.getElementById('cli-toggle');
-            const bsCollapse = bootstrap.Collapse.getInstance(body) ||
-                               new bootstrap.Collapse(body, { toggle: false });
+            const bsCollapse = bootstrap.Collapse.getInstance(body) || new bootstrap.Collapse(body, { toggle: false });
             bsCollapse.toggle();
             body.addEventListener('shown.bs.collapse', () => {
                 toggle.classList.add('expanded');
@@ -1065,9 +1193,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         function switchTheme(t) {
             document.documentElement.setAttribute('data-theme', t);
             localStorage.setItem('pipeline-theme', t);
-            document.querySelectorAll('.theme-dot').forEach(d => {
-                d.classList.remove('active');
-            });
+            document.querySelectorAll('.theme-dot').forEach(d => { d.classList.remove('active'); });
             const dot = document.querySelector(`.theme-dot[data-theme="${t}"]`);
             if (dot) dot.classList.add('active');
             initParticles();
@@ -1195,8 +1321,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     <div class="toast-body fw-bold px-3 py-3" style="font-size:1.05rem;">
                         ${message}
                     </div>
-                    <button type="button" class="btn-close btn-close-white mx-3 m-auto"
-                            data-bs-dismiss="toast"></button>
+                    <button type="button" class="btn-close btn-close-white mx-3 m-auto" data-bs-dismiss="toast"></button>
                 </div>`;
             container.appendChild(toastEl);
             const toast = new bootstrap.Toast(toastEl, { delay: 4000 });
@@ -1213,17 +1338,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         function closeReportModal() {
             document.getElementById('reportModal').classList.remove('open');
             selectedReportFormat = null;
-            document.querySelectorAll('.report-card-opt').forEach(c => {
-                c.classList.remove('selected');
-            });
+            document.querySelectorAll('.report-card-opt').forEach(c => { c.classList.remove('selected'); });
             document.getElementById('modal-download-btn').disabled = true;
         }
 
         function selectReportFormat(fmt) {
             selectedReportFormat = fmt;
-            document.querySelectorAll('.report-card-opt').forEach(c => {
-                c.classList.remove('selected');
-            });
+            document.querySelectorAll('.report-card-opt').forEach(c => { c.classList.remove('selected'); });
             document.getElementById('opt-' + fmt).classList.add('selected');
             document.getElementById('modal-download-btn').disabled = false;
         }
@@ -1234,7 +1355,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const spinner = document.getElementById('modal-download-spinner');
             dlBtn.disabled = true;
             spinner.classList.remove('d-none');
-            fetch('/api/report?format=' + selectedReportFormat, { headers: getHeaders() })
+            fetchWithAuth('/api/report?format=' + selectedReportFormat)
                 .then(resp => {
                     if (!resp.ok) throw new Error('Failed');
                     return resp.blob();
@@ -1260,9 +1381,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 });
         }
 
-        const AK = "{{ api_key }}";
-        function getHeaders() {
-            return (AK && AK !== 'disabled') ? {'X-API-Key': AK} : {};
+        // -------- XSS-safe rendering helper ----------
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/&/g, '&amp;')
+                       .replace(/</g, '&lt;')
+                       .replace(/>/g, '&gt;')
+                       .replace(/"/g, '&quot;');
         }
 
         let allFindings = [];
@@ -1291,7 +1416,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             tb.innerHTML = '';
             if (filteredFindings.length === 0) {
                 const msg = T[CL]?.no_findings || 'No findings match your filters.';
-                tb.innerHTML = `<tr><td colspan="6" class="text-center py-5 text-muted">${msg}</td></tr>`;
+                tb.innerHTML = `<tr><td colspan="6" class="text-center py-5 text-muted">${escapeHtml(msg)}</td></tr>`;
                 updatePaginationInfo();
                 return;
             }
@@ -1306,24 +1431,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 row.setAttribute('data-finding-id', f.id);
                 const isChecked = selectedFindings.has(f.id) ? 'checked' : '';
                 const sColor = severityColor(f.severity);
+
                 row.innerHTML = `
                     <td style="text-align:center;">
                       <input type="checkbox" class="finding-checkbox form-check-input"
-                             data-id="${f.id}" ${isChecked}>
+                             data-id="${escapeHtml(f.id)}" ${isChecked}>
                     </td>
-                    <td class="fw-bold">${f.tool}</td>
-                    <td>
-                        <code style="color:var(--accent); background:transparent; font-weight:700;">
-                            ${f.id}
-                        </code>
-                    </td>
-                    <td>
-                        <span class="badge bg-${sColor} px-3 py-2 rounded-pill">
-                            ${f.severity}
-                        </span>
-                    </td>
-                    <td class="fw-medium">${f.target}</td>
-                    <td style="color:var(--text-secondary);">${truncate(f.description, 70)}</td>`;
+                    <td class="fw-bold">${escapeHtml(f.tool)}</td>
+                    <td><code style="color:var(--accent); background:transparent; font-weight:700;">${escapeHtml(f.id)}</code></td>
+                    <td><span class="badge bg-${sColor} px-3 py-2 rounded-pill">${escapeHtml(f.severity)}</span></td>
+                    <td class="fw-medium">${escapeHtml(f.target)}</td>
+                    <td style="color:var(--text-secondary);">${escapeHtml(truncate(f.description, 70))}</td>`;
 
                 const detailRow = document.createElement('tr');
                 detailRow.className = 'finding-detail-row';
@@ -1334,28 +1452,27 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 const targLbl = T[CL]?.target || 'Target';
                 const lineLbl = T[CL]?.line || 'Line';
                 const descLbl = T[CL]?.description || 'Description';
-                const noAiMsg = T[CL]?.no_ai || 'Run with --analyze';
-                const lineInfo = f.line ? `<strong style="color:var(--accent);">${lineLbl}:</strong> ${f.line}` : '';
+                const lineInfo = f.line ? `<strong style="color:var(--accent);">${lineLbl}:</strong> ${escapeHtml(String(f.line))}` : '';
                 detailRow.innerHTML = `
                     <td colspan="6" style="padding:0; border:none; background:transparent;">
                     <div class="finding-detail mx-3 my-2">
                         <div class="row">
                           <div class="col-md-6">
-                            <strong style="color:var(--accent);">${idLbl}:</strong> ${f.id}<br>
-                            <strong style="color:var(--accent);">${sevLbl}:</strong> ${f.severity}<br>
-                            <strong style="color:var(--accent);">${toolLbl}:</strong> ${f.tool}
+                            <strong style="color:var(--accent);">${idLbl}:</strong> ${escapeHtml(f.id)}<br>
+                            <strong style="color:var(--accent);">${sevLbl}:</strong> ${escapeHtml(f.severity)}<br>
+                            <strong style="color:var(--accent);">${toolLbl}:</strong> ${escapeHtml(f.tool)}
                           </div>
                           <div class="col-md-6">
-                            <strong style="color:var(--accent);">${targLbl}:</strong> ${f.target}<br>
+                            <strong style="color:var(--accent);">${targLbl}:</strong> ${escapeHtml(f.target)}<br>
                             ${lineInfo}
                           </div>
                         </div>
                         <div class="mt-3">
                           <strong style="color:var(--accent);">${descLbl}:</strong><br>
-                          <span style="line-height:1.6;">${f.description || 'N/A'}</span>
+                          <span style="line-height:1.6;">${escapeHtml(f.description || 'N/A')}</span>
                         </div>
                         <hr style="border-color:var(--glass-border); margin:15px 0;">
-                        <small class="text-muted">💡 ${noAiMsg}</small>
+                        <small class="text-muted">💡 ${T[CL]?.no_ai || 'Run with --analyze'}</small>
                     </div>
                     </td>`;
 
@@ -1410,26 +1527,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         }
 
         document.getElementById('btn-prev-page').addEventListener('click', () => {
-            if (currentPage > 1) {
-                currentPage--;
-                renderTable();
-            }
+            if (currentPage > 1) { currentPage--; renderTable(); }
         });
 
         document.getElementById('btn-next-page').addEventListener('click', () => {
-            if (currentPage * itemsPerPage < filteredFindings.length) {
-                currentPage++;
-                renderTable();
-            }
+            if (currentPage * itemsPerPage < filteredFindings.length) { currentPage++; renderTable(); }
         });
 
         function applyFilters() {
             const s = document.getElementById('searchInput').value.toLowerCase();
             filteredFindings = allFindings;
             if (currentSeverityFilter) {
-                filteredFindings = filteredFindings.filter(f => {
-                    return f.severity.toUpperCase() === currentSeverityFilter;
-                });
+                filteredFindings = filteredFindings.filter(f => f.severity.toUpperCase() === currentSeverityFilter);
             }
             if (s) {
                 filteredFindings = filteredFindings.filter(f =>
@@ -1443,9 +1552,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
         function filterBySeverity(sev) {
             currentSeverityFilter = (currentSeverityFilter === sev) ? null : sev;
-            document.querySelectorAll('#stats-row .card').forEach(c => {
-                c.style.borderColor = 'var(--glass-border)';
-            });
+            document.querySelectorAll('#stats-row .card').forEach(c => { c.style.borderColor = 'var(--glass-border)'; });
             if (currentSeverityFilter) {
                 let cls = 'text-secondary';
                 if (sev === 'LOW') cls = 'text-success';
@@ -1453,9 +1560,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 if (sev === 'HIGH') cls = 'text-warning';
                 if (sev === 'MEDIUM') cls = 'text-info';
                 const activeCard = document.querySelector(`#stats-row .card:has(.stat-pill.${cls})`);
-                if (activeCard) {
-                    activeCard.style.borderColor = 'var(--accent)';
-                }
+                if (activeCard) { activeCard.style.borderColor = 'var(--accent)'; }
             }
             applyFilters();
             document.getElementById('findings-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1466,9 +1571,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             clearBtn.addEventListener('click', () => {
                 currentSeverityFilter = null;
                 document.getElementById('searchInput').value = '';
-                document.querySelectorAll('#stats-row .card').forEach(c => {
-                    c.style.borderColor = 'var(--glass-border)';
-                });
+                document.querySelectorAll('#stats-row .card').forEach(c => { c.style.borderColor = 'var(--glass-border)'; });
                 applyFilters();
             });
         }
@@ -1488,9 +1591,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 }
             });
             searchInput.addEventListener('blur', () => {
-                if (!searchInput.value) {
-                    searchInputRow.classList.remove('expanded');
-                }
+                if (!searchInput.value) { searchInputRow.classList.remove('expanded'); }
             });
         }
 
@@ -1504,12 +1605,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const textColor = style.getPropertyValue('--text').trim();
             const bgTertiary = style.getPropertyValue('--bg-tertiary').trim();
             const total = counts.CRITICAL + counts.HIGH + counts.MEDIUM + counts.LOW;
-            const tNames = [
-                T[CL]?.critical || 'CRITICAL',
-                T[CL]?.high || 'HIGH',
-                T[CL]?.medium || 'MEDIUM',
-                T[CL]?.low || 'LOW'
-            ];
+            const tNames = [T[CL]?.critical || 'CRITICAL', T[CL]?.high || 'HIGH', T[CL]?.medium || 'MEDIUM', T[CL]?.low || 'LOW'];
 
             const numEl = document.getElementById('chart-total-num');
             if (numEl) numEl.textContent = total;
@@ -1521,13 +1617,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     borderColor: 'var(--glass-border)',
                     textStyle: { color: textColor },
                     padding: 12,
-                    formatter: p => {
-                        return `<div style="font-weight:800; border-bottom:1px solid var(--glass-border);
-                                         margin-bottom:8px; padding-bottom:6px;">${p.name}</div>
-                                <span style="color:${p.color}; font-size:1.5rem; vertical-align:middle;">●</span>
-                                <b style="font-size:1.2rem;">${p.value}</b>
-                                <span style="color:var(--text-secondary)">(${p.percent}%)</span>`;
-                    }
+                    formatter: p => `<div style="font-weight:800; border-bottom:1px solid var(--glass-border); margin-bottom:8px; padding-bottom:6px;">${p.name}</div>
+                                     <span style="color:${p.color}; font-size:1.5rem; vertical-align:middle;">●</span>
+                                     <b style="font-size:1.2rem;">${p.value}</b>
+                                     <span style="color:var(--text-secondary)">(${p.percent}%)</span>`
                 },
                 series: [{
                     type: 'pie',
@@ -1542,10 +1635,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         shadowColor: 'rgba(0,0,0,0.4)'
                     },
                     label: { show: false },
-                    emphasis: {
-                        scaleSize: 15,
-                        itemStyle: { shadowBlur: 30, shadowColor: 'rgba(0,0,0,0.6)', borderWidth: 0 }
-                    },
+                    emphasis: { scaleSize: 15, itemStyle: { shadowBlur: 30, shadowColor: 'rgba(0,0,0,0.6)', borderWidth: 0 } },
                     data: [
                         { value: counts.CRITICAL, name: tNames[0], itemStyle: { color: '#FF4D6D' } },
                         { value: counts.HIGH, name: tNames[1], itemStyle: { color: '#FFB100' } },
@@ -1590,10 +1680,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     borderColor: glassBorder,
                     textStyle: { color: textColor },
                     padding: 12,
-                    axisPointer: {
-                        type: 'line',
-                        lineStyle: { color: 'var(--accent)', type: 'dashed', width: 2 }
-                    }
+                    axisPointer: { type: 'line', lineStyle: { color: 'var(--accent)', type: 'dashed', width: 2 } }
                 },
                 legend: {
                     data: [tCritical, tHigh, tMedium, tLow],
@@ -1617,66 +1704,42 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 },
                 series: [
                     {
-                        name: tCritical,
-                        type: 'line',
+                        name: tCritical, type: 'line',
                         data: safeScans.map(s => s.critical),
-                        smooth: 0.5,
-                        symbol: 'circle',
-                        symbolSize: 6,
-                        showSymbol: true,
+                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(255,77,109,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(255,77,109,0.8)'},
-                            {offset:1, color:'rgba(255,77,109,0.2)'}
-                        ])},
+                            {offset:0, color:'rgba(255,77,109,0.8)'},{offset:1, color:'rgba(255,77,109,0.2)'}]) },
                         itemStyle: { color: '#FF4D6D', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     },
                     {
-                        name: tHigh,
-                        type: 'line',
+                        name: tHigh, type: 'line',
                         data: safeScans.map(s => s.high),
-                        smooth: 0.5,
-                        symbol: 'circle',
-                        symbolSize: 6,
-                        showSymbol: true,
+                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(255,177,0,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(255,177,0,0.8)'},
-                            {offset:1, color:'rgba(255,177,0,0.2)'}
-                        ])},
+                            {offset:0, color:'rgba(255,177,0,0.8)'},{offset:1, color:'rgba(255,177,0,0.2)'}]) },
                         itemStyle: { color: '#FFB100', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     },
                     {
-                        name: tMedium,
-                        type: 'line',
+                        name: tMedium, type: 'line',
                         data: safeScans.map(s => s.medium),
-                        smooth: 0.5,
-                        symbol: 'circle',
-                        symbolSize: 6,
-                        showSymbol: true,
+                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(0,180,216,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(0,180,216,0.8)'},
-                            {offset:1, color:'rgba(0,180,216,0.2)'}
-                        ])},
+                            {offset:0, color:'rgba(0,180,216,0.8)'},{offset:1, color:'rgba(0,180,216,0.2)'}]) },
                         itemStyle: { color: '#00B4D8', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     },
                     {
-                        name: tLow,
-                        type: 'line',
+                        name: tLow, type: 'line',
                         data: safeScans.map(s => s.low),
-                        smooth: 0.5,
-                        symbol: 'circle',
-                        symbolSize: 6,
-                        showSymbol: true,
+                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
                         lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(6,214,160,0.5)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(6,214,160,0.8)'},
-                            {offset:1, color:'rgba(6,214,160,0.2)'}
-                        ])},
+                            {offset:0, color:'rgba(6,214,160,0.8)'},{offset:1, color:'rgba(6,214,160,0.2)'}]) },
                         itemStyle: { color: '#06D6A0', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     }
@@ -1729,12 +1792,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 .data(data.nodes).enter().append('circle')
                 .attr('r', 12)
                 .attr('fill', d => {
-                    const colors = {
-                        CRITICAL: '#FF4D6D',
-                        HIGH: '#FFB100',
-                        MEDIUM: '#00B4D8',
-                        LOW: '#06D6A0'
-                    };
+                    const colors = { CRITICAL: '#FF4D6D', HIGH: '#FFB100', MEDIUM: '#00B4D8', LOW: '#06D6A0' };
                     return colors[d.severity] || 'var(--accent)';
                 })
                 .style('cursor', 'pointer')
@@ -1747,14 +1805,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     dt.innerHTML = `
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
-                                <strong style="font-size:1.2rem; color:var(--accent);">${d.id}</strong><br>
-                                <span class="badge bg-${sColor} mt-2 mb-2">${d.severity}</span><br>
-                                <span style="color:var(--text); font-weight:600;">${d.title}</span><br>
-                                <small style="color:var(--text-secondary);">Target: ${d.target}</small>
+                                <strong style="font-size:1.2rem; color:var(--accent);">${escapeHtml(d.id)}</strong><br>
+                                <span class="badge bg-${sColor} mt-2 mb-2">${escapeHtml(d.severity)}</span><br>
+                                <span style="color:var(--text); font-weight:600;">${escapeHtml(d.title)}</span><br>
+                                <small style="color:var(--text-secondary);">Target: ${escapeHtml(d.target)}</small>
                             </div>
-                            <button class="btn-accent shadow-lg" onclick="simulateAttack(['${d.id}'])">
-                                ${btnTxt}
-                            </button>
+                            <button class="btn-accent shadow-lg" onclick="simulateAttack(['${escapeHtml(d.id)}'])">${btnTxt}</button>
                         </div>`;
                     dt.style.display = 'block';
                     dt.classList.add('animate-pop');
@@ -1800,11 +1856,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const subTxt = T[CL]?.sim_sub || 'Executing sandbox PoC environment';
             document.getElementById('sim-panel-content').innerHTML = `
                 <div class="text-center py-5">
-                    <div class="spinner-border"
-                         style="color:var(--accent); width:3.5rem; height:3.5rem; border-width:4px;"></div>
-                    <h4 class="mt-4" aria-live="polite" style="color:var(--text); font-weight:800;">
-                        ${simTxt}
-                    </h4>
+                    <div class="spinner-border" style="color:var(--accent); width:3.5rem; height:3.5rem; border-width:4px;"></div>
+                    <h4 class="mt-4" aria-live="polite" style="color:var(--text); font-weight:800;">${simTxt}</h4>
                     <p class="text-muted mt-2 fw-bold">${subTxt}</p>
                 </div>`;
         }
@@ -1817,112 +1870,97 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             if (e.target === this) closeSimPanel();
         });
 
-        fetch('/api/findings', { headers: getHeaders() })
-            .then(r => r.json())
-            .then(data => {
-                allFindings = data.data || [];
-                filteredFindings = allFindings;
-                currentPage = 1;
-                renderTable();
-                updateStats(allFindings);
+        // -------- Data loading (called after login / token available) ----------
+        function loadDashboardData() {
+            // Findings
+            fetchWithAuth('/api/findings')
+                .then(r => r.json())
+                .then(data => {
+                    allFindings = data.data || [];
+                    filteredFindings = allFindings;
+                    currentPage = 1;
+                    renderTable();
+                    updateStats(allFindings);
 
-                const sInput = document.getElementById('searchInput');
-                if (sInput) sInput.addEventListener('input', applyFilters);
+                    const sInput = document.getElementById('searchInput');
+                    if (sInput) sInput.addEventListener('input', applyFilters);
 
-                const sa = document.getElementById('select-all');
-                if (sa) sa.addEventListener('change', function() {
-                    document.querySelectorAll('.finding-checkbox').forEach(cb => {
-                        cb.checked = this.checked;
-                        if (this.checked) {
-                            selectedFindings.add(cb.dataset.id);
-                        } else {
-                            selectedFindings.delete(cb.dataset.id);
-                        }
+                    const sa = document.getElementById('select-all');
+                    if (sa) sa.addEventListener('change', function() {
+                        document.querySelectorAll('.finding-checkbox').forEach(cb => {
+                            cb.checked = this.checked;
+                            if (this.checked) {
+                                selectedFindings.add(cb.dataset.id);
+                            } else {
+                                selectedFindings.delete(cb.dataset.id);
+                            }
+                        });
+                        const ssb = document.getElementById('simulate-selected-btn');
+                        if (ssb) ssb.disabled = selectedFindings.size === 0;
                     });
+
                     const ssb = document.getElementById('simulate-selected-btn');
-                    if (ssb) ssb.disabled = selectedFindings.size === 0;
+                    if (ssb) ssb.addEventListener('click', () => {
+                        const ids = Array.from(selectedFindings);
+                        if (ids.length > 0) simulateAttack(ids);
+                    });
                 });
 
-                const ssb = document.getElementById('simulate-selected-btn');
-                if (ssb) ssb.addEventListener('click', () => {
-                    const ids = Array.from(selectedFindings);
-                    if (ids.length > 0) simulateAttack(ids);
+            // History
+            fetchWithAuth('/api/history')
+                .then(r => r.json())
+                .then(sc => {
+                    if (sc.length) {
+                        const labels = sc.map(s => s.timestamp ? s.timestamp.substring(0, 10) : '');
+                        createTrendChart(labels, sc);
+                    }
                 });
-            });
 
-        fetch('/api/history', { headers: getHeaders() })
-            .then(r => r.json())
-            .then(sc => {
-                if (sc.length) {
-                    const labels = sc.map(s => s.timestamp ? s.timestamp.substring(0, 10) : '');
-                    createTrendChart(labels, sc);
-                }
-            });
+            // Summary / AI
+            fetchWithAuth('/api/summary')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.executive_summary) {
+                        const el = document.getElementById('exec-summary');
+                        if (el) typeWriter(el, d.executive_summary, 15);
+                        const aiStat = document.getElementById('ai-status');
+                        if (aiStat) {
+                            aiStat.innerHTML = '🤖 AI Analysis Active';
+                            aiStat.style.background = 'rgba(0, 229, 255, 0.15)';
+                            aiStat.style.borderColor = 'var(--accent)';
+                            aiStat.style.color = 'var(--accent)';
+                        }
+                        if (d.execution_time) {
+                            document.getElementById('ai-meta-info').style.setProperty('display', 'flex', 'important');
+                            document.getElementById('ai-time').textContent = d.execution_time;
+                        }
+                        if (d.hardware_profile) {
+                            document.getElementById('ai-meta-info').style.setProperty('display', 'flex', 'important');
+                            document.getElementById('ai-hardware').textContent = d.hardware_profile;
+                        }
+                        if (d.risk_score) renderRiskScore(d.risk_score);
+                    } else {
+                        const aiStat = document.getElementById('ai-status');
+                        const noAiMsg = T[CL]?.no_ai || 'Run with --analyze';
+                        if (aiStat) aiStat.innerHTML = `🤖 <span data-i18n="no_ai">${noAiMsg}</span>`;
+                    }
+                });
 
-        function renderRiskScore(score) {
-            document.getElementById('risk-score-container').style.display = 'block';
-            document.getElementById('risk-score-text').textContent = score + '/100';
-
-            const bar = document.getElementById('risk-score-bar');
-            setTimeout(() => { bar.style.width = score + '%'; }, 500);
-
-            if (score > 70) {
-                bar.style.background = 'var(--danger)';
-                bar.style.boxShadow = '0 0 15px var(--danger)';
-                document.getElementById('risk-score-text').style.color = 'var(--danger)';
-            } else if (score > 40) {
-                bar.style.background = 'var(--warning)';
-                bar.style.boxShadow = '0 0 15px var(--warning)';
-                document.getElementById('risk-score-text').style.color = 'var(--warning)';
-            } else {
-                bar.style.background = 'var(--success)';
-                bar.style.boxShadow = '0 0 15px var(--success)';
-                document.getElementById('risk-score-text').style.color = 'var(--success)';
-            }
+            // Attack paths
+            fetchWithAuth('/api/attack-paths')
+                .then(r => r.json())
+                .then(d => {
+                    if (d.nodes && d.nodes.length) {
+                        drawAttackGraph(d);
+                    } else {
+                        const errEl = document.getElementById('attack-error');
+                        if (errEl) {
+                            errEl.style.display = 'block';
+                            errEl.textContent = '⚠️ ' + (d.error || 'No findings to display.');
+                        }
+                    }
+                });
         }
-
-        fetch('/api/summary', { headers: getHeaders() })
-            .then(r => r.json())
-            .then(d => {
-                if (d.executive_summary) {
-                    const el = document.getElementById('exec-summary');
-                    if (el) typeWriter(el, d.executive_summary, 15);
-                    const aiStat = document.getElementById('ai-status');
-                    if (aiStat) {
-                        aiStat.innerHTML = '🤖 AI Analysis Active';
-                        aiStat.style.background = 'rgba(0, 229, 255, 0.15)';
-                        aiStat.style.borderColor = 'var(--accent)';
-                        aiStat.style.color = 'var(--accent)';
-                    }
-                    if (d.execution_time) {
-                        document.getElementById('ai-meta-info').style.setProperty('display', 'flex', 'important');
-                        document.getElementById('ai-time').textContent = d.execution_time;
-                    }
-                    if (d.hardware_profile) {
-                        document.getElementById('ai-meta-info').style.setProperty('display', 'flex', 'important');
-                        document.getElementById('ai-hardware').textContent = d.hardware_profile;
-                    }
-                    if (d.risk_score) renderRiskScore(d.risk_score);
-                } else {
-                    const aiStat = document.getElementById('ai-status');
-                    const noAiMsg = T[CL]?.no_ai || 'Run with --analyze';
-                    if (aiStat) aiStat.innerHTML = `🤖 <span data-i18n="no_ai">${noAiMsg}</span>`;
-                }
-            });
-
-        fetch('/api/attack-paths', { headers: getHeaders() })
-            .then(r => r.json())
-            .then(d => {
-                if (d.nodes && d.nodes.length) {
-                    drawAttackGraph(d);
-                } else {
-                    const errEl = document.getElementById('attack-error');
-                    if (errEl) {
-                        errEl.style.display = 'block';
-                        errEl.textContent = '⚠️ ' + (d.error || 'No findings to display.');
-                    }
-                }
-            });
 
         async function simulateAttack(fids) {
             openSimPanel();
@@ -1930,17 +1968,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             await new Promise(r => setTimeout(r, 50));
             try {
                 const reqBody = JSON.stringify({ finding_ids: fids });
-                const r = await fetch('/api/simulate', {
+                const r = await fetchWithAuth('/api/simulate', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json', ...getHeaders() },
+                    headers: { 'Content-Type': 'application/json' },
                     body: reqBody
                 });
                 const d = await r.json();
                 if (d.error) {
-                    content.innerHTML = `
-                        <div class="alert alert-warning border-0 shadow-sm fw-bold">
-                            ${escapeHtml(d.error)}
-                        </div>`;
+                    content.innerHTML = `<div class="alert alert-warning border-0 shadow-sm fw-bold">${escapeHtml(d.error)}</div>`;
                     return;
                 }
                 const soTitle = T[CL]?.sandbox_out || 'Sandbox Output:';
@@ -1952,10 +1987,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                              style="max-height:250px; overflow-y:auto; border:1px solid #333;
                                     font-family:'SF Mono', 'Fira Code', monospace;">${soStr}</pre>
                     </div>` : '';
-
                 const simRes = T[CL]?.sim_results || 'Simulation Results';
                 const descTitle = T[CL]?.description || 'Description';
-
                 content.innerHTML = `
                     <h4 style="color:var(--accent); font-weight:800; margin-bottom:20px;">
                         <span aria-hidden="true">⚡</span> ${simRes}
@@ -1978,40 +2011,39 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
         }
 
-        function escapeHtml(text) {
-            if (!text) return '';
-            return text.replace(/&/g, '&amp;')
-                       .replace(/</g, '&lt;')
-                       .replace(/>/g, '&gt;')
-                       .replace(/"/g, '&quot;');
-        }
+        // -------- Initialisation (after DOM ready) ----------
+        document.addEventListener('DOMContentLoaded', function() {
+            // Logout button handler
+            document.getElementById('logoutBtn').addEventListener('click', () => {
+                forceReLogin();
+                showToast('You have been logged out.', 'info');
+            });
 
-        document.addEventListener('keydown', function(e) {
-            const sInput = document.getElementById('searchInput');
-            if (e.key === '/' && document.activeElement !== sInput) {
-                e.preventDefault();
-                if (!searchInputRow.classList.contains('expanded')) {
-                    searchInputRow.classList.add('expanded');
-                }
-                if (sInput) sInput.focus();
+            // Login flow
+            if (AUTH_TOKEN) {
+                document.getElementById('loginModalOverlay').style.display = 'none';
+                loadDashboardData();
+            } else {
+                document.getElementById('loginModalOverlay').style.display = 'flex';
             }
-            if (e.key === 'Escape') {
-                if (sInput) {
-                    sInput.value = '';
-                    sInput.blur();
-                }
-                if (searchInputRow) searchInputRow.classList.remove('expanded');
-                currentSeverityFilter = null;
-                document.querySelectorAll('#stats-row .card').forEach(c => {
-                    c.style.borderColor = 'var(--glass-border)';
-                });
-                applyFilters();
-                closeSimPanel();
-                closeReportModal();
-            }
-        });
 
-        (function() {
+            document.getElementById('loginBtn').addEventListener('click', function() {
+                const password = document.getElementById('loginPassword').value;
+                if (!password) {
+                    showLoginError('Please enter your API key.');
+                    return;
+                }
+                performLogin(password);
+            });
+
+            document.getElementById('loginPassword').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    document.getElementById('loginBtn').click();
+                }
+            });
+
+            // Rest of UI init
             const savedTheme = localStorage.getItem('pipeline-theme') || 'cyber';
             switchTheme(savedTheme);
             switchLanguage(CL);
@@ -2024,37 +2056,31 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 if (severityChartInstance) severityChartInstance.resize();
                 if (trendChartInstance) trendChartInstance.resize();
             });
-        })();
+        });
     </script>
 </body>
 </html>
 """
 
-def load_findings():
-    if not os.path.exists(FINDINGS_FILE):
-        return []
-    with open(FINDINGS_FILE) as f:
-        return json.load(f)
 
-@dashboard_bp.route('/')
+# --------------------------------------------------------------------------
+# Routes
+# --------------------------------------------------------------------------
+@dashboard_bp.route("/")
 def index():
-    findings = load_findings()
-    api_key_val = os.environ.get("PIPELINE_API_KEY", "disabled")
-    return render_template_string(
-        DASHBOARD_HTML,
-        findings=findings,
-        api_key=api_key_val
-    )
+    return render_template_string(DASHBOARD_HTML)
 
-@dashboard_bp.route('/api/findings')
-@require_api_key
+
+@dashboard_bp.route("/api/findings")
+@require_any_auth
 def api_findings():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 50, type=int)
+    page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", 50, type=int)
     return jsonify(get_findings_paginated(page, per_page))
 
-@dashboard_bp.route('/api/history')
-@require_api_key
+
+@dashboard_bp.route("/api/history")
+@require_any_auth
 def api_history():
     session = db_session()
     try:
@@ -2075,20 +2101,17 @@ def api_history():
             })
         return jsonify(result)
     finally:
-        session.close()
+        pass
 
-@dashboard_bp.route('/api/attack-paths')
-@require_api_key
+
+@dashboard_bp.route("/api/attack-paths")
+@require_any_auth
 def api_attack_paths():
-    """
-    Generate an interactive graph of all findings (nodes = findings, links = simple chain).
-    """
     findings = load_findings()
     if not findings:
         return jsonify({"nodes": [], "links": []})
 
     nodes = []
-    links = []
     for f in findings:
         node_id = f.get("id", "UNKNOWN")
         nodes.append({
@@ -2100,99 +2123,118 @@ def api_attack_paths():
             "tool": f.get("tool", ""),
         })
 
-    # simple chain links to make the graph visually connected
-    for i in range(len(nodes) - 1):
-        links.append({"source": nodes[i]["id"], "target": nodes[i+1]["id"]})
-
+    links = [
+        {"source": nodes[i]["id"], "target": nodes[i + 1]["id"]}
+        for i in range(len(nodes) - 1)
+    ]
     return jsonify({"nodes": nodes, "links": links})
 
-@dashboard_bp.route('/api/rag')
-@require_api_key
+
+@dashboard_bp.route("/api/rag")
+@require_any_auth
 def api_rag():
-    q = request.args.get('q', '')
+    q = request.args.get("q", "")
     if not q:
         return jsonify([])
     return jsonify(rag_search(q))
 
-@dashboard_bp.route('/api/simulate', methods=['POST'])
-@require_api_key
+
+@dashboard_bp.route("/api/simulate", methods=["POST"])
+@require_any_auth
 def api_simulate():
     data = request.get_json(force=True)
-    finding_ids = data.get('finding_ids', [])
-    if not finding_ids:
-        return jsonify({"error": "No finding IDs"}), 400
+    finding_ids = data.get("finding_ids", [])
+    if not isinstance(finding_ids, list):
+        return jsonify({"error": "finding_ids must be a list"}), 400
     findings = load_findings()
-    selected = [f for f in findings if f.get('id') in finding_ids]
+    selected = [f for f in findings if f.get("id") in finding_ids]
     if not selected:
         return jsonify({"error": "Not found"}), 404
+
     from devsecops_radar.core.attack_simulation import run_sandboxed_poc, simulate_attack
-    sp = []
+
+    scripts = []
     descs = []
+    last_script_path = None
     for f in selected:
         spath = simulate_attack(f)
-        with open(spath) as sf:
-            sp.append(sf.read())
+        if spath:
+            with open(spath, encoding="utf-8") as sf:
+                scripts.append(sf.read())
+            last_script_path = spath
         descs.append(f"{f.get('id')}: {f.get('title')}")
-    fs = "\n".join(sp)
+    full_script = "\n".join(scripts)
     desc = " → ".join(descs)
-    so = None
-    try:
-        so = run_sandboxed_poc(spath) if spath else None
-    except Exception:
-        pass
+
+    sandbox_output = None
+    if last_script_path:
+        try:
+            sandbox_output = run_sandboxed_poc(last_script_path)
+        except Exception:
+            pass
+
     return jsonify({
-        "script": fs,
+        "script": full_script,
         "description": desc,
-        "sandbox_output": so
+        "sandbox_output": sandbox_output,
     })
 
-@dashboard_bp.route('/api/report')
-@require_api_key
+
+@dashboard_bp.route("/api/report")
+@require_any_auth
 def api_report():
-    fmt = request.args.get('format', 'pdf')
+    fmt = request.args.get("format", "pdf")
     findings = load_findings()
     ai_summary = {}
-    summary_file = os.environ.get('AI_SUMMARY_FILE', 'findings_ai_summary.json')
-    if os.path.exists(summary_file):
-        with open(summary_file) as f:
+    summary_file = os.environ.get("AI_SUMMARY_FILE", "findings_ai_summary.json")
+    safe_summary = _safe_data_path(summary_file)
+    if safe_summary and safe_summary.exists():
+        with open(safe_summary, encoding="utf-8") as f:
             ai_summary = json.load(f)
-    if fmt == 'json':
+
+    if fmt == "json":
         import io
-        data = json.dumps({
-            "findings": findings,
-            "ai_summary": ai_summary
-        }, indent=2)
+        data = json.dumps({"findings": findings, "ai_summary": ai_summary}, indent=2)
         return send_file(
             io.BytesIO(data.encode()),
-            mimetype='application/json',
+            mimetype="application/json",
             as_attachment=True,
-            download_name='report.json'
+            download_name="report.json",
         )
-    if fmt == 'html':
-        html = '<html><head><title>Pipeline Sentinel Report</title></head><body>'
-        html += '<h1>Pipeline Sentinel Security Report</h1>'
+    if fmt == "html":
+        html_parts = [
+            "<html><head><title>Pipeline Sentinel Report</title></head><body>",
+            "<h1>Pipeline Sentinel Security Report</h1>",
+        ]
         if ai_summary.get("executive_summary"):
-            html += '<h2>Executive Summary</h2>'
-            html += '<p>' + ai_summary["executive_summary"] + '</p>'
-        html += ('<h2>Findings</h2><table border="1"><tr>'
-                 '<th>Tool</th><th>ID</th><th>Severity</th>'
-                 '<th>Target</th><th>Title</th></tr>')
+            html_parts.append("<h2>Executive Summary</h2>")
+            html_parts.append(f"<p>{html_escape(redact_sensitive(ai_summary['executive_summary']))}</p>")
+        html_parts.append(
+            "<h2>Findings</h2><table border='1'><tr>"
+            "<th>Tool</th><th>ID</th><th>Severity</th><th>Target</th><th>Title</th></tr>"
+        )
         for f in findings:
-            html += (f'<tr><td>{f["tool"]}</td><td>{f["id"]}</td>'
-                     f'<td>{f["severity"]}</td><td>{f["target"]}</td>'
-                     f'<td>{f["title"]}</td></tr>')
-        html += '</table></body></html>'
+            html_parts.append(
+                f"<tr><td>{html_escape(f['tool'])}</td>"
+                f"<td>{html_escape(f['id'])}</td>"
+                f"<td>{html_escape(f['severity'])}</td>"
+                f"<td>{html_escape(f['target'])}</td>"
+                f"<td>{html_escape(redact_sensitive(f.get('title', '')))}</td></tr>"
+            )
+        html_parts.append("</table></body></html>")
+        html_content = "\n".join(html_parts)
         import io
         return send_file(
-            io.BytesIO(html.encode()),
-            mimetype='text/html',
+            io.BytesIO(html_content.encode()),
+            mimetype="text/html",
             as_attachment=True,
-            download_name='report.html'
+            download_name="report.html",
         )
-    report_path = os.path.join(os.getcwd(), 'report.pdf')
-    generate_pdf_report(findings, ai_summary, report_path)
+    # PDF
+    report_path = _ALLOWED_DATA_DIR / "report.pdf"
+    generate_pdf_report(findings, ai_summary, str(report_path))
     return send_file(
         report_path,
         as_attachment=True,
-        download_name='pipeline_sentinel_report.pdf'
+        download_name="pipeline_sentinel_report.pdf",
     )

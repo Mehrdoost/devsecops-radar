@@ -1,20 +1,31 @@
 ---
 name: Feature request
-about: Suggest an idea for this project
+about: Suggest an idea for Pipeline Sentinel
 title: "[FEATURE] "
 labels: enhancement
 assignees: ''
-
 ---
 
-**Is your feature request related to a problem? Please describe.**
-A clear and concise description of what the problem is.
+## Problem Statement
 
-**Describe the solution you'd like**
-A clear and concise description of what you want to happen.
+<!-- A clear and concise description of the problem or need. -->
+<!-- Example: "As a user, I want to scan container images directly from the dashboard." -->
 
-**Describe alternatives you've considered**
-A clear and concise description of any alternative solutions or features you've considered.
+## Proposed Solution
 
-**Additional context**
-Add any other context or screenshots about the feature request here.
+<!-- Describe the feature you'd like to see implemented. -->
+<!-- Include any UI mockups, API suggestions, or workflow changes. -->
+
+## Alternative Approaches
+
+<!-- Have you considered any alternative solutions or workarounds? -->
+
+## Use Case & Impact
+
+- **Who would benefit?** (e.g., air‑gapped users, CI/CD pipelines, security teams)
+- **How often would this be used?** (daily, per release, rarely)
+- **Does it affect offline / air‑gapped functionality?** (important for this project)
+
+## Additional Context
+
+<!-- Any other details, screenshots, or references to similar features in other tools. -->

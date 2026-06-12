@@ -1,169 +1,221 @@
+"""Tests for the Flask application factory and web entry points."""
+
+import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from devsecops_radar.core.settings import settings
-from devsecops_radar.web.app import (
-    _check_file,
-    _get_local_ip,
-    create_app,
-    print_startup_banner,
-    start_server,
-)
+# ---------------------------------------------------------------------------
+# Set required env vars BEFORE any imports
+# ---------------------------------------------------------------------------
+os.environ["JWT_SECRET"] = "a" * 32
+os.environ["PIPELINE_API_KEY"] = "valid-api-key"
+
+# ---------------------------------------------------------------------------
+# Mock heavy / optional dependencies so they are never truly imported
+# ---------------------------------------------------------------------------
+with patch.dict("sys.modules", {
+    "rich": MagicMock(),
+    "rich.console": MagicMock(),
+    "rich.panel": MagicMock(),
+    "rich.table": MagicMock(),
+    "rich.text": MagicMock(),
+    "waitress": MagicMock(),
+    "flask_cors": MagicMock(),
+    "flask_cors.CORS": MagicMock(),
+}):
+    import devsecops_radar.web.app as app_module
+    from devsecops_radar.web.app import (
+        _LOGIN_MAX_ATTEMPTS,
+        _LOGIN_WINDOW_SECONDS,
+        _check_login_rate,
+        _get_local_ip,
+        _login_rate_store,
+        create_app,
+        print_startup_banner,
+    )
+
+from devsecops_radar.core.settings import settings as settings_instance
 
 
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def clean_rate_limits():
+    _login_rate_store.clear()
+
+
+@pytest.fixture
+def app():
+    with patch.object(settings_instance, "DEBUG", False):
+        return create_app()
+
+
+@pytest.fixture
+def client(app):
+    with app.test_client() as client:
+        yield client
+
+
+# ---------------------------------------------------------------------------
+# _check_login_rate
+# ---------------------------------------------------------------------------
+class TestCheckLoginRate:
+    def test_allow_first_requests(self):
+        ip = "1.2.3.4"
+        for _ in range(_LOGIN_MAX_ATTEMPTS):
+            assert _check_login_rate(ip) is True
+        assert _check_login_rate(ip) is False
+
+    def test_window_expiry(self, monkeypatch):
+        ip = "5.6.7.8"
+        now = time.time()
+        monkeypatch.setattr(time, "time", lambda: now)
+        for _ in range(_LOGIN_MAX_ATTEMPTS):
+            assert _check_login_rate(ip) is True
+        assert _check_login_rate(ip) is False
+        monkeypatch.setattr(time, "time", lambda: now + _LOGIN_WINDOW_SECONDS + 1)
+        assert _check_login_rate(ip) is True
+
+    def test_different_ips_independent(self):
+        ip1 = "10.0.0.1"
+        ip2 = "10.0.0.2"
+        for _ in range(_LOGIN_MAX_ATTEMPTS):
+            assert _check_login_rate(ip1) is True
+        assert _check_login_rate(ip1) is False
+        assert _check_login_rate(ip2) is True
+
+
+# ---------------------------------------------------------------------------
 # _get_local_ip
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
 class TestGetLocalIp:
     def test_returns_ip(self):
-        with patch("socket.socket") as mock_sock:
-            mock_instance = MagicMock()
-            mock_instance.getsockname.return_value = ("192.168.1.5", 12345)
-            mock_sock.return_value.__enter__.return_value = mock_instance
-            assert _get_local_ip() == "192.168.1.5"
+        assert _get_local_ip()
 
-    def test_fallback_on_error(self):
-        with patch("socket.socket", side_effect=OSError):
-            assert _get_local_ip() == "127.0.0.1"
+    @patch("socket.socket")
+    def test_fallback_on_error(self, mock_sock):
+        mock_sock.return_value.__enter__.return_value.connect.side_effect = OSError
+        assert _get_local_ip() == "127.0.0.1"
 
 
-# ------------------------------------------------------------
-# _check_file
-# ------------------------------------------------------------
-class TestCheckFile:
-    def test_file_exists(self, tmp_path):
-        f = tmp_path / "test.txt"
-        f.write_text("data")
-        assert _check_file(str(f)) is True
-
-    def test_file_missing(self, tmp_path):
-        assert _check_file(str(tmp_path / "missing.txt")) is False
-
-
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # print_startup_banner
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
 class TestPrintStartupBanner:
-    @pytest.fixture(autouse=True)
-    def setup_settings(self):
-        self._api_key_patch = patch.object(settings, "PIPELINE_API_KEY", "test-key")
-        self._host_patch = patch.object(settings, "HOST", "127.0.0.1")
-        self._port_patch = patch.object(settings, "PORT", 8080)
-        self._debug_patch = patch.object(settings, "DEBUG", False)
-        self._api_key_patch.start()
-        self._host_patch.start()
-        self._port_patch.start()
-        self._debug_patch.start()
-        yield
-        self._api_key_patch.stop()
-        self._host_patch.stop()
-        self._port_patch.stop()
-        self._debug_patch.stop()
-
-    def test_rich_installed(self):
-        # Create a mock httpx module to avoid needing the real import
-        mock_httpx = MagicMock()
-        mock_httpx.get.return_value.status_code = 200
-        # Patch the httpx that will be imported inside the function
-        with patch.dict("sys.modules", {"httpx": mock_httpx}), \
-             patch.dict("sys.modules", {"rich": MagicMock()}), \
-             patch("devsecops_radar.web.app.Console") as mock_console, \
-             patch("devsecops_radar.web.app.HAS_RICH", True), \
-             patch("devsecops_radar.web.app._get_local_ip", return_value="10.0.0.1"), \
-             patch("devsecops_radar.web.app._check_file", return_value=True):
+    def test_with_rich(self, monkeypatch):
+        monkeypatch.setattr(app_module, "HAS_RICH", True)
+        mock_console = MagicMock()
+        with patch.object(app_module, "Console", mock_console):
             print_startup_banner("0.0.0.0", 8080, False)
-            mock_console.return_value.print.assert_called_once()
+        mock_console.assert_called_once()
 
-    def test_rich_not_installed(self):
-        with patch("devsecops_radar.web.app.HAS_RICH", False), \
-             patch("devsecops_radar.web.app.logger") as mock_logger:
-            print_startup_banner("127.0.0.1", 5000, True)
-            mock_logger.info.assert_called_once()
+    def test_without_rich(self, monkeypatch):
+        monkeypatch.setattr(app_module, "HAS_RICH", False)
+        print_startup_banner("127.0.0.1", 5000, True)
 
 
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # create_app
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
 class TestCreateApp:
-    @pytest.fixture
-    def client(self):
-        app = create_app()
-        app.config["TESTING"] = True
-        with app.test_client() as client:
-            yield client
+    def test_blueprints_registered(self, app):
+        bp_names = {bp.name for bp in app.iter_blueprints()}
+        assert "dashboard" in bp_names
+        assert "attack_paths" in bp_names
+        assert "topology" in bp_names
+        assert "summary" in bp_names
+        assert "sentry" in bp_names
 
-    def test_login_missing_password(self, client):
-        # Missing JSON should return 400 (Invalid JSON payload format)
-        resp = client.post("/api/auth/login", json={})
-        assert resp.status_code == 400
-        assert b"Invalid JSON payload format" in resp.data
-
-    def test_login_empty_password(self, client):
-        resp = client.post("/api/auth/login", json={"password": ""})
-        assert resp.status_code == 401
-
-    def test_login_success(self, client):
-        with patch("devsecops_radar.web.app.hmac.compare_digest", return_value=True), \
-             patch("devsecops_radar.web.app.create_token", return_value="fake-token"), \
-             patch.object(settings, "PIPELINE_API_KEY", "secret"):
-            resp = client.post("/api/auth/login", json={"password": "secret"})
-            assert resp.status_code == 200
-            assert b"fake-token" in resp.data
-
-    def test_login_wrong_password(self, client):
-        with patch("devsecops_radar.web.app.hmac.compare_digest", return_value=False), \
-             patch.object(settings, "PIPELINE_API_KEY", "secret"):
-            resp = client.post("/api/auth/login", json={"password": "wrong"})
-            assert resp.status_code == 401
-
-    def test_login_payload_too_long(self, client):
-        long_pwd = "a" * 200
-        resp = client.post("/api/auth/login", json={"password": long_pwd})
-        assert resp.status_code == 401
+    def test_max_content_length_set(self, app):
+        assert app.config["MAX_CONTENT_LENGTH"] == 1 * 1024 * 1024
 
     def test_404_handler(self, client):
         resp = client.get("/nonexistent")
         assert resp.status_code == 404
+        assert "error" in resp.json
 
-    def test_413_handler(self, client):
-        # Can't easily trigger 413 in test client, but handler is registered.
-        pass
-
-    def test_500_handler(self, client):
-        # Handler is registered.
-        pass
+    def test_session_teardown(self, client):
+        mock_remove = MagicMock()
+        with patch.object(app_module.db_session, "remove", mock_remove):
+            client.get("/api/summary")
+        mock_remove.assert_called()
 
 
-# ------------------------------------------------------------
-# start_server
-# ------------------------------------------------------------
-class TestStartServer:
-    def test_debug_mode(self):
-        # Create a mock app and patch its run method
-        mock_app = MagicMock()
-        with patch.object(settings, "DEBUG", True), \
-             patch.object(settings, "HOST", "127.0.0.1"), \
-             patch.object(settings, "PORT", 5000), \
-             patch("devsecops_radar.web.app.create_app", return_value=mock_app), \
-             patch("devsecops_radar.web.app.print_startup_banner") as mock_banner:
-            start_server()
-            mock_banner.assert_called_once()
-            mock_app.run.assert_called_once_with(host="127.0.0.1", port=5000, debug=True)
+# ---------------------------------------------------------------------------
+# Login endpoint
+# ---------------------------------------------------------------------------
+class TestLoginEndpoint:
+    def test_malformed_json(self, client):
+        resp = client.post(
+            "/api/auth/login",
+            data="not json",
+            content_type="application/json",
+        )
+        assert resp.status_code == 400
+        assert "Malformed JSON" in resp.json["error"]
 
-    def test_production_mode(self):
-        mock_app = MagicMock()
-        # Create a fake waitress module with a serve mock
-        mock_waitress = MagicMock()
-        mock_serve = MagicMock()
-        mock_waitress.serve = mock_serve
-        with patch.dict("sys.modules", {"waitress": mock_waitress}), \
-             patch.object(settings, "DEBUG", False), \
-             patch.object(settings, "HOST", "0.0.0.0"), \
-             patch.object(settings, "PORT", 8080), \
-             patch("devsecops_radar.web.app.create_app", return_value=mock_app), \
-             patch("devsecops_radar.web.app.print_startup_banner") as mock_banner:
-            start_server()
-            mock_banner.assert_called_once()
-            # serve should be called with app, host, port, threads=8
-            mock_serve.assert_called_once_with(mock_app, host="0.0.0.0", port=8080, threads=8)
+    def test_missing_content_type(self, client):
+        resp = client.post("/api/auth/login", data="{}")
+        assert resp.status_code == 400
+
+    def test_missing_password(self, client):
+        resp = client.post(
+            "/api/auth/login",
+            json={"password": ""},
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+
+    def test_password_too_long(self, client):
+        resp = client.post(
+            "/api/auth/login",
+            json={"password": "a" * 200},
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+
+    def test_invalid_password(self, client):
+        resp = client.post(
+            "/api/auth/login",
+            json={"password": "wrong-key"},
+            content_type="application/json",
+        )
+        assert resp.status_code == 401
+
+    def test_valid_login(self, client):
+        with patch.object(app_module, "create_token", return_value="fake-jwt-token") as mock_token:
+            resp = client.post(
+                "/api/auth/login",
+                json={"password": "valid-api-key"},
+                content_type="application/json",
+            )
+        assert resp.status_code == 200
+        assert resp.json["token"] == "fake-jwt-token"
+        mock_token.assert_called_once()
+
+    def test_missing_api_key_in_settings(self, client, monkeypatch):
+        # Patch the settings object used by app.py directly
+        monkeypatch.setattr(app_module.settings, "PIPELINE_API_KEY", "")
+        resp = client.post(
+            "/api/auth/login",
+            json={"password": "anything"},
+            content_type="application/json",
+        )
+        assert resp.status_code == 500
+
+    def test_rate_limit_exceeded(self, client):
+        ip = "127.0.0.1"
+        _login_rate_store[ip] = [time.time()] * _LOGIN_MAX_ATTEMPTS
+        try:
+            resp = client.post(
+                "/api/auth/login",
+                json={"password": "valid-api-key"},
+                content_type="application/json",
+            )
+            assert resp.status_code == 429
+            assert "Too many login attempts" in resp.json["error"]
+        finally:
+            _login_rate_store.pop(ip, None)

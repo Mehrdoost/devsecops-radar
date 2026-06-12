@@ -7,19 +7,50 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
+  lint-and-typecheck:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install -e ".[dev]"
-      - run: ruff check .
-      - run: pytest tests/ -v --cov=devsecops_radar --cov-report=xml
+      - name: Run Ruff (linter & formatter)
+        run: ruff check .
+      - name: Run Mypy (static type checking)
+        run: mypy .
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - name: Run tests with coverage
+        run: pytest tests/ -v --cov=devsecops_radar --cov-report=xml --cov-report=term-missing
       - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.12' && success()
         uses: codecov/codecov-action@v5
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e ".[dev]"
+      - name: Run Bandit
+        run: bandit -c pyproject.toml -r devsecops_radar/

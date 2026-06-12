@@ -20,7 +20,6 @@ class GitleaksScanner(BaseScanner):
         if not safe_target:
             return []
 
-        # Use pathlib for clean temporary file management
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
             outfile = Path(tmp.name)
 
@@ -32,11 +31,20 @@ class GitleaksScanner(BaseScanner):
                 "--source", safe_target,
                 "--report-format", "json",
                 "--report-path", str(outfile),
-                "--no-git"
+                "--no-git",
             ]
 
-            # 3. Secure execution with Timeout (handled in parent class)
-            self._safe_run_command(cmd)
+            # 3. Execution with built-in timeouts
+            result = self._safe_run_command(cmd)
+
+            # 4. Gitleaks returns 1 if leaks found – that's expected
+            if result.returncode not in (0, 1):
+                logger.error(
+                    f"Gitleaks exited with unexpected code "
+                    f"{result.returncode}: {result.stderr[:300]}"
+                )
+                return []
+
             return self.parse(str(outfile))
 
         except Exception as e:
@@ -44,33 +52,70 @@ class GitleaksScanner(BaseScanner):
             return []
         finally:
             if outfile.exists():
-                outfile.unlink()
+                try:
+                    outfile.unlink()
+                except OSError as e:
+                    logger.warning(
+                        f"Could not delete temporary file {outfile}: {e}"
+                    )
 
     def parse(self, file_path: str) -> list[ScannerFinding]:
-        path = Path(file_path)
+        # 1. Path safety validation (prevent Path Traversal)
+        safe_path = self._validate_target_path(file_path)
+        if not safe_path:
+            return []
+
+        path = Path(safe_path)
 
         if not path.exists() or not path.is_file():
+            logger.error(f"Gitleaks report not found: {file_path}")
             return []
 
-        # 4. Prevent Memory DoS (skip files > 50MB)
-        if path.stat().st_size > 50 * 1024 * 1024:
-            logger.error(f"Report file {path.name} is too large. Skipping.")
-            return []
-
+        # 2. Memory Exhaustion Protection (50MB limit)
         try:
-            with open(path, encoding='utf-8') as f:
+            if path.stat().st_size > 50 * 1024 * 1024:
+                logger.error(
+                    f"Report file {path.name} is too large. Skipping."
+                )
+                return []
+        except OSError as e:
+            logger.error(f"Cannot stat file {path}: {e}")
+            return []
+
+        # 3. Parse JSON safely
+        try:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             logger.error(f"Could not parse Gitleaks output: {e}")
             return []
 
-        # 5. Smart parsing and standardized output
-        raw_findings = data if isinstance(data, list) else data.get("Findings", [])
+        # Normalize: Gitleaks can output a list or a dict with a "Findings" key
+        if isinstance(data, list):
+            raw_findings = data
+        elif isinstance(data, dict):
+            raw_findings = data.get("Findings", [])
+        else:
+            logger.warning("Unexpected Gitleaks output format.")
+            return []
+
         findings: list[ScannerFinding] = []
 
         for item in raw_findings:
             if not isinstance(item, dict):
                 continue
+
+            # Redact the actual secret from the description to prevent leakage
+            match = item.get("Match") or item.get("secret") or ""
+            if match:
+                description = (
+                    f"Secret detected (type: {item.get('RuleID', 'unknown')}). "
+                    "Content has been redacted."
+                )
+            else:
+                description = item.get(
+                    "Description", item.get("description", "Secret detected")
+                )
 
             findings.append({
                 "tool": self.name,
@@ -78,8 +123,8 @@ class GitleaksScanner(BaseScanner):
                 "id": item.get("RuleID", item.get("ruleID", "")),
                 "severity": "CRITICAL",  # Leaked secrets are always critical
                 "title": item.get("Description", item.get("description", "Secret detected")),
-                "description": f"Secret found: {item.get('Match', item.get('secret', '***'))}",
-                "line": item.get("StartLine", item.get("line", 0))
+                "description": description,
+                "line": item.get("StartLine") or item.get("line"),
             })
 
         return findings

@@ -1,12 +1,50 @@
+fail_fast: false
 repos:
+  # General file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: check-json
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # Linting and formatting with Ruff (use the same version as in dev dependencies)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.3.0
+    rev: v0.6.9   # upgrade to a recent stable release
     hooks:
       - id: ruff
-        args: [ --fix ]
+        args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
+
+  # Static type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.9.0
+    rev: v1.11.2   # latest stable
     hooks:
       - id: mypy
-        additional_dependencies: [types-requests, types-PyYAML]
+        additional_dependencies:
+          - types-requests
+          - types-PyYAML
+          - types-setuptools
+
+  # Security linting
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        args: [--configfile, pyproject.toml]
+        exclude: ^tests/
+
+  # (Optional) Dependency vulnerability check – uncomment if you want it in every commit
+  # - repo: https://github.com/Lucas-C/pre-commit-hooks-safety
+  #   rev: v1.3.3
+  #   hooks:
+  #     - id: safety
+  #       args: [check, --file=requirements.txt]

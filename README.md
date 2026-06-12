@@ -41,7 +41,7 @@
 11. [Core Capabilities](#-core-capabilities)
 12. [Community Rules & Online Updates](#-community-rules--online-updates)
 13. [Attack Simulation & What‑If Analysis](#-attack-simulation--what‑if-analysis)
-14. [Security Improvements in v0.4.3](#-security-improvements-in-v043)
+14. [Security Improvements in v0.4.4](#-security-improvements-in-v044)
 15. [Architecture](#-architecture)
 16. [Roadmap](#-roadmap)
 17. [Testing & CI](#-testing--ci)
@@ -411,6 +411,7 @@ devsecops-radar-web                         # Launch on http://localhost:8080
 FINDINGS_FILE=my.json devsecops-radar-web   # Use a custom findings file
 PIPELINE_API_KEY=secret devsecops-radar-web # Enable API authentication
 ```
+![Login](docs/Login_env.png)
 
 </details>
 
@@ -467,17 +468,63 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## 🔐 Security Improvements in v0.4.3
+## 🔐 Security Hardening & Production Readiness in v0.4.4
 
-- **Path Traversal Prevention:** All file operations (rules, manifests, SBOM, backups) now strictly validate that paths remain within the allowed base directory.
-- **Input Sanitization for Attack Simulation:** Bash script generation now safely escapes all user-controlled data, eliminating command injection risks in sandboxed PoCs.
-- **Hardened Docker Sandbox:** Attack simulation containers run with `--cap-drop=ALL`, `--read-only` filesystem, `--network=none`, and as non-root user `nobody`.
-- **Constant-time API Key Comparison:** Login and API key verification use `hmac.compare_digest` to prevent timing attacks.
-- **Database Connection Security:** SQLite WAL mode enabled, foreign keys enforced, and `pool_pre_ping` configured for connection health checks.
-- **Input Size Limits:** Payload size restricted (1MB), database field lengths truncated to prevent DoS and log bloat.
-- **Safe Community Rule Updates:** Git operations are restricted to whitelisted `https://github.com` URLs only, with strict argument validation.
-- **Secrets Redaction:** PDF reports and logs automatically redact passwords, tokens, and keys.
-- **Mandatory Environment Secrets:** JWT secret and API key must be provided; the server fails fast if they are missing or weak.
+This release is a comprehensive security and stability overhaul. All known
+vulnerabilities in the web interface, API, and scanner logic have been fixed.
+The project now meets enterprise‑grade security expectations, especially in
+air‑gapped environments.
+
+### 🔐 Security Fixes (Critical & High Severity)
+- XSS (Stored) – Dashboard table rows and detail views no longer inject raw
+  finding data into the DOM; all values are properly escaped.
+- Path Traversal – Data files (findings.json, AI summaries, topology) are
+  validated to stay within the working directory. Arbitrary file read via
+  environment variables is blocked.
+- Authentication Bypass – Endpoints /api/attack-paths, /api/summary,
+  /api/topology, and /api/scan-result now correctly enforce API‑key
+  authentication.
+- API Key Exposure – The dashboard no longer renders the real API key in the
+  page source.
+- Command Injection in Attack Simulation – Script generation now allows only
+  a safe subset of characters; multi‑line and special characters are stripped.
+- Secret Leakage in Reports – Gitleaks findings no longer contain the actual
+  secret in the description; PDF/HTML reports redact common token patterns (GitHub,
+  GitLab, AWS, JWT) across all fields.
+
+### 🧱 Architecture & Performance
+- Rate Limiting – Login and all API‑key protected endpoints are rate‑limited
+  (in‑memory, thread‑safe).
+- Session Management – The database scoped session is no longer manually
+  closed, preventing “instance not bound” errors in multi‑step requests.
+- Database Schema – execution_time now stored as Float (seconds); redundant
+  findings_json column removed; index added on scans.timestamp.
+- AI Analyzer – Concurrent chunk processing capped at 5; Ollama endpoint
+  restricted to localhost to guarantee air‑gap compliance.
+- Policy Engine – New on_violation field (warn / fail) allows flexible
+  policy enforcement.
+
+### 🛡 Scanner Improvements
+- All scanners (trivy, semgrep, zizmor, poutine, gitleaks) now call
+  _validate_target_path before parsing any file, blocking path‑traversal at
+  the adapter layer.
+- Trivy now supports image digests (repo@sha256:...).
+- Semgrep and Gitleaks properly treat non‑zero exit codes that indicate findings.
+
+### 🎨 Developer & Operations
+- semgrep moved to optional dependencies (pip install devsecops-radar[extra]).
+- Ruff enabled with security rules (S); line length set to 120.
+- Jira project key and issue type configurable via JIRA_PROJECT_KEY and
+  JIRA_ISSUE_TYPE.
+- CORS origins controlled by CORS_ORIGINS environment variable (no longer *).
+- All Python files formatted to comply with the new standard.
+
+### ⬆️ Upgrade Instructions
+1. Pull the latest image or update the package: pip install --upgrade devsecops-radar
+2. Review your .env file – ensure JWT_SECRET and PIPELINE_API_KEY are strong
+   (≥ 32 characters).
+3. If using Jira, set JIRA_PROJECT_KEY and JIRA_ISSUE_TYPE.
+4. Restart the web server.
 
 ---
 

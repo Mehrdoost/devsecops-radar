@@ -1,242 +1,300 @@
+"""Tests for the dashboard routes."""
+
 import json
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from flask import Flask
 
-from devsecops_radar.web.dashboard.routes import dashboard_bp, load_findings
+# Environment is already set by conftest.py (JWT_SECRET, PIPELINE_API_KEY, DATABASE_URL)
+from devsecops_radar.web.dashboard.routes import (
+    _safe_data_path,
+    dashboard_bp,
+    load_findings,
+)
 
 
-# ------------------------------------------------------------
-# load_findings
-# ------------------------------------------------------------
-class TestLoadFindings:
-    def test_file_missing(self):
-        with patch("os.path.exists", return_value=False):
-            assert load_findings() == []
-
-    def test_file_exists(self):
-        data = [{"id": "R1", "tool": "Semgrep"}]
-        with patch("os.path.exists", return_value=True), \
-             patch("builtins.open", mock_open(read_data=json.dumps(data))):
-            result = load_findings()
-            assert result == data
-
-
-# ------------------------------------------------------------
-# Flask app fixture with API key and patched auth
-# ------------------------------------------------------------
 @pytest.fixture
-def app(monkeypatch):
-    monkeypatch.setenv("PIPELINE_API_KEY", "testkey")
-    from devsecops_radar.core.settings import settings
-    settings.PIPELINE_API_KEY = "testkey"
-
-    with patch("devsecops_radar.web.dashboard.routes.require_api_key", lambda f: f):
-        app = Flask(__name__)
-        app.config["TESTING"] = True
-        app.register_blueprint(dashboard_bp)
-        yield app
+def app():
+    """Create a Flask test app with the dashboard blueprint."""
+    app = Flask(__name__)
+    app.register_blueprint(dashboard_bp)
+    return app
 
 
 @pytest.fixture
 def client(app):
-    return app.test_client()
+    """Return a test client with valid API key header."""
+    with app.test_client() as client:
+        # The conftest sets PIPELINE_API_KEY=test-api-key
+        client.environ_base["HTTP_X_API_KEY"] = "test-api-key"
+        yield client
 
 
-def auth_headers():
-    return {"X-API-Key": "testkey"}
+# ============================================================================
+# _safe_data_path
+# ============================================================================
+class TestSafeDataPath:
+    def test_allowed_file(self, tmp_path):
+        base = tmp_path / "allowed"
+        base.mkdir()
+        f = base / "data.json"
+        f.touch()
+        with patch(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", base
+        ):
+            assert _safe_data_path("data.json") == f.resolve()
+
+    def test_traversal_blocked(self, tmp_path):
+        base = tmp_path / "allowed"
+        base.mkdir()
+        outside = tmp_path / "evil.txt"
+        outside.touch()
+        with patch(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", base
+        ):
+            assert _safe_data_path("../evil.txt") is None
+
+    def test_absolute_path_blocked(self, tmp_path):
+        base = tmp_path / "allowed"
+        base.mkdir()
+        with patch(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", base
+        ):
+            assert _safe_data_path(str(tmp_path / "other.txt")) is None
 
 
-# ------------------------------------------------------------
-# GET /
-# ------------------------------------------------------------
-class TestIndex:
-    def test_returns_200(self, client):
-        with patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=[]):
-            resp = client.get("/")
-            assert resp.status_code == 200
-            assert b"Pipeline Sentinel" in resp.data
+# ============================================================================
+# load_findings
+# ============================================================================
+class TestLoadFindings:
+    def test_file_exists(self, tmp_path):
+        data = [{"id": "1", "severity": "HIGH"}]
+        file = tmp_path / "findings.json"
+        file.write_text(json.dumps(data))
+        with patch(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", tmp_path
+        ), patch(
+            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE", "findings.json"
+        ):
+            result = load_findings()
+        assert result == data
+
+    def test_file_missing(self, tmp_path):
+        with patch(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", tmp_path
+        ), patch(
+            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE",
+            "nonexistent.json",
+        ):
+            assert load_findings() == []
+
+    def test_file_outside_allowed_dir(self, tmp_path):
+        outside = tmp_path / "outside.json"
+        outside.write_text("[]")
+        with patch(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR",
+            tmp_path / "subdir",
+        ), patch(
+            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE", str(outside)
+        ):
+            assert load_findings() == []
 
 
-# ------------------------------------------------------------
-# GET /api/findings
-# ------------------------------------------------------------
+# ============================================================================
+# API endpoints
+# ============================================================================
 class TestApiFindings:
-    def test_returns_paginated_data(self, client):
-        mock_data = {"data": [], "total": 0, "page": 1, "per_page": 50}
-        with patch("devsecops_radar.web.dashboard.routes.get_findings_paginated",
-                   return_value=mock_data) as mock_fn:
-            resp = client.get("/api/findings?page=2&per_page=10", headers=auth_headers())
-            assert resp.status_code == 200
-            mock_fn.assert_called_once_with(2, 10)
-            assert resp.json == mock_data
-
-    def test_default_params(self, client):
-        mock_data = {"data": [], "total": 0, "page": 1, "per_page": 50}
-        with patch("devsecops_radar.web.dashboard.routes.get_findings_paginated",
-                   return_value=mock_data) as mock_fn:
-            client.get("/api/findings", headers=auth_headers())
-            mock_fn.assert_called_once_with(1, 50)
+    @patch("devsecops_radar.web.dashboard.routes.get_findings_paginated")
+    def test_returns_paginated_data(self, mock_paginated, client):
+        mock_paginated.return_value = {
+            "total": 2,
+            "page": 1,
+            "per_page": 50,
+            "data": [{"id": "1"}, {"id": "2"}],
+        }
+        resp = client.get("/api/findings?page=1&per_page=10")
+        assert resp.status_code == 200
+        assert resp.json["total"] == 2
+        mock_paginated.assert_called_once_with(1, 10)
 
 
-# ------------------------------------------------------------
-# GET /api/history (new version)
-# ------------------------------------------------------------
 class TestApiHistory:
-    def test_returns_history(self, client):
-        mock_finding = MagicMock()
-        mock_finding.severity = "HIGH"
-        mock_scan = MagicMock()
-        mock_scan.timestamp = None
-        mock_scan.risk_score = 80
-        mock_scan.findings = [mock_finding]
-
+    @patch("devsecops_radar.web.dashboard.routes.db_session")
+    @patch("devsecops_radar.web.dashboard.routes.Scan")
+    def test_returns_history(self, MockScan, mock_db_session, client):
         mock_session = MagicMock()
-        mock_session.query.return_value.order_by.return_value.all.return_value = [mock_scan]
-        mock_session.close = MagicMock()
+        mock_db_session.return_value = mock_session
 
-        with patch("devsecops_radar.web.dashboard.routes.db_session", return_value=mock_session):
-            resp = client.get("/api/history", headers=auth_headers())
-            assert resp.status_code == 200
-            data = resp.json
-            assert len(data) == 1
-            assert data[0]["risk_score"] == 80
-            assert data[0]["high"] == 1
-            assert data[0]["critical"] == 0
+        scan1 = MagicMock()
+        scan1.timestamp = None
+        scan1.risk_score = 80
+        f1, f2 = MagicMock(), MagicMock()
+        f1.severity = "CRITICAL"
+        f2.severity = "HIGH"
+        scan1.findings = [f1, f2]
 
+        scan2 = MagicMock()
+        scan2.timestamp.isoformat.return_value = "2025-01-01T00:00:00"
+        scan2.risk_score = 60
+        f3 = MagicMock()
+        f3.severity = "LOW"
+        scan2.findings = [f3]
 
-# ------------------------------------------------------------
-# GET /api/attack-paths (new endpoint)
-# ------------------------------------------------------------
-class TestApiAttackPaths:
-    def test_returns_graph_from_findings(self, client):
-        findings = [
-            {"id": "R1", "severity": "HIGH", "title": "SQLi", "target": "app.py", "tool": "semgrep"},
-            {"id": "R2", "severity": "MEDIUM", "title": "XSS", "target": "views.py", "tool": "trivy"},
+        mock_session.query.return_value.order_by.return_value.all.return_value = [
+            scan1,
+            scan2,
         ]
-        with patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=findings):
-            resp = client.get("/api/attack-paths", headers=auth_headers())
-            assert resp.status_code == 200
-            data = resp.json
-            assert len(data["nodes"]) == 2
-            assert len(data["links"]) == 1
-            assert data["nodes"][0]["severity"] == "HIGH"
-            assert data["nodes"][1]["severity"] == "MEDIUM"
-
-    def test_no_findings_returns_empty(self, client):
-        with patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=[]):
-            resp = client.get("/api/attack-paths", headers=auth_headers())
-            assert resp.status_code == 200
-            assert resp.json == {"nodes": [], "links": []}
+        resp = client.get("/api/history")
+        assert resp.status_code == 200
+        data = resp.json
+        assert len(data) == 2
+        assert data[0]["critical"] == 1
+        assert data[0]["high"] == 1
+        assert data[0]["risk_score"] == 80
+        assert data[1]["low"] == 1
 
 
-# ------------------------------------------------------------
-# GET /api/rag
-# ------------------------------------------------------------
+class TestApiAttackPaths:
+    @patch(
+        "devsecops_radar.web.dashboard.routes.load_findings",
+        return_value=[
+            {"id": "1", "severity": "HIGH", "title": "t1"},
+            {"id": "2", "severity": "MEDIUM", "title": "t2"},
+        ],
+    )
+    def test_returns_graph_data(self, mock_load, client):
+        resp = client.get("/api/attack-paths")
+        assert resp.status_code == 200
+        data = resp.json
+        assert len(data["nodes"]) == 2
+        assert len(data["links"]) == 1
+
+    @patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=[])
+    def test_no_findings_returns_empty_graph(self, mock_load, client):
+        resp = client.get("/api/attack-paths")
+        assert resp.status_code == 200
+        assert resp.json == {"nodes": [], "links": []}
+
+
 class TestApiRag:
-    def test_empty_query_returns_empty_list(self, client):
-        resp = client.get("/api/rag", headers=auth_headers())
+    @patch("devsecops_radar.web.dashboard.routes.rag_search")
+    def test_returns_rag_results(self, mock_rag, client):
+        mock_rag.return_value = [{"id": "1", "tool": "trivy"}]
+        resp = client.get("/api/rag?q=test")
+        assert resp.status_code == 200
+        assert resp.json == [{"id": "1", "tool": "trivy"}]
+        mock_rag.assert_called_once_with("test")
+
+    def test_empty_query_returns_empty(self, client):
+        resp = client.get("/api/rag?q=")
         assert resp.status_code == 200
         assert resp.json == []
 
-    def test_query_returns_results(self, client):
-        mock_results = [{"tool": "Semgrep", "id": "R1"}]
-        with patch("devsecops_radar.web.dashboard.routes.rag_search",
-                   return_value=mock_results) as mock_rag:
-            resp = client.get("/api/rag?q=SQLi", headers=auth_headers())
-            assert resp.status_code == 200
-            mock_rag.assert_called_once_with("SQLi")
-            assert resp.json == mock_results
 
-
-# ------------------------------------------------------------
-# POST /api/simulate
-# ------------------------------------------------------------
 class TestApiSimulate:
-    def test_no_finding_ids(self, client):
-        resp = client.post("/api/simulate", json={}, headers=auth_headers())
+    def test_invalid_finding_ids(self, client):
+        resp = client.post(
+            "/api/simulate",
+            json={"finding_ids": "not a list"},
+            content_type="application/json",
+        )
         assert resp.status_code == 400
-        assert resp.json["error"] == "No finding IDs"
 
-    def test_findings_not_found(self, client):
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=[{"id": "R1"}]):
-            resp = client.post("/api/simulate", json={"finding_ids": ["R2"]}, headers=auth_headers())
-            assert resp.status_code == 404
-            assert resp.json["error"] == "Not found"
+    @patch(
+        "devsecops_radar.web.dashboard.routes.load_findings", return_value=[]
+    )
+    def test_findings_not_found(self, mock_load, client):
+        resp = client.post(
+            "/api/simulate",
+            json={"finding_ids": ["F1"]},
+            content_type="application/json",
+        )
+        assert resp.status_code == 404
 
-    def test_simulation_success(self, client):
-        findings = [{"id": "R1", "title": "XSS", "tool": "Semgrep"}]
-        mock_script = "#!/bin/bash\necho 'poc'"
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=findings), \
-             patch("devsecops_radar.core.attack_simulation.simulate_attack",
-                   return_value="/tmp/poc.sh"), \
-             patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc",
-                   return_value="sandbox output"), \
-             patch("builtins.open", mock_open(read_data=mock_script)):
-            resp = client.post("/api/simulate", json={"finding_ids": ["R1"]}, headers=auth_headers())
-            assert resp.status_code == 200
-            data = resp.json
-            assert mock_script in data["script"]
-            assert "R1: XSS" in data["description"]
-            assert data["sandbox_output"] == "sandbox output"
+    @patch(
+        "devsecops_radar.web.dashboard.routes.load_findings",
+        return_value=[{"id": "F1", "title": "Test", "target": "a.py"}],
+    )
+    @patch("devsecops_radar.core.attack_simulation.simulate_attack")
+    @patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc")
+    def test_simulates_selected(
+        self, mock_run_sandbox, mock_simulate, mock_load, client, tmp_path
+    ):
+        script_file = tmp_path / "poc.sh"
+        script_file.write_text("#!/bin/bash\necho ok")
+        mock_simulate.return_value = str(script_file)
+        mock_run_sandbox.return_value = "Sandbox output"
 
-    def test_sandbox_poc_exception(self, client):
-        findings = [{"id": "R1", "title": "XSS"}]
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=findings), \
-             patch("devsecops_radar.core.attack_simulation.simulate_attack",
-                   return_value="/tmp/poc.sh"), \
-             patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc",
-                   side_effect=Exception("docker missing")), \
-             patch("builtins.open", mock_open(read_data="script")):
-            resp = client.post("/api/simulate", json={"finding_ids": ["R1"]}, headers=auth_headers())
-            assert resp.status_code == 200
-            assert resp.json["sandbox_output"] is None
+        resp = client.post(
+            "/api/simulate",
+            json={"finding_ids": ["F1"]},
+            content_type="application/json",
+        )
+        assert resp.status_code == 200
+        data = resp.json
+        assert "script" in data
+        assert data["sandbox_output"] == "Sandbox output"
 
 
-# ------------------------------------------------------------
-# GET /api/report
-# ------------------------------------------------------------
 class TestApiReport:
-    def test_json_report(self, client):
-        findings = [{"id": "R1", "tool": "Semgrep"}]
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=findings), \
-             patch("os.path.exists", return_value=False):
-            resp = client.get("/api/report?format=json", headers=auth_headers())
-            assert resp.status_code == 200
-            assert resp.content_type == "application/json"
-            data = json.loads(resp.data)
-            assert data["findings"] == findings
+    @patch(
+        "devsecops_radar.web.dashboard.routes.load_findings",
+        return_value=[{"id": "1", "severity": "HIGH"}],
+    )
+    @patch(
+        "devsecops_radar.web.dashboard.routes._safe_data_path",
+        return_value=None,
+    )
+    def test_report_json(self, mock_safe, mock_load, client):
+        resp = client.get("/api/report?format=json")
+        assert resp.status_code == 200
+        assert resp.mimetype == "application/json"
+        data = json.loads(resp.data)
+        assert data["findings"] == [{"id": "1", "severity": "HIGH"}]
 
-    def test_html_report(self, client):
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=[]), \
-             patch("os.path.exists", return_value=False):
-            resp = client.get("/api/report?format=html", headers=auth_headers())
-            assert resp.status_code == 200
-            assert b"<html>" in resp.data
+    @patch(
+        "devsecops_radar.web.dashboard.routes.load_findings",
+        return_value=[{"id": "1", "severity": "HIGH", "tool": "trivy",
+                        "target": "a.py", "title": "Test"}],
+    )
+    @patch(
+        "devsecops_radar.web.dashboard.routes._safe_data_path",
+        return_value=None,
+    )
+    def test_report_html(self, mock_safe, mock_load, client):
+        resp = client.get("/api/report?format=html")
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/html"
+        content = resp.data.decode()
+        assert "Pipeline Sentinel Security Report" in content
+        assert "trivy" in content
 
-    def test_pdf_report(self, client):
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=[]), \
-             patch("devsecops_radar.web.dashboard.routes.generate_pdf_report") as mock_pdf, \
-             patch("os.path.exists", return_value=False), \
-             patch("devsecops_radar.web.dashboard.routes.send_file") as mock_send:
-            mock_send.return_value = ("pdf data", 200)
-            resp = client.get("/api/report", headers=auth_headers())
-            assert resp.status_code == 200
-            mock_pdf.assert_called_once()
+    @patch(
+        "devsecops_radar.web.dashboard.routes.load_findings",
+        return_value=[{"id": "1"}],
+    )
+    @patch("devsecops_radar.web.dashboard.routes.generate_pdf_report")
+    @patch(
+        "devsecops_radar.web.dashboard.routes._safe_data_path",
+        return_value=None,
+    )
+    @patch("devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR")
+    @patch("devsecops_radar.web.dashboard.routes.send_file")
+    def test_report_pdf(
+        self, mock_send, mock_dir, mock_safe, mock_pdf, mock_load, client, tmp_path
+    ):
+        # Provide a safe temporary path that "exists" for send_file
+        mock_dir.__truediv__.return_value = tmp_path / "report.pdf"
+        # Ensure the mocked file passes the existence check? No, send_file is mocked entirely.
+        mock_send.return_value = ("fake pdf", 200)
+        resp = client.get("/api/report?format=pdf")
+        assert resp.status_code == 200
+        mock_pdf.assert_called_once()
 
-    def test_report_default_format(self, client):
-        with patch("devsecops_radar.web.dashboard.routes.load_findings",
-                   return_value=[]), \
-             patch("devsecops_radar.web.dashboard.routes.generate_pdf_report"), \
-             patch("os.path.exists", return_value=False), \
-             patch("devsecops_radar.web.dashboard.routes.send_file",
-                   return_value=("pdf data", 200)):
-            resp = client.get("/api/report", headers=auth_headers())
-            assert resp.status_code == 200
+
+class TestIndex:
+    def test_index_page_renders(self, client):
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"Pipeline Sentinel" in resp.data
