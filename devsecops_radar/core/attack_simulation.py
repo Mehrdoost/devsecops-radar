@@ -154,7 +154,7 @@ def run_sandboxed_poc(script_path: str) -> str:
 
     logger.success("Sandbox simulation completed successfully.")
     try:
-        _cleanup_temp_dir(script_file.parent)
+        _cleanup_temp_dir(str(script_file.parent))
     except Exception as e:
         logger.error(f"Failed to clean up temporary directory: {e}")
     return output.strip()

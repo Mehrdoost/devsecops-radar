@@ -24,16 +24,14 @@ from devsecops_radar.scanners.adapter import ScannerAdapter
 
 
 def get_system_ram_gb() -> float:
-    """Safely gets total system RAM using psutil."""
     try:
         return round(psutil.virtual_memory().total / (1024 ** 3), 1)
     except Exception as e:
         logger.debug(f"Failed to read system RAM: {e}")
-        return 4.0  # Safe fallback
+        return 4.0
 
 
 def get_gpu_status() -> bool:
-    """Safely checks for GPU presence without crashing."""
     try:
         sys_os = platform.system()
         if sys_os in ["Windows", "Linux"]:
@@ -47,15 +45,14 @@ def get_gpu_status() -> bool:
                 capture_output=True, text=True, check=False
             )
             return 'apple' in result.stdout.lower()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"GPU check failed (non-critical): {e}")
     return False
 
 
 def estimate_analysis(
     findings_count: int, model: str, backend: str, force_ai: bool = False
 ) -> tuple[bool, float, int, str]:
-    """Provides a safe hardware analysis and dynamic chunking strategy."""
     ram = get_system_ram_gb()
     has_gpu = get_gpu_status()
     cores = psutil.cpu_count(logical=False) or 4
@@ -132,7 +129,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Pipeline Sentinel - Unified CI/CD Security Dashboard'
     )
-    # Inputs
     parser.add_argument('--trivy', type=str)
     parser.add_argument('--semgrep', type=str)
     parser.add_argument('--poutine', type=str)
@@ -141,7 +137,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--rules', type=str, help='Path to custom JSON rules directory')
     parser.add_argument('--topology', type=str, help='Path to infrastructure topology JSON')
 
-    # Engine Settings
     parser.add_argument('--output', type=str, default='findings.json')
     parser.add_argument('--analyze', action='store_true', help='Run AI analysis on findings')
     parser.add_argument('--force-ai', action='store_true', help='Force AI execution bypassing limits')
@@ -150,7 +145,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument('--llm-model', type=str, default='llama3.2')
 
-    # Policy and Remediation
     parser.add_argument('--policy', type=str, help='Path to strict JSON policy limits')
     parser.add_argument('--fix', action='store_true', help='Auto-apply AI suggested patches')
     parser.add_argument(
@@ -201,7 +195,7 @@ async def run_all_scanners(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_findings = []
-    for _idx, res in enumerate(results):
+    for res in results:
         if isinstance(res, Exception):
             logger.error(f"Scanner task failed: {res}")
         elif isinstance(res, list):
@@ -211,13 +205,12 @@ async def run_all_scanners(
 
 
 def sort_findings_by_risk(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Prioritizes findings for the AI engine based on severity and dynamic score."""
     severity_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0}
     return sorted(
         findings,
-        key=lambda f: (
-            severity_rank.get(str(f.get("severity")).upper(), 0),
-            f.get("dynamic_risk_score", 0.0)
+        key=lambda x: (
+            severity_rank.get(str(x.get("severity")).upper(), 0),
+            x.get("dynamic_risk_score", 0.0)
         ),
         reverse=True
     )
@@ -249,8 +242,8 @@ async def execute_ai_analysis(
             "risk_score": 0.0,
             "hardware_profile": hw_type
         }
-        with open(summary_file, 'w', encoding='utf-8') as f:
-            json.dump(fallback, f, indent=2)
+        with open(summary_file, 'w', encoding='utf-8') as fh:
+            json.dump(fallback, fh, indent=2)
         return fallback
 
     logger.info("Initializing AI Security Engine...")
@@ -267,8 +260,8 @@ async def execute_ai_analysis(
     analysis["execution_time"] = f"{elapsed}s"
     analysis["hardware_profile"] = hw_type
 
-    with open(summary_file, 'w', encoding='utf-8') as f:
-        json.dump(analysis, f, indent=2)
+    with open(summary_file, 'w', encoding='utf-8') as fh:
+        json.dump(analysis, fh, indent=2)
 
     logger.success(f"✅ AI analysis completed in {elapsed}s and saved to {summary_file}")
     return analysis
@@ -277,7 +270,6 @@ async def execute_ai_analysis(
 def interactive_remediation(
     findings: list[dict[str, Any]], ai_summary: dict[str, Any]
 ) -> None:
-    """Safe, step-by-step interactive patch review (only if TTY is available)."""
     if not sys.stdin.isatty():
         logger.warning(
             "No TTY detected; interactive review disabled. "
@@ -328,7 +320,6 @@ def interactive_remediation(
 
 
 def safe_wizard() -> None:
-    """A safe setup wizard avoiding dangerous curl | sh pipes."""
     logger.info("Welcome to Pipeline Sentinel Setup")
 
     if not shutil.which("ollama"):
@@ -351,7 +342,6 @@ def safe_wizard() -> None:
 
 
 async def run_app() -> None:
-    """Main Asynchronous Application Flow."""
     args = parse_args()
 
     if args.wizard:
@@ -364,11 +354,9 @@ async def run_app() -> None:
         format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}"
     )
 
-    # 1. Gather Findings from Plugins and Custom Rules
     plugins = discover_plugins()
     findings = await run_all_scanners(args, plugins)
 
-    # Load custom rules if provided, and reuse the engine instance
     rule_engine = None
     if args.rules:
         rule_engine = RuleFusionEngine(rules_dir=args.rules)
@@ -379,43 +367,37 @@ async def run_app() -> None:
         logger.info("No findings were discovered or loaded. Exiting gracefully.")
         return
 
-    # 2. Topology and Valuation
     topology = {}
     if args.topology:
         topo_path = Path(args.topology)
         if topo_path.exists() and topo_path.is_file():
             try:
-                with open(topo_path, encoding='utf-8') as f:
-                    topology = json.load(f)
+                with open(topo_path, encoding='utf-8') as fh:
+                    topology = json.load(fh)
             except Exception as e:
                 logger.error(f"Failed to parse topology JSON: {e}")
 
-    for f in findings:
-        f['dynamic_risk_score'] = compute_dynamic_risk_score(f, topology)
+    for finding in findings:
+        finding['dynamic_risk_score'] = compute_dynamic_risk_score(finding, topology)
 
-    # 3. Policy Evaluation (independent of custom rules)
     if args.policy:
-        # Use existing engine if available, otherwise create a temporary one
         if rule_engine is None:
-            rule_engine = RuleFusionEngine(rules_dir=".")  # fallback to CWD
+            rule_engine = RuleFusionEngine(rules_dir=".")
         rule_engine.findings = findings
         if not rule_engine.evaluate_policy(args.policy):
             logger.error("Build failed due to strict policy violations.")
             sys.exit(1)
 
-    # 4. Save Raw Results (after policy check)
     try:
-        with open(args.output, 'w', encoding='utf-8') as f:
-            json.dump(findings, f, indent=2)
+        with open(args.output, 'w', encoding='utf-8') as fh:
+            json.dump(findings, fh, indent=2)
         save_scan(findings)
         logger.success(f"Aggregated {len(findings)} findings into {args.output}")
     except Exception as e:
         logger.error(f"Database/File save error: {e}")
 
-    # 5. AI Analysis
     ai_summary = await execute_ai_analysis(args, findings, topology)
 
-    # 6. Remediation & PRs
     if args.fix and ai_summary:
         if args.review:
             interactive_remediation(findings, ai_summary)
@@ -425,14 +407,12 @@ async def run_app() -> None:
             if modified:
                 generate_pr(modified)
 
-    # 7. Reporting
     if args.report:
         generate_pdf_report(findings, ai_summary, args.report)
         logger.success(f"PDF report generated: {args.report}")
 
 
 def main() -> None:
-    """Entry point."""
     try:
         asyncio.run(run_app())
     except KeyboardInterrupt:

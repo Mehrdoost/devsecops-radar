@@ -7,8 +7,8 @@ import pytest
 from flask import Flask
 
 from devsecops_radar.web.attack_paths.routes import (
-    _safe_data_path,
     _load_findings,
+    _safe_data_path,
     attack_paths_bp,
 )
 

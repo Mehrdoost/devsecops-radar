@@ -4,6 +4,7 @@ from html import escape as html_escape
 from pathlib import Path
 
 from flask import Blueprint, jsonify, render_template_string, request, send_file
+from loguru import logger
 
 from devsecops_radar.core.auth import require_any_auth
 from devsecops_radar.core.database import db_session, get_findings_paginated
@@ -2171,7 +2172,7 @@ def api_simulate():
         try:
             sandbox_output = run_sandboxed_poc(last_script_path)
         except Exception:
-            pass
+            logger.warning("Sandbox execution failed silently.", exc_info=True)
 
     return jsonify({
         "script": full_script,

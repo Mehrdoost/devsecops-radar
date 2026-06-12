@@ -122,7 +122,7 @@ class TestApiFindings:
 class TestApiHistory:
     @patch("devsecops_radar.web.dashboard.routes.db_session")
     @patch("devsecops_radar.web.dashboard.routes.Scan")
-    def test_returns_history(self, MockScan, mock_db_session, client):
+    def test_returns_history(self, mock_scan, mock_db_session, client):
         mock_session = MagicMock()
         mock_db_session.return_value = mock_session
 

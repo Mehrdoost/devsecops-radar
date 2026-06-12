@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from loguru import logger
 
 from devsecops_radar.core.attack_simulation import (
     _MAX_FIELD_LENGTH,
@@ -16,7 +17,6 @@ from devsecops_radar.core.attack_simulation import (
     run_sandboxed_poc,
     simulate_attack,
 )
-from loguru import logger
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +239,6 @@ class TestRunSandboxedPoc:
         assert "script path tampering detected" in output.lower()
 
     def test_docker_daemon_unavailable(self, tmp_path):
-        """When _is_docker_available returns False, it should return early with a clear message."""
         script = tmp_path / "test.sh"
         script.write_text("#!/bin/bash\necho safe")
         script.chmod(0o755)
@@ -264,7 +263,7 @@ class TestRunSandboxedPoc:
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
         assert any(str(script) in a for a in args)
-        mock_cleanup.assert_called_once_with(script.parent)
+        mock_cleanup.assert_called_once_with(str(script.parent))
 
     @patch("subprocess.run")
     def test_docker_run_timeout(self, mock_run, tmp_path):
@@ -293,13 +292,11 @@ class TestRunSandboxedPoc:
 
     @patch("subprocess.run")
     def test_docker_not_installed_during_run(self, mock_run, tmp_path):
-        """Simulate that Docker CLI exists but the actual run command fails with FileNotFoundError."""
         script = tmp_path / "poc.sh"
         script.write_text("#!/bin/bash\necho")
         script.chmod(0o755)
         with patch("tempfile.gettempdir", return_value=str(tmp_path)):
             with patch("devsecops_radar.core.attack_simulation._is_docker_available", return_value=True):
-                # The first call (docker run) raises FileNotFoundError
                 mock_run.side_effect = FileNotFoundError
                 output = run_sandboxed_poc(str(script))
         assert "Docker is not installed or not running" in output

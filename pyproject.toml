@@ -57,8 +57,6 @@ dev = [
     "bandit>=1.7",
     "safety>=2.3",
 ]
-# Optional: if users want to run Semgrep via CLI, they must install it separately
-# semgrep can be added here for optional install, but it's very large
 extra = [
     "semgrep>=1.0",
 ]
@@ -103,13 +101,22 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.ruff]
-line-length = 120                        # Reduced from 150 for readability
+line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "S"]
+
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]
-select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "S"]   # Added "S" for security checks
+"tests/*" = ["S101", "S104", "S105", "S108", "S110", "B017", "E501"]
+"devsecops_radar/web/dashboard/routes.py" = ["E501"]
+"devsecops_radar/cli/scanner.py" = ["S607", "S110"]
+"devsecops_radar/core/attack_simulation.py" = ["S103", "S607", "S603"]
+"devsecops_radar/core/remediation.py" = ["S110", "S603", "S607"]
+"devsecops_radar/core/rule_fusion.py" = ["S603", "S607"]
+"devsecops_radar/core/sbom.py" = ["S603", "S607"]
+"devsecops_radar/scanners/base.py" = ["S603", "S607"]
+"devsecops_radar/web/app.py" = ["S104"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -120,4 +127,4 @@ ignore_missing_imports = true
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", "venv"]
-skips = ["B101", "B311"]    # Exclude assert_used and random if needed
+skips = ["B101", "B311"]

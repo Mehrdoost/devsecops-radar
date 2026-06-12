@@ -7,6 +7,7 @@ from unittest.mock import patch
 import jwt
 import pytest
 from flask import Flask, jsonify, request
+from loguru import logger
 
 from devsecops_radar.core.auth import (
     _API_KEY_MAX_FAILURES,
@@ -17,11 +18,10 @@ from devsecops_radar.core.auth import (
     _record_failed_attempt,
     create_token,
     login_required,
-    require_api_key,
     require_any_auth,
+    require_api_key,
     verify_api_key,
 )
-from loguru import logger
 
 
 # ---------------------------------------------------------------------------

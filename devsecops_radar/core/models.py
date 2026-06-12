@@ -1,5 +1,6 @@
 import os
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, field_validator
 from sqlalchemy import (
@@ -42,7 +43,7 @@ class FindingSchema(BaseModel):
         return v.strip()
 
 
-class Scan(Base):
+class Scan(Base):                          # type: ignore[valid-type, misc]
     __tablename__ = "scans"
     __table_args__ = (
         CheckConstraint(
@@ -55,14 +56,13 @@ class Scan(Base):
     timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
     risk_score = Column(Float, nullable=True)
     hardware_profile = Column(String, nullable=True)
-    execution_time = Column(Float, nullable=True)   # Stored as seconds
-    # Redundant findings_json column removed
+    execution_time = Column(Float, nullable=True)
     findings = relationship(
         "Finding", back_populates="scan", cascade="all, delete-orphan"
     )
 
 
-class Finding(Base):
+class Finding(Base):                       # type: ignore[valid-type, misc]
     __tablename__ = "findings"
     __table_args__ = (
         CheckConstraint(
@@ -88,7 +88,7 @@ class Finding(Base):
 # ==============================
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///pipeline_sentinel.db")
 
-engine_kwargs = {
+engine_kwargs: dict[str, Any] = {          # نوع صریح
     "pool_pre_ping": True,
     "pool_recycle": 3600,
 }

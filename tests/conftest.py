@@ -1,13 +1,12 @@
 import os
 import sys
-import types
 from unittest.mock import MagicMock
 
 import pytest
 
 # ---------------------------------------------------------------------------
-# Prevent PyO3/cryptography errors by mocking the dependency tree before
-# any other module tries to import it.
+# Prevent PyO3/cryptography errors in test environment by mocking before
+# any module that might try to import them.
 # ---------------------------------------------------------------------------
 for mod in (
     "cryptography",
@@ -20,38 +19,6 @@ for mod in (
 ):
     if mod not in sys.modules:
         sys.modules[mod] = MagicMock()
-
-# ---------------------------------------------------------------------------
-# Build a minimal fake `jwt` module that provides the real exception classes
-# and both `encode` / `decode` functions so that tests can patch them.
-# ---------------------------------------------------------------------------
-if "jwt" not in sys.modules:
-    _fake_jwt = types.ModuleType("jwt")
-
-    class PyJWTError(Exception):
-        pass
-
-    class ExpiredSignatureError(PyJWTError):
-        pass
-
-    class InvalidTokenError(PyJWTError):
-        pass
-
-    def encode(payload, key, algorithm="HS256", **kwargs):
-        # Will be mocked in individual tests.
-        raise NotImplementedError("jwt.encode is mocked – use patch in tests")
-
-    def decode(token, key, algorithms=None, **kwargs):
-        # Will be mocked in individual tests.
-        raise NotImplementedError("jwt.decode is mocked – use patch in tests")
-
-    _fake_jwt.PyJWTError = PyJWTError
-    _fake_jwt.ExpiredSignatureError = ExpiredSignatureError
-    _fake_jwt.InvalidTokenError = InvalidTokenError
-    _fake_jwt.encode = encode
-    _fake_jwt.decode = decode
-
-    sys.modules["jwt"] = _fake_jwt
 
 # ---------------------------------------------------------------------------
 # Environment defaults – MUST be set before any project module is imported.

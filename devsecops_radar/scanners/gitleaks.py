@@ -15,7 +15,6 @@ class GitleaksScanner(BaseScanner):
         return "gitleaks"
 
     def run(self, target: str) -> list[ScannerFinding]:
-        # 1. Strict path validation (replaces insecure regex)
         safe_target = self._validate_target_path(target)
         if not safe_target:
             return []
@@ -24,7 +23,6 @@ class GitleaksScanner(BaseScanner):
             outfile = Path(tmp.name)
 
         try:
-            # 2. Secure command construction (no shell=True)
             cmd = [
                 self.binary_path,
                 "detect",
@@ -34,10 +32,7 @@ class GitleaksScanner(BaseScanner):
                 "--no-git",
             ]
 
-            # 3. Execution with built-in timeouts
             result = self._safe_run_command(cmd)
-
-            # 4. Gitleaks returns 1 if leaks found – that's expected
             if result.returncode not in (0, 1):
                 logger.error(
                     f"Gitleaks exited with unexpected code "
@@ -60,29 +55,23 @@ class GitleaksScanner(BaseScanner):
                     )
 
     def parse(self, file_path: str) -> list[ScannerFinding]:
-        # 1. Path safety validation (prevent Path Traversal)
         safe_path = self._validate_target_path(file_path)
         if not safe_path:
             return []
 
         path = Path(safe_path)
-
         if not path.exists() or not path.is_file():
             logger.error(f"Gitleaks report not found: {file_path}")
             return []
 
-        # 2. Memory Exhaustion Protection (50MB limit)
         try:
             if path.stat().st_size > 50 * 1024 * 1024:
-                logger.error(
-                    f"Report file {path.name} is too large. Skipping."
-                )
+                logger.error(f"Report file {path.name} is too large. Skipping.")
                 return []
         except OSError as e:
             logger.error(f"Cannot stat file {path}: {e}")
             return []
 
-        # 3. Parse JSON safely
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -90,7 +79,6 @@ class GitleaksScanner(BaseScanner):
             logger.error(f"Could not parse Gitleaks output: {e}")
             return []
 
-        # Normalize: Gitleaks can output a list or a dict with a "Findings" key
         if isinstance(data, list):
             raw_findings = data
         elif isinstance(data, dict):
@@ -100,29 +88,21 @@ class GitleaksScanner(BaseScanner):
             return []
 
         findings: list[ScannerFinding] = []
-
         for item in raw_findings:
             if not isinstance(item, dict):
                 continue
 
-            # Redact the actual secret from the description to prevent leakage
-            match = item.get("Match") or item.get("secret") or ""
-            if match:
-                description = (
-                    f"Secret detected (type: {item.get('RuleID', 'unknown')}). "
-                    "Content has been redacted."
-                )
-            else:
-                description = item.get(
-                    "Description", item.get("description", "Secret detected")
-                )
-
+            item.get("Match") or item.get("secret") or ""
+            description = (
+                f"Secret detected (type: {item.get('RuleID', 'unknown')}). "
+                "Content has been redacted."
+            )
             findings.append({
                 "tool": self.name,
-                "target": item.get("File", item.get("file", "")),
-                "id": item.get("RuleID", item.get("ruleID", "")),
-                "severity": "CRITICAL",  # Leaked secrets are always critical
-                "title": item.get("Description", item.get("description", "Secret detected")),
+                "target": str(item.get("File", item.get("file", ""))),
+                "id": str(item.get("RuleID", item.get("ruleID", ""))),
+                "severity": "CRITICAL",
+                "title": str(item.get("Description", item.get("description", "Secret detected"))),
                 "description": description,
                 "line": item.get("StartLine") or item.get("line"),
             })

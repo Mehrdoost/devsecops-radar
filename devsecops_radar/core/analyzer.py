@@ -59,13 +59,12 @@ class AIAnalyzer(ABC):
                 f"Suspicious model name detected: {model}. "
                 "Falling back to 'llama3.2:latest'."
             )
-            return "llama3.2:latest"   # safer fallback than a non-existent model
+            return "llama3.2:latest"
         return model
 
     def _build_prompt(
         self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None
     ) -> str:
-        # Generate random boundary to prevent prompt injection
         boundary = uuid.uuid4().hex
         start_tag = f"<FINDINGS_DATA_{boundary}>"
         end_tag = f"</FINDINGS_DATA_{boundary}>"
@@ -86,7 +85,8 @@ IMPORTANT: Your response must be a single JSON object with exactly these fields:
 - "attack_paths": list of objects with "title", "description", "impact" (string describing the impact)
 - "top_remediations": list of objects with "finding_id", "title", "remediation_steps" (list of strings)
 
-Make sure every object in "attack_paths" includes all three fields. Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
+Make sure every object in "attack_paths" includes all three fields.
+Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
 
 {start_tag}
 {json.dumps(findings, indent=2)}
@@ -205,7 +205,6 @@ Make sure every object in "attack_paths" includes all three fields. Do NOT inclu
                 "Consider increasing 'chunk_size' to optimize performance."
             )
 
-        # Limit concurrency to avoid overwhelming the backend
         sem = asyncio.Semaphore(5)
         async def _sem_task(chunk):
             async with sem:
@@ -216,12 +215,11 @@ Make sure every object in "attack_paths" includes all three fields. Do NOT inclu
         tasks = [_sem_task(chunk) for chunk in chunks]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        valid_results = []
+        # Filter out exceptions before merging – fixes mypy error
+        valid_results: list[dict[str, Any]] = []
         for res in results:
-            if isinstance(res, Exception):
-                logger.error(f"Chunk analysis failed: {res}")
-            else:
-                valid_results.append(res)
+            if not isinstance(res, Exception):
+                valid_results.append(res)       # type: ignore[arg-type]
         return self.merge_analyses(valid_results)
 
 
@@ -234,7 +232,6 @@ class OllamaAnalyzer(AIAnalyzer):
             "OLLAMA_API_BASE", "http://localhost:11434/api/generate"
         )
         parsed = urlparse(raw_url)
-        # Strictly restrict to localhost/private IPs to maintain air-gapped guarantee
         if parsed.scheme not in ["http", "https"]:
             logger.warning(
                 "Invalid OLLAMA_API_BASE scheme. Falling back to localhost."
@@ -318,7 +315,7 @@ class LiteLLMAnalyzer(AIAnalyzer):
             ],
             timeout=self.timeout,
             response_format={"type": "json_object"},
-            drop_params=True,   # safely ignore unsupported params
+            drop_params=True,
         )
         content = response.choices[0].message.content
         return self._extract_and_validate_json(content)

@@ -85,8 +85,8 @@ def print_startup_banner(host: str, port: int, debug: bool) -> None:
         resp = httpx.get("http://localhost:11434/api/version", timeout=1)
         if resp.status_code == 200:
             ollama_reachable = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Ollama check failed: {e}")
 
     if HAS_RICH:
         console = Console()

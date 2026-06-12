@@ -96,7 +96,7 @@ def login_required(f: Callable) -> Callable:
 
         try:
             payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
-            request.user = payload.get("user")
+            request.user = payload.get("user")        # type: ignore[attr-defined]
         except jwt.ExpiredSignatureError:
             # token expiry counts as a failure
             if _record_failed_attempt(_JWT_MAX_FAILURES):
@@ -173,7 +173,7 @@ def require_any_auth(f: Callable) -> Callable:
 
         try:
             payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
-            request.user = payload.get("user")
+            request.user = payload.get("user")        # type: ignore[attr-defined]
         except jwt.ExpiredSignatureError:
             if _record_failed_attempt(_JWT_MAX_FAILURES):
                 return jsonify({"error": "Too many authentication failures. Please slow down."}), 429
