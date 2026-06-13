@@ -7,6 +7,8 @@ from typing import Any
 
 from loguru import logger
 
+from devsecops_radar.core.utils import safe_subprocess_run
+
 
 def _is_safe_path(target: str, base_dir: Path | None = None) -> bool:
     """Prevent Path Traversal attacks."""
@@ -62,7 +64,7 @@ def generate_sbom(
 
     output_path = Path(output_file).resolve()
     try:
-        subprocess.run(
+        safe_subprocess_run(
             [
                 "syft", "scan", str(target_path),
                 "-o", "cyclonedx-json",

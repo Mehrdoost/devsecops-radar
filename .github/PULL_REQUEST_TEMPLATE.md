@@ -56,7 +56,7 @@ Closes #
 
 - [ ] No secrets (tokens, keys, passwords) are hard‑coded or logged
 - [ ] All user‑supplied paths are validated with `_is_safe_path` / `_validate_target_path`
-- [ ] External commands use `subprocess.run(…, shell=False)`
+- [ ] External commands use `safe_subprocess_run(…, shell=False)`
 - [ ] API endpoints are protected by `@require_any_auth` or `@require_api_key`
 - [ ] New environment variables are documented and have a safe default
 - [ ] Database schema changes include migration notes (if applicable)

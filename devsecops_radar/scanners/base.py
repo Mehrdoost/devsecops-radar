@@ -6,6 +6,8 @@ from typing import TypedDict
 
 from loguru import logger
 
+from devsecops_radar.core.utils import safe_subprocess_run
+
 
 class ScannerFinding(TypedDict, total=False):
     id: str
@@ -68,7 +70,7 @@ class BaseScanner(ABC):
         logger.debug(f"Executing {cmd_args[0]} securely.")
 
         try:
-            return subprocess.run(
+            return safe_subprocess_run(
                 cmd_args,
                 capture_output=True,
                 text=True,

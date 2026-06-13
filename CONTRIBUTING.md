@@ -110,7 +110,7 @@ Pipeline Sentinel uses a pluggable scanner architecture based on abstract base c
   * Run `ruff check .` to catch linter issues.
 * **Type Checking:** **Mypy** for static type checking. Our goal is zero errors; use `# type: ignore` sparingly and always include a comment explaining why.
 * **Documentation:** Document public functions with docstrings (Google-style preferred).
-* **Self-Security Hardening:** Never use `subprocess.run` with `shell=True`. Always use constant-time comparisons (`hmac.compare_digest`) for secrets/tokens, and enforce input limits to prevent DoS.
+* **Self-Security Hardening:** Never use `safe_subprocess_run` with `shell=True`. Always use constant-time comparisons (`hmac.compare_digest`) for secrets/tokens, and enforce input limits to prevent DoS.
 
 ---
 

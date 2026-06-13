@@ -4,7 +4,6 @@ import json
 import os
 import platform
 import shutil
-import subprocess
 import sys
 import time
 from importlib.metadata import entry_points
@@ -19,6 +18,7 @@ from devsecops_radar.core.database import save_scan
 from devsecops_radar.core.remediation import auto_fix, generate_pr, generate_remediation_guide
 from devsecops_radar.core.reporting import generate_pdf_report
 from devsecops_radar.core.rule_fusion import RuleFusionEngine
+from devsecops_radar.core.utils import safe_subprocess_run
 from devsecops_radar.core.valuation import compute_dynamic_risk_score
 from devsecops_radar.scanners.adapter import ScannerAdapter
 
@@ -35,12 +35,12 @@ def get_gpu_status() -> bool:
     try:
         sys_os = platform.system()
         if sys_os in ["Windows", "Linux"]:
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['nvidia-smi'], capture_output=True, text=True, check=False
             )
             return result.returncode == 0
         elif sys_os == "Darwin":
-            result = subprocess.run(
+            result = safe_subprocess_run(
                 ['sysctl', '-n', 'machdep.cpu.brand_string'],
                 capture_output=True, text=True, check=False
             )
@@ -335,7 +335,7 @@ def safe_wizard() -> None:
 
     logger.info("Ollama is installed. Verifying core AI model...")
     try:
-        subprocess.run(['ollama', 'pull', 'llama3.2:latest'], check=True)
+        safe_subprocess_run(['ollama', 'pull', 'llama3.2:latest'], check=True)
         logger.success("Setup complete! You are ready to scan.")
     except Exception as e:
         logger.error(f"Failed to pull AI model: {e}")

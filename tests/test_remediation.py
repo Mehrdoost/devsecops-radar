@@ -344,15 +344,25 @@ class TestGeneratePr:
         with patch("subprocess.run") as mock_run:
             with capture_loguru() as msgs:
                 generate_pr({"a.txt", "b.txt"}, branch="fix-branch")
-        # checkout, add a, add b, commit, push = 5 calls
+# checkout, add a, add b, commit, push = 5 calls
         assert mock_run.call_count == 5
         calls = [call[0][0] for call in mock_run.call_args_list]
-        assert calls[0] == ["git", "checkout", "-b", "fix-branch"]
-        assert calls[1] == ["git", "add", "a.txt"] or calls[1] == ["git", "add", "b.txt"]
-        assert calls[2] == ["git", "add", "a.txt"] or calls[2] == ["git", "add", "b.txt"]
-        # commit command: first three elements should be ["git", "commit", "-m"]
-        assert calls[3][:3] == ["git", "commit", "-m"]
-        assert calls[4][:4] == ["git", "push", "-u", "origin"]
+
+        assert "git" in calls[0][0].lower()
+        assert calls[0][1:] == ["checkout", "-b", "fix-branch"]
+
+        assert "git" in calls[1][0].lower()
+        assert calls[1][1:] in [["add", "a.txt"], ["add", "b.txt"]]
+
+        assert "git" in calls[2][0].lower()
+        assert calls[2][1:] in [["add", "a.txt"], ["add", "b.txt"]]
+
+        assert "git" in calls[3][0].lower()
+        assert calls[3][1:3] == ["commit", "-m"]
+
+        assert "git" in calls[4][0].lower()
+        assert calls[4][1:4] == ["push", "-u", "origin"]
+
         assert any("Successfully pushed" in m for m in msgs)
 
     def test_git_failure(self):

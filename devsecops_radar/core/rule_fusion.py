@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError
 
+from devsecops_radar.core.utils import safe_subprocess_run
+
 
 # --- Strict Schemas for Input Validation ---
 class CustomRuleSchema(BaseModel):
@@ -88,13 +90,13 @@ class RuleFusionEngine:
         try:
             if target_dir.exists():
                 logger.info("Updating existing community rules...")
-                subprocess.run(
+                safe_subprocess_run(
                     ["git", "-C", str(target_dir), "pull", "origin", "main"],
                     check=True, capture_output=True, timeout=30
                 )
             else:
                 logger.info(f"Cloning community rules from {repo_url}...")
-                subprocess.run(
+                safe_subprocess_run(
                     ["git", "clone", "--depth", "1", repo_url, str(target_dir)],
                     check=True, capture_output=True, timeout=60
                 )

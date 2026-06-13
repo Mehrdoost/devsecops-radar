@@ -7,6 +7,8 @@ from pathlib import Path
 
 from loguru import logger
 
+from devsecops_radar.core.utils import safe_subprocess_run
+
 _MAX_FIELD_LENGTH = 200
 
 
@@ -69,7 +71,7 @@ def _is_docker_available() -> bool:
         return False
     try:
         # Quick daemon connectivity test (timeout 3s)
-        subprocess.run(
+        safe_subprocess_run(
             ["docker", "info"],
             capture_output=True,
             timeout=3,
@@ -127,7 +129,7 @@ def run_sandboxed_poc(script_path: str) -> str:
     logger.info(f"Launching sandboxed simulation: {' '.join(docker_cmd)}")
 
     try:
-        result = subprocess.run(
+        result = safe_subprocess_run(
             docker_cmd,
             capture_output=True,
             text=True,

@@ -112,7 +112,7 @@ class TestUpdateCommunityRules:
             # since target_dir doesn't exist, it should clone
             mock_run.assert_called_once()
             args = mock_run.call_args[0][0]
-            assert args[0] == "git"
+            assert "git" in args[0].lower()
             assert "clone" in args
 
     def test_successful_pull_when_exists(self, engine, monkeypatch):

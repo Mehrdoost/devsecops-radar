@@ -8,6 +8,8 @@ from typing import Any
 
 from loguru import logger
 
+from devsecops_radar.core.utils import safe_subprocess_run
+
 BACKUP_DIR = Path.home() / ".devsecops-radar" / "backups"
 
 
@@ -190,23 +192,23 @@ def generate_pr(
         return
 
     try:
-        subprocess.run(
+        safe_subprocess_run(
             ["git", "checkout", "-b", branch],
             check=True, capture_output=True, text=True,
         )
 
         for file in modified_files:
-            subprocess.run(
+            safe_subprocess_run(
                 ["git", "add", file],
                 check=True, capture_output=True, text=True,
             )
 
-        subprocess.run(
+        safe_subprocess_run(
             ["git", "commit", "-m",
              "Security Fixes applied by Pipeline Sentinel"],
             check=True, capture_output=True, text=True,
         )
-        subprocess.run(
+        safe_subprocess_run(
             ["git", "push", "-u", "origin", branch],
             check=True, capture_output=True, text=True,
         )
