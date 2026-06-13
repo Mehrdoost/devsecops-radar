@@ -164,15 +164,19 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             --table-border: rgba(255,255,255,0.08);
             --muted-color: var(--text-secondary);
         }
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: var(--bg-primary); }
         ::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 10px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--accent-2); }
+
         body {
-            background: var(--bg-primary); color: var(--text);
+            background: var(--bg-primary);
+            color: var(--text);
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
             margin: 0; padding: 0; overflow-x: hidden;
-            font-size: 15px; line-height: 1.6;
+            font-size: 14px; /* Reduced from 15px for sleeker scaling */
+            line-height: 1.6;
             transition: background 0.5s ease, color 0.5s ease;
         }
         .text-muted { color: var(--muted-color) !important; }
@@ -203,20 +207,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             height: 100%; z-index: 0; pointer-events: none;
         }
         .content-layer { position: relative; z-index: 1; }
-        .navbar { background: transparent !important; padding-top: 1.5rem; padding-bottom: 1.5rem; }
+
+        .navbar { background: transparent !important; padding-top: 1.5rem; padding-bottom: 1.5rem; position: relative; z-index: 2000; }
         .navbar-brand {
             font-weight: 800; letter-spacing: -1px; color: var(--text) !important;
-            font-size: 1.8rem; text-shadow: 0 0 20px var(--accent-glow);
+            font-size: 1.6rem; text-shadow: 0 0 20px var(--accent-glow); /* Scaled down slightly */
         }
         .navbar-brand span { color: var(--accent); }
+
         .top-controls {
             display: flex; align-items: center; background: var(--glass);
             border: 1px solid var(--glass-border); border-radius: 30px;
-            padding: 6px 14px; box-shadow: var(--card-shadow);
+            padding: 5px 12px; box-shadow: var(--card-shadow);
             backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            position: relative; z-index: 2000; /* Ensuring dropdown stays on top */
         }
         .clock-display {
-            font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.95rem; color: var(--text);
+            font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9rem; color: var(--text);
             padding-right: 14px; border-right: 1px solid var(--glass-border);
             display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: default;
         }
@@ -224,78 +231,112 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             border-right: none; border-left: 1px solid var(--glass-border);
             padding-right: 0; padding-left: 14px;
         }
-        .clock-display .time-icon {
-            color: var(--accent); font-size: 1.1rem; display: inline-block;
-        }
-        .clock-display:hover .time-icon {
-            animation: flipHourglass 1.2s ease-in-out infinite;
-        }
+        .clock-display .time-icon { color: var(--accent); font-size: 1rem; display: inline-block; }
+        .clock-display:hover .time-icon { animation: flipHourglass 1.2s ease-in-out infinite; }
         @keyframes flipHourglass {
             0% { transform: rotate(0deg); }
             50% { transform: rotate(180deg); }
             100% { transform: rotate(360deg); }
         }
+
         .lang-selector {
             padding: 0 8px 0 14px; background: transparent; border: none; color: var(--text);
-            font-size: 0.9rem; font-weight: 700; display: flex; align-items: center; gap: 6px;
+            font-size: 0.85rem; font-weight: 700; display: flex; align-items: center; gap: 6px;
             cursor: pointer; transition: color 0.2s; outline: none;
         }
         html[dir="rtl"] .lang-selector { padding: 0 14px 0 8px; }
         .lang-selector:hover { color: var(--accent); }
-        .lang-selector .chevron { font-size: 0.6rem; opacity: 0.7; transition: transform 0.3s; }
+        .lang-selector .chevron { font-size: 0.55rem; opacity: 0.7; transition: transform 0.3s; }
+
+        /* Language Dropdown Animation & Z-index Fix */
         .lang-menu {
-            position: absolute; top: 100%; right: 0; margin-top: 12px; background: var(--bg-secondary);
+            position: absolute; top: 110%; right: 0; background: var(--glass);
+            backdrop-filter: blur(25px); -webkit-backdrop-filter: blur(25px);
             border: 1px solid var(--glass-border); border-radius: 14px; padding: 8px;
-            min-width: 150px; box-shadow: var(--card-shadow); display: none; z-index: 1050;
+            min-width: 150px; box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 0 20px var(--accent-glow);
+            display: none; z-index: 9999; transform-origin: top right;
         }
-        html[dir="rtl"] .lang-menu { right: auto; left: 0; }
-        .lang-menu.open { display: block; animation: slideDown 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+        html[dir="rtl"] .lang-menu { right: auto; left: 0; transform-origin: top left; }
+        .lang-menu.open {
+            display: block;
+            animation: dropIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+        @keyframes dropIn {
+            0% { opacity: 0; transform: scale(0.95) translateY(-10px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
         .lang-menu .lang-item {
-            padding: 10px 14px; border-radius: 8px; cursor: pointer; transition: background 0.2s;
+            padding: 10px 14px; border-radius: 8px; cursor: pointer; transition: all 0.2s;
             display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 500;
         }
-        .lang-menu .lang-item:hover { background: var(--bg-tertiary); color: var(--accent); }
+        .lang-menu .lang-item:hover { background: var(--bg-tertiary); color: var(--accent); transform: translateX(4px); }
+
+        /* Custom Logout Button */
+        .btn-logout {
+            background: rgba(255, 77, 109, 0.08);
+            border: 1px solid rgba(255, 77, 109, 0.3);
+            color: var(--danger);
+            border-radius: 12px; padding: 6px 14px;
+            font-size: 0.85rem; font-weight: 700;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+        .btn-logout:hover {
+            background: var(--danger);
+            color: #fff;
+            border-color: var(--danger);
+            box-shadow: 0 0 20px rgba(255, 77, 109, 0.5);
+            transform: translateY(-2px);
+        }
+        .btn-logout svg { width: 14px; height: 14px; fill: currentColor; transition: transform 0.3s; }
+        .btn-logout:hover svg { transform: translateX(3px); }
+
         .card {
             background: var(--glass); border: 1px solid var(--glass-border);
             border-radius: 20px; transition: box-shadow 0.4s ease, border-color 0.4s ease;
             backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
             box-shadow: var(--card-shadow);
+            padding: 1.25rem !important; /* Adjusted padding to look less bulky */
         }
         .tilt-card { transition: transform 0.1s ease-out, box-shadow 0.1s ease-out; transform-style: preserve-3d; }
         .tilt-card:hover {
             border-color: var(--accent); z-index: 10;
             box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 30px var(--accent-glow);
         }
-        .tilt-card .inner-content { transform: translateZ(30px); }
+        .tilt-card .inner-content { transform: translateZ(25px); }
         .animate-pop { animation: popIn 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards; }
         .delay-1 { animation-delay: 0.1s; }
         .delay-2 { animation-delay: 0.2s; }
         .delay-3 { animation-delay: 0.3s; }
         .delay-4 { animation-delay: 0.4s; }
         @keyframes popIn {
-            0% { opacity: 0; transform: translateY(30px) scale(0.98); }
+            0% { opacity: 0; transform: translateY(20px) scale(0.98); }
             100% { opacity: 1; transform: translateY(0) scale(1); }
         }
+
+        /* Adjusted scale for numbers */
         .stat-pill {
             background: linear-gradient(135deg, var(--bg-tertiary) 0%, rgba(0,0,0,0.1) 100%);
-            border-radius: 18px; padding: 24px 30px; font-weight: 600;
+            border-radius: 18px; padding: 18px 24px; font-weight: 600;
             border: 1px solid var(--glass-border); cursor: pointer; transition: all 0.3s ease;
         }
-        .stat-pill span { font-size: 3.2rem; font-weight: 800; line-height: 1.1; display:block; }
+        .stat-pill span { font-size: 2.6rem; font-weight: 800; line-height: 1.1; display:block; }
         .stat-pill .icon {
-            font-size: 2rem; margin-bottom: 8px; animation: pulse 3s infinite; display: inline-block;
+            font-size: 1.8rem; margin-bottom: 6px; animation: pulse 3s infinite; display: inline-block;
         }
         @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.15); filter: drop-shadow(0 0 10px currentColor); }
+            0%, 100% { transform: scale(1); filter: drop-shadow(0 0 5px currentColor); }
+            50% { transform: scale(1.1); filter: drop-shadow(0 0 15px currentColor); }
         }
+
         .btn-accent {
             background: linear-gradient(135deg, var(--accent), var(--accent-2));
-            color: #fff; border: none; font-weight: 600; border-radius: 14px; padding: 12px 24px;
+            color: #fff; border: none; font-weight: 600; border-radius: 12px; padding: 10px 20px;
             transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            font-size: 1rem; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+            font-size: 0.95rem; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
         }
-        .btn-accent:hover:not(:disabled) { box-shadow: 0 0 35px var(--accent-glow); transform: scale(1.05); }
+        .btn-accent:hover:not(:disabled) { box-shadow: 0 0 25px var(--accent-glow); transform: translateY(-2px) scale(1.02); }
         .btn-accent:disabled {
             opacity: 0.7; cursor: not-allowed; transform: none; box-shadow: none;
             background: var(--bg-tertiary); color: var(--text-secondary);
@@ -303,55 +344,66 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         }
         .btn-outline-accent {
             background: transparent; border: 1px solid var(--accent); color: var(--accent);
-            border-radius: 14px; padding: 12px 22px; font-weight: 600; transition: all 0.3s;
-            font-size: 0.9rem; cursor: pointer;
+            border-radius: 12px; padding: 10px 18px; font-weight: 600; transition: all 0.3s;
+            font-size: 0.85rem; cursor: pointer;
         }
         .btn-outline-accent:hover {
             background: var(--accent); color: var(--bg-primary);
-            box-shadow: 0 0 25px var(--accent-glow); transform: translateY(-2px);
+            box-shadow: 0 0 20px var(--accent-glow); transform: translateY(-2px);
         }
+
         .findings-table-container {
-            border-radius: 18px; overflow: hidden; border: 1px solid var(--table-border);
-            background: var(--table-row-bg);
+            border-radius: 16px; overflow: hidden; border: 1px solid var(--table-border);
+            background: var(--table-row-bg); box-shadow: inset 0 2px 10px rgba(0,0,0,0.15);
         }
-        .table { margin-bottom: 0; --bs-table-bg: transparent; --bs-table-color: var(--table-text); }
+        .table { margin-bottom: 0; --bs-table-bg: transparent; --bs-table-color: var(--table-text); font-size: 0.9rem;}
         .table>:not(caption)>*>* {
             background-color: var(--table-row-bg) !important; color: var(--table-text) !important;
-            border-bottom-color: var(--table-border) !important; padding: 18px 22px;
-            vertical-align: middle; transition: background-color 0.2s ease;
+            border-bottom-color: var(--table-border) !important; padding: 14px 18px;
+            vertical-align: middle; transition: background-color 0.2s ease, transform 0.2s ease;
         }
         .table th {
             color: var(--accent) !important; font-weight: 700; text-transform: uppercase;
-            font-size: 0.8rem; letter-spacing: 1px; background-color: var(--bg-secondary) !important;
+            font-size: 0.75rem; letter-spacing: 1px; background-color: var(--bg-secondary) !important;
         }
         .table-hover>tbody>tr:hover>* {
-            background-color: var(--table-hover-bg) !important; color: var(--table-text) !important;
+            background-color: var(--table-hover-bg) !important; color: var(--text) !important;
             box-shadow: none;
         }
+        /* Custom checkbox style inside table */
+        .form-check-input {
+            background-color: transparent; border: 1.5px solid var(--text-secondary);
+            cursor: pointer; transition: border-color 0.2s;
+        }
+        .form-check-input:checked { background-color: var(--accent); border-color: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+
         .table tbody tr { cursor: pointer; }
         .finding-detail {
-            display: none; background: var(--bg-secondary); border-radius: 12px; padding: 20px;
-            margin: 10px 0; color: var(--table-text); border: 1px solid var(--table-border);
-            box-shadow: inset 0 2px 15px rgba(0,0,0,0.2);
+            display: none; background: rgba(0,0,0,0.2); border-radius: 10px; padding: 18px;
+            margin: 8px 0; color: var(--table-text); border: 1px solid var(--glass-border);
+            box-shadow: inset 0 2px 15px rgba(0,0,0,0.3); backdrop-filter: blur(10px);
         }
-        .finding-detail.show { display: block; animation: fadeIn 0.3s ease; }
+        .finding-detail.show { display: block; animation: fadeIn 0.3s ease forwards; }
+
         .pagination-wrap {
-            display: flex; justify-content: space-between; align-items: center; margin-top: 20px;
-            padding: 10px 20px; background: var(--bg-secondary); border: 1px solid var(--glass-border);
-            border-radius: 14px; box-shadow: inset 0 2px 10px rgba(0,0,0,0.1);
+            display: flex; justify-content: space-between; align-items: center; margin-top: 16px;
+            padding: 10px 16px; background: var(--bg-secondary); border: 1px solid var(--glass-border);
+            border-radius: 12px; box-shadow: inset 0 2px 10px rgba(0,0,0,0.1);
         }
-        .pagination-info { font-size: 0.95rem; color: var(--text-secondary); font-weight: 600; }
-        .pagination-btns { display: flex; gap: 10px; }
+        .pagination-info { font-size: 0.85rem; color: var(--text-secondary); font-weight: 600; }
+        .pagination-btns { display: flex; gap: 8px; }
         .btn-page {
             background: var(--bg-tertiary); border: 1px solid var(--glass-border); color: var(--text);
-            padding: 8px 18px; border-radius: 10px; font-weight: 600; font-size: 0.85rem;
+            padding: 6px 14px; border-radius: 8px; font-weight: 600; font-size: 0.8rem;
             transition: all 0.2s; cursor: pointer;
         }
         .btn-page:hover:not(:disabled) {
             border-color: var(--accent); color: var(--accent);
-            box-shadow: 0 0 15px var(--accent-glow); transform: translateY(-1px);
+            box-shadow: 0 0 10px var(--accent-glow); transform: translateY(-1px);
         }
         .btn-page:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Modal tweaks */
         .report-modal-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0,0,0,0.85); backdrop-filter: blur(15px); display: none;
@@ -359,33 +411,36 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         }
         .report-modal-overlay.open { display: flex; animation: fadeIn 0.3s ease; }
         .report-modal-panel {
-            background: var(--glass); border: 1px solid var(--glass-border); border-radius: 24px;
-            padding: 35px; max-width: 650px; width: 90%; backdrop-filter: blur(30px);
-            box-shadow: 0 0 80px var(--accent-glow); position: relative;
+            background: var(--glass); border: 1px solid var(--glass-border); border-radius: 20px;
+            padding: 30px; max-width: 600px; width: 90%; backdrop-filter: blur(30px);
+            box-shadow: 0 0 60px var(--accent-glow); position: relative;
             animation: popIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
         }
-        .report-grid { display: flex; gap: 16px; margin: 25px 0; }
+        .report-grid { display: flex; gap: 12px; margin: 20px 0; }
         .report-card-opt {
             flex: 1; background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(0,0,0,0.2) 100%);
-            border: 1px solid var(--glass-border); border-radius: 16px; padding: 24px 15px;
+            border: 1px solid var(--glass-border); border-radius: 14px; padding: 20px 10px;
             text-align: center; cursor: pointer; transition: all 0.3s ease; display: flex;
-            flex-direction: column; align-items: center; gap: 12px;
+            flex-direction: column; align-items: center; gap: 10px;
         }
         .report-card-opt:hover {
-            border-color: var(--accent); transform: translateY(-5px);
+            border-color: var(--accent); transform: translateY(-4px);
             box-shadow: 0 10px 20px rgba(0,0,0,0.3), 0 0 15px var(--accent-glow);
         }
         .report-card-opt.selected {
-            border-color: var(--accent); background: rgba(0, 229, 255, 0.08);
-            box-shadow: 0 0 25px var(--accent-glow);
+            border-color: var(--accent); background: rgba(0, 229, 255, 0.1);
+            box-shadow: 0 0 20px var(--accent-glow);
         }
-        .report-card-opt .format-icon { font-size: 2.8rem; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3)); }
-        .report-card-opt .format-title { font-size: 1.1rem; font-weight: 700; color: var(--text); }
-        .report-card-opt .format-sub { font-size: 0.75rem; color: var(--text-secondary); font-weight: 500; }
+        .report-card-opt .format-icon { font-size: 2.2rem; filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3)); }
+        .report-card-opt .format-title { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+        .report-card-opt .format-sub { font-size: 0.7rem; color: var(--text-secondary); font-weight: 500; }
+
         #attack-graph {
-            background: var(--bg-secondary); border-radius: 18px;
+            background: var(--bg-secondary); border-radius: 16px;
             border: 1px solid var(--glass-border); overflow: hidden;
         }
+
+        /* Sim Overlay */
         .sim-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.85); backdrop-filter: blur(12px); display: none;
@@ -393,107 +448,109 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         }
         .sim-overlay.open { display: flex; animation: fadeIn 0.3s ease; }
         .sim-panel {
-            background: var(--glass); border: 1px solid var(--glass-border); border-radius: 22px;
-            padding: 32px; max-width: 700px; width: 90%; max-height: 80vh; overflow-y: auto;
-            backdrop-filter: blur(30px); box-shadow: 0 0 100px var(--accent-glow); position: relative;
+            background: var(--glass); border: 1px solid var(--glass-border); border-radius: 20px;
+            padding: 28px; max-width: 680px; width: 90%; max-height: 80vh; overflow-y: auto;
+            backdrop-filter: blur(30px); box-shadow: 0 0 80px var(--accent-glow); position: relative;
         }
         .sim-close {
-            position: absolute; top: 16px; right: 20px; background: none; border: none;
-            color: var(--text-secondary); font-size: 2.5rem; cursor: pointer;
+            position: absolute; top: 12px; right: 18px; background: none; border: none;
+            color: var(--text-secondary); font-size: 2.2rem; cursor: pointer;
             transition: color 0.2s; z-index: 10; line-height: 0.8;
         }
         .sim-close:hover { color: var(--danger); }
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+        /* Theme Strip - Redesigned */
         .theme-strip {
             position: fixed; top: 50%; left: 16px; transform: translateY(-50%); z-index: 1030;
-            background: var(--glass); border: 1px solid var(--glass-border); border-radius: 30px;
-            padding: 12px 10px; display: flex; flex-direction: column; gap: 12px;
-            backdrop-filter: blur(14px); box-shadow: var(--card-shadow);
+            background: rgba(18,28,46,0.3); border: 1px solid var(--glass-border); border-radius: 30px;
+            padding: 10px 8px; display: flex; flex-direction: column; gap: 12px;
+            backdrop-filter: blur(20px); box-shadow: 0 0 15px rgba(0,0,0,0.5);
         }
         html[dir="rtl"] .theme-strip { left: auto; right: 16px; }
         .theme-strip .theme-dot {
-            width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
-            border: 2px solid transparent; transition: all 0.3s;
+            width: 22px; height: 22px; border-radius: 50%; cursor: pointer;
+            border: 2px solid transparent; transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            opacity: 0.6;
         }
-        .theme-strip .theme-dot:hover, .theme-strip .theme-dot.active {
-            border-color: var(--text); transform: scale(1.4); box-shadow: 0 0 15px currentColor;
+        .theme-strip .theme-dot:hover { opacity: 1; transform: scale(1.2); }
+        .theme-strip .theme-dot.active {
+            opacity: 1; border-color: #fff; transform: scale(1.3);
+            box-shadow: 0 0 15px currentColor, inset 0 0 5px rgba(255,255,255,0.5);
         }
-        #search-input-row { display: none; margin-top: 16px; }
-        #search-input-row.expanded { display: block; animation: slideDown 0.3s ease; }
+
+        #search-input-row { display: none; margin-top: 14px; }
+        #search-input-row.expanded { display: block; animation: slideDown 0.3s ease forwards; }
         #search-input-row input {
             background: var(--bg-secondary); color: var(--text); border: 1px solid var(--glass-border);
-            border-radius: 30px; padding: 12px 20px; font-size: 0.95rem; width: 100%; transition: all 0.3s;
+            border-radius: 20px; padding: 10px 18px; font-size: 0.9rem; width: 100%; transition: all 0.3s;
         }
         #search-input-row input:focus {
-            outline: none; border-color: var(--accent); box-shadow: 0 0 20px var(--accent-glow);
+            outline: none; border-color: var(--accent); box-shadow: 0 0 15px var(--accent-glow);
         }
+
         .cli-flag-card {
-            background: var(--bg-secondary); border-radius: 12px; padding: 18px; margin-bottom: 12px;
-            transition: all 0.3s; border-left: 4px solid transparent; display: flex; align-items: flex-start;
-            gap: 14px; border: 1px solid var(--glass-border);
+            background: var(--bg-secondary); border-radius: 12px; padding: 14px; margin-bottom: 12px;
+            transition: all 0.3s; border-left: 3px solid transparent; display: flex; align-items: flex-start;
+            gap: 12px; border: 1px solid var(--glass-border);
         }
-        html[dir="rtl"] .cli-flag-card { border-left: none; border-right: 4px solid transparent; }
+        html[dir="rtl"] .cli-flag-card { border-left: none; border-right: 3px solid transparent; }
         .cli-flag-card:hover {
-            border-color: var(--accent); transform: translateY(-4px); box-shadow: var(--card-shadow);
+            border-color: var(--accent); transform: translateY(-3px); box-shadow: var(--card-shadow);
         }
         .cli-flag-card code {
-            color: var(--accent); background: transparent; font-size: 1rem;
-            display: block; margin-bottom: 6px; font-weight: 700;
+            color: var(--accent); background: transparent; font-size: 0.9rem;
+            display: block; margin-bottom: 4px; font-weight: 700;
         }
-        .cli-flag-card .flag-desc {
-            color: var(--text-secondary) !important; font-weight: 500; font-size: 0.88rem;
-        }
+        .cli-flag-card .flag-desc { color: var(--text-secondary) !important; font-weight: 500; font-size: 0.8rem; }
+
         .toggle-pill {
             background: var(--bg-tertiary); border: 1px solid var(--glass-border); color: var(--accent);
-            border-radius: 30px; padding: 8px 20px; font-size: 0.85rem; font-weight: 600;
-            transition: all 0.3s; display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+            border-radius: 20px; padding: 6px 16px; font-size: 0.8rem; font-weight: 600;
+            transition: all 0.3s; display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
         }
-        .toggle-pill:hover { background: var(--accent); color: var(--bg-primary); }
+        .toggle-pill:hover { background: var(--accent); color: var(--bg-primary); box-shadow: 0 0 10px var(--accent-glow); }
         .toggle-pill.expanded .arrow { transform: rotate(90deg); }
+
         .chart-center-text {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            text-align: center; background: var(--glass); border: 1px solid var(--glass-border);
-            border-radius: 50%; width: 110px; height: 110px; display: flex; flex-direction: column;
-            align-items: center; justify-content: center; box-shadow: 0 8px 25px rgba(0,0,0,0.3);
-            backdrop-filter: blur(12px); transition: all 0.4s;
+            text-align: center; background: rgba(18,28,46,0.4); border: 1px solid var(--glass-border);
+            border-radius: 50%; width: 100px; height: 100px; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; box-shadow: 0 8px 25px rgba(0,0,0,0.4);
+            backdrop-filter: blur(12px); transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             pointer-events: auto; cursor: default;
         }
         .chart-center-text:hover {
-            transform: translate(-50%, -50%) scale(1.2);
-            box-shadow: 0 0 35px var(--accent-glow); border-color: var(--accent);
+            transform: translate(-50%, -50%) scale(1.15);
+            box-shadow: 0 0 30px var(--accent-glow); border-color: var(--accent);
         }
-        .chart-total-num { font-size: 2.2rem; font-weight: 800; color: var(--text); line-height: 1; }
+        .chart-total-num { font-size: 1.8rem; font-weight: 800; color: var(--text); line-height: 1; }
         .chart-total-label {
-            font-size: 0.75rem; color: var(--text-secondary); text-transform: uppercase;
-            margin-top: 6px; font-weight: 700; letter-spacing: 1px;
+            font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase;
+            margin-top: 4px; font-weight: 700; letter-spacing: 1px;
         }
+
         .typewriter-cursor::after {
             content: '▋'; display: inline-block; color: var(--accent);
             animation: blink 1s step-end infinite; margin-left: 4px;
         }
         @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-        .custom-progress {
-            height: 10px; background: var(--glass-border); border-radius: 10px;
-            overflow: hidden; margin-top: 10px; width: 100%;
-        }
-        .custom-progress-bar {
-            height: 100%; border-radius: 10px; transition: width 1s cubic-bezier(0.16, 1, 0.3, 1);
-        }
+
         .ai-meta-badge {
-            font-size: 0.8rem; font-weight: 700; padding: 6px 12px; border-radius: 12px;
-            display: flex; align-items: center; gap: 6px;
+            font-size: 0.75rem; font-weight: 700; padding: 4px 10px; border-radius: 10px;
+            display: flex; align-items: center; gap: 4px;
         }
 
         /* LOGIN MODAL STYLES */
         .login-modal-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0,0,0,0.85); backdrop-filter: blur(20px);
+            background: rgba(10,14,23,0.9); backdrop-filter: blur(25px);
             z-index: 5000; display: flex; align-items: center; justify-content: center;
         }
         .login-card {
-            background: var(--glass); border: 1px solid var(--glass-border);
-            border-radius: 28px; padding: 40px 35px; max-width: 440px; width: 90%;
-            backdrop-filter: blur(30px); box-shadow: 0 0 80px var(--accent-glow);
+            background: rgba(18,28,46,0.8); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 24px; padding: 35px 30px; max-width: 400px; width: 90%;
+            backdrop-filter: blur(30px); box-shadow: 0 0 60px rgba(0,229,255,0.15);
         }
     </style>
 </head>
@@ -509,30 +566,30 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="login-modal-overlay" id="loginModalOverlay" style="display:flex;">
         <div class="login-card animate-pop">
             <div class="text-center mb-4">
-                <div style="font-size:3rem;">🛡️</div>
-                <h2 style="color:var(--accent); font-weight:800;">Pipeline Sentinel</h2>
-                <p style="color:var(--text-secondary);">Enter your API key to unlock the command center</p>
+                <div style="font-size:2.8rem; filter: drop-shadow(0 0 15px rgba(0,229,255,0.4));">🛡️</div>
+                <h3 style="color:var(--accent); font-weight:800; margin-top: 10px;">Pipeline Sentinel</h3>
+                <p style="color:var(--text-secondary); font-size: 0.85rem;">Enter your API key to unlock the command center</p>
             </div>
-            <div class="input-group mb-3">
-                <span class="input-group-text" style="background:var(--bg-tertiary); border-color:var(--glass-border);">🔑</span>
-                <input type="password" id="loginPassword" class="form-control"
+            <div class="input-group mb-3 shadow-sm" style="border-radius: 12px; overflow:hidden;">
+                <span class="input-group-text border-0" style="background:var(--bg-tertiary); color: var(--text-secondary);">🔑</span>
+                <input type="password" id="loginPassword" class="form-control border-0"
                        placeholder="API Key / Password"
-                       style="background:var(--bg-secondary); color:var(--text); border-color:var(--glass-border);">
+                       style="background:var(--bg-secondary); color:var(--text); box-shadow: none;">
             </div>
-            <button id="loginBtn" class="btn-accent w-100">
+            <button id="loginBtn" class="btn-accent w-100 justify-content-center" style="padding: 12px;">
                 <span id="loginSpinner" class="spinner-border spinner-border-sm d-none" role="status"></span>
                 Authenticate
             </button>
-            <p id="loginError" class="text-danger mt-3 text-center" style="display:none;"></p>
+            <p id="loginError" class="text-danger mt-3 text-center" style="display:none; font-size: 0.85rem; font-weight: 600;"></p>
             <div class="mt-4 text-center">
-                <small style="color:var(--text-secondary);">
+                <small style="color:var(--text-secondary); font-size: 0.75rem;">
                     The key was set by your administrator in the <code>.env</code> file.
                 </small>
             </div>
         </div>
     </div>
 
-    <!-- REST OF THE DASHBOARD (identical to original) -->
+    <!-- THEME STRIP -->
     <div class="theme-strip animate-pop" id="theme-strip" role="group" aria-label="Theme Selection">
         <span class="theme-dot active" data-theme="cyber" style="background:#00E5FF;" onclick="switchTheme('cyber')"></span>
         <span class="theme-dot" data-theme="midnight" style="background:#6366F1;" onclick="switchTheme('midnight')"></span>
@@ -540,17 +597,18 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         <span class="theme-dot" data-theme="forest" style="background:#34D399;" onclick="switchTheme('forest')"></span>
         <span class="theme-dot" data-theme="dark" style="background:#FAFAFA;" onclick="switchTheme('dark')"></span>
     </div>
+
     <main class="content-layer">
     <nav class="navbar animate-pop">
         <div class="container-fluid d-flex justify-content-between align-items-center">
             <span class="navbar-brand mb-0 d-flex align-items-center gap-2">
                 🛡️ <span>Pipeline</span> Sentinel
-                <small style="font-size:0.4em; color:var(--text); background:var(--accent-glow);
-                border:1px solid var(--accent); padding:4px 10px; border-radius:20px; font-weight:700;">
+                <small style="font-size:0.35em; color:var(--text); background:var(--accent-glow);
+                border:1px solid var(--accent); padding:3px 8px; border-radius:15px; font-weight:800; letter-spacing: 1px;">
                 COMMAND CENTER</small>
             </span>
             <div class="d-flex align-items-center gap-3">
-                <div class="top-controls position-relative">
+                <div class="top-controls">
                     <div class="clock-display" id="clock-display" aria-live="polite">
                         <span class="time-icon" aria-hidden="true">⏳</span>
                         <span id="clock-text">--:--:--</span>
@@ -566,55 +624,60 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                         <div class="lang-item" role="menuitem" tabindex="0" onclick="switchLanguage('ar')">🇸🇦 العربية</div>
                     </div>
                 </div>
-                <button class="btn btn-sm" id="logoutBtn"
-                        style="background:var(--bg-tertiary); border:1px solid var(--glass-border); color:var(--text); border-radius:8px; padding:6px 14px; font-size:0.8rem;">
-                    🔒 Logout
+                <!-- REDESIGNED LOGOUT BUTTON -->
+                <button id="logoutBtn" class="btn-logout" aria-label="Logout">
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M16 17l5-5-5-5M21 12H9M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                    </svg>
+                    Logout
                 </button>
             </div>
         </div>
     </nav>
-    <div class="container py-3">
+
+    <div class="container-fluid px-4 py-2" style="max-width: 1400px;"> <!-- Better max-width constraint -->
         <div class="row g-3 mb-4 animate-pop delay-1" id="stats-row">
-            <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('CRITICAL')">
+            <div class="col-md-3 col-sm-6">
+                <div class="card p-2 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('CRITICAL')">
                     <div class="stat-pill text-danger inner-content">
                         <div class="icon" aria-hidden="true">🔥</div><span id="stat-critical">0</span>
-                        <small data-i18n="critical" class="fw-bold mt-1 d-block">CRITICAL</small>
+                        <small data-i18n="critical" class="fw-bold mt-1 d-block" style="font-size: 0.75rem; letter-spacing: 1px;">CRITICAL</small>
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('HIGH')">
+            <div class="col-md-3 col-sm-6">
+                <div class="card p-2 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('HIGH')">
                     <div class="stat-pill text-warning inner-content">
                         <div class="icon" aria-hidden="true">⚠️</div><span id="stat-high">0</span>
-                        <small data-i18n="high" class="fw-bold mt-1 d-block">HIGH</small>
+                        <small data-i18n="high" class="fw-bold mt-1 d-block" style="font-size: 0.75rem; letter-spacing: 1px;">HIGH</small>
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('MEDIUM')">
+            <div class="col-md-3 col-sm-6">
+                <div class="card p-2 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('MEDIUM')">
                     <div class="stat-pill text-info inner-content">
                         <div class="icon" aria-hidden="true">📊</div><span id="stat-medium">0</span>
-                        <small data-i18n="medium" class="fw-bold mt-1 d-block">MEDIUM</small>
+                        <small data-i18n="medium" class="fw-bold mt-1 d-block" style="font-size: 0.75rem; letter-spacing: 1px;">MEDIUM</small>
                     </div>
                 </div>
             </div>
-            <div class="col-md-3">
-                <div class="card p-3 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('LOW')">
+            <div class="col-md-3 col-sm-6">
+                <div class="card p-2 text-center tilt-card" role="button" tabindex="0" onclick="filterBySeverity('LOW')">
                     <div class="stat-pill text-success inner-content">
                         <div class="icon" aria-hidden="true">🛡️</div><span id="stat-low">0</span>
-                        <small data-i18n="low" class="fw-bold mt-1 d-block">LOW</small>
+                        <small data-i18n="low" class="fw-bold mt-1 d-block" style="font-size: 0.75rem; letter-spacing: 1px;">LOW</small>
                     </div>
                 </div>
             </div>
         </div>
-        <div class="row g-4 mb-4 animate-pop delay-2">
-            <div class="col-md-4">
-                <div class="card p-4 h-100 tilt-card">
-                    <h5 class="card-title mb-4 inner-content" style="color:var(--accent); font-weight:800;">
+
+        <div class="row g-3 mb-4 animate-pop delay-2">
+            <div class="col-lg-4 col-md-5">
+                <div class="card h-100 tilt-card">
+                    <h6 class="card-title mb-3 inner-content" style="color:var(--accent); font-weight:800; font-size: 1rem;">
                         📊 <span data-i18n="severity_breakdown">Severity Breakdown</span>
-                    </h5>
-                    <div class="inner-content" style="position:relative; height:100%; min-height:280px; display:flex;">
+                    </h6>
+                    <div class="inner-content" style="position:relative; height:100%; min-height:260px; display:flex;">
                         <div id="severityChart" style="width:100%; height:100%; position:absolute;"></div>
                         <div class="chart-center-text">
                             <div class="chart-total-num" id="chart-total-num">0</div>
@@ -623,47 +686,49 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     </div>
                 </div>
             </div>
-            <div class="col-md-8">
-                <div class="card p-4 h-100 tilt-card">
-                    <h5 class="card-title mb-4 inner-content" style="color:var(--accent); font-weight:800;">
+            <div class="col-lg-8 col-md-7">
+                <div class="card h-100 tilt-card">
+                    <h6 class="card-title mb-3 inner-content" style="color:var(--accent); font-weight:800; font-size: 1rem;">
                         📈 <span data-i18n="trend_over_time">Trend Over Time</span>
-                    </h5>
-                    <div id="trendChart" class="inner-content" style="width:100%; height:300px;"></div>
+                    </h6>
+                    <div id="trendChart" class="inner-content" style="width:100%; height:280px;"></div>
                 </div>
             </div>
         </div>
+
         <div class="row g-3 mb-4 animate-pop delay-3">
             <div class="col-12">
-                <div class="card p-4">
-                    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-3">
-                        <h5 class="card-title mb-0" style="color:var(--accent); font-weight:800;">
+                <div class="card">
+                    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                        <h6 class="card-title mb-0" style="color:var(--accent); font-weight:800; font-size: 1rem;">
                             🕸️ <span data-i18n="attack_paths">Attack Paths (AI‑Generated)</span>
-                        </h5>
-                        <div class="d-flex align-items-center gap-3">
-                            <span class="ai-badge fw-bold" id="ai-status"
+                        </h6>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="ai-badge fw-bold shadow-sm" id="ai-status"
                                   style="background:var(--bg-secondary); border:1px solid var(--glass-border);
-                                  padding:6px 14px; border-radius:20px; font-size:0.85rem;">
+                                  padding:4px 12px; border-radius:15px; font-size:0.75rem;">
                                 🤖 <span data-i18n="no_ai">Run with --analyze</span>
                             </span>
-                            <button class="btn-accent shadow-sm" id="simulate-selected-btn" disabled>
+                            <button class="btn-accent shadow-sm py-1 px-3" id="simulate-selected-btn" disabled style="font-size: 0.85rem;">
                                 ⚡ <span data-i18n="simulate_selected">Simulate Selected</span>
                             </button>
                         </div>
                     </div>
-                    <div id="attack-graph" class="mt-3 shadow-inner" style="width:100%; height:450px; position:relative;"></div>
-                    <div id="attack-detail" class="mt-3 p-4 rounded" style="display:none; background:var(--bg-secondary); border:1px solid var(--glass-border);" aria-live="polite"></div>
-                    <div id="attack-error" class="text-warning fw-bold mt-2" style="display:none;" aria-live="polite"></div>
+                    <div id="attack-graph" class="mt-2 shadow-inner" style="width:100%; height:400px; position:relative;"></div>
+                    <div id="attack-detail" class="mt-3 p-3 rounded" style="display:none; background:var(--bg-secondary); border:1px solid var(--glass-border);" aria-live="polite"></div>
+                    <div id="attack-error" class="text-warning fw-bold mt-2" style="display:none; font-size: 0.85rem;" aria-live="polite"></div>
                 </div>
             </div>
         </div>
+
         <div class="row g-3 mb-4 animate-pop delay-3">
             <div class="col-12">
-                <div class="card p-4 tilt-card">
+                <div class="card tilt-card">
                     <div class="inner-content">
                         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-                            <h5 class="card-title mb-0" style="color:var(--accent); font-weight:800;">
+                            <h6 class="card-title mb-0" style="color:var(--accent); font-weight:800; font-size: 1rem;">
                                 🧠 <span data-i18n="ai_summary">AI Executive Summary</span>
-                            </h5>
+                            </h6>
                            <div id="ai-meta-info" class="d-flex gap-2" style="display:none !important;">
                                 <div class="ai-meta-badge shadow-sm" style="background:var(--bg-secondary); border:1px solid var(--glass-border);">
                                     ⚙️ <span id="ai-hardware">CPU</span>
@@ -673,68 +738,61 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                                 </div>
                             </div>
                         </div>
-                        <div class="bg-secondary p-4 rounded shadow-inner" style="background:var(--bg-secondary) !important; border:1px solid var(--glass-border);">
-                            <div id="exec-summary" class="text-muted typewriter-cursor" data-i18n="no_ai" style="font-size:1.1rem; line-height:1.8; color:var(--text) !important;">
+                        <div class="bg-secondary p-3 rounded shadow-inner" style="background:var(--bg-secondary) !important; border:1px solid var(--glass-border);">
+                            <div id="exec-summary" class="text-muted typewriter-cursor" data-i18n="no_ai" style="font-size:0.95rem; line-height:1.7; color:var(--text) !important;">
                                 No AI analysis available. Run with --analyze.
-                            </div>
-                        </div>
-                        <div id="risk-score-container" class="mt-4" style="display:none;">
-                            <div class="d-flex justify-content-between align-items-end mb-1">
-                                <span class="fw-bold" style="color:var(--text-secondary); font-size:0.8rem;" data-i18n="ai_risk_score">AI Risk Score</span>
-                                <span id="risk-score-text" class="fw-bold fs-5">0/100</span>
-                            </div>
-                            <div class="custom-progress shadow-sm">
-                                <div id="risk-score-bar" class="custom-progress-bar" role="progressbar" style="width:0%;"></div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
+
         <div class="row g-3 mb-4 animate-pop delay-4">
             <div class="col-12">
-                <div class="card p-4">
+                <div class="card">
                     <div class="d-flex justify-content-between align-items-center">
-                        <h5 class="card-title mb-0" style="color:var(--accent); font-weight:800;">
+                        <h6 class="card-title mb-0" style="color:var(--accent); font-weight:800; font-size: 1rem;">
                             ⚙️ <span data-i18n="cli_ref_title">CLI Quick Reference</span>
-                        </h5>
+                        </h6>
                         <span class="toggle-pill shadow-sm" id="cli-toggle" onclick="toggleCLI()">
                             <span data-i18n="show_hide">Show</span>
                             <span class="arrow mx-1" aria-hidden="true">▶</span>
                         </span>
                     </div>
-                    <div class="collapse mt-4" id="cli-ref-body">
+                    <div class="collapse mt-3" id="cli-ref-body">
                         <div class="row" id="cli-ref-cards"></div>
                     </div>
                 </div>
             </div>
         </div>
-        <div class="card p-4 mb-4 animate-pop delay-4" id="findings-section">
-            <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
-                <div class="d-flex align-items-center gap-3">
-                    <button class="btn btn-sm" id="search-toggle-btn" style="font-size:1.3rem; color:var(--text-secondary); background:var(--bg-secondary); border:1px solid var(--glass-border); border-radius:10px; padding:6px 12px;">🔍</button>
-                    <h5 class="card-title mb-0" style="color:var(--accent); font-weight:800; font-size:1.4rem;">
+
+        <div class="card mb-5 animate-pop delay-4" id="findings-section">
+            <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm shadow-sm" id="search-toggle-btn" style="font-size:1.1rem; color:var(--text); background:var(--bg-tertiary); border:1px solid var(--glass-border); border-radius:10px; padding:4px 10px; transition: all 0.3s;">🔍</button>
+                    <h6 class="card-title mb-0" style="color:var(--accent); font-weight:800; font-size:1.2rem;">
                         <span data-i18n="findings">Findings</span>
-                    </h5>
+                    </h6>
                 </div>
-                <div class="d-flex align-items-center gap-3">
-                    <button class="btn-accent shadow-sm" id="report-btn" onclick="openReportModal()">
-                        <span>📄</span> <span data-i18n="generate_report">Report</span>
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn-accent shadow-sm py-1 px-3" id="report-btn" onclick="openReportModal()" style="font-size: 0.85rem;">
+                        📄 <span data-i18n="generate_report">Report</span>
                     </button>
-                    <button class="btn-outline-accent shadow-sm" id="clear-filters-btn">
+                    <button class="btn-outline-accent shadow-sm py-1 px-3" id="clear-filters-btn" style="font-size: 0.85rem;">
                         ✕ <span data-i18n="clear_filters">Clear Filters</span>
                     </button>
                 </div>
             </div>
-            <div id="search-input-row" class="mb-4">
+            <div id="search-input-row" class="mb-3">
                 <input type="text" id="searchInput" class="shadow-inner" data-i18n-placeholder="search_placeholder" placeholder="Search findings...">
             </div>
             <div class="findings-table-container shadow-sm">
                 <div class="table-responsive">
                     <table class="table table-hover align-middle findings-table">
                         <thead><tr>
-                            <th style="width:50px; text-align:center;">
-                                <input type="checkbox" id="select-all" class="form-check-input" style="cursor:pointer;">
+                            <th style="width:40px; text-align:center; padding: 12px;">
+                                <input type="checkbox" id="select-all" class="form-check-input" style="cursor:pointer; width: 1.1em; height: 1.1em;">
                             </th>
                             <th data-i18n="tool">Tool</th>
                             <th data-i18n="id_col">ID</th>
@@ -746,7 +804,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     </table>
                 </div>
             </div>
-            <div class="pagination-wrap mt-3">
+            <div class="pagination-wrap">
                 <div class="pagination-info" id="pagination-info">Showing 0-0 of 0 entries</div>
                 <div class="pagination-btns">
                     <button class="btn-page" id="btn-prev-page" data-i18n="prev_page" disabled>◀ Previous</button>
@@ -754,63 +812,66 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 </div>
             </div>
         </div>
-        <div class="sim-overlay" id="simOverlay" role="dialog" aria-modal="true">
-            <div class="sim-panel">
-                <button class="sim-close" onclick="closeSimPanel()">&times;</button>
-                <div id="sim-panel-content">
-                    <div class="text-center py-5">
-                        <div class="spinner-border" style="color:var(--accent); width:3.5rem; height:3.5rem; border-width:4px;"></div>
-                        <h4 class="mt-4" id="sim-title" data-i18n="simulating" style="color:var(--text); font-weight:700;">Simulating attack chain...</h4>
-                        <p class="text-muted mt-2 fw-bold" data-i18n="sim_sub">Executing sandbox PoC environment</p>
-                    </div>
-                </div>
-                <div class="sim-footer">
-                    <button class="btn btn-outline-secondary px-4 py-2 fw-bold" style="border-radius:12px; color:var(--text); border-color:var(--glass-border);" onclick="closeSimPanel()" data-i18n="close">Close</button>
-                </div>
-            </div>
-        </div>
-        <div class="report-modal-overlay" id="reportModal" role="dialog" aria-modal="true">
-            <div class="report-modal-panel">
-                <button class="sim-close" onclick="closeReportModal()">&times;</button>
-                <h4 class="fw-bold" style="color:var(--accent);" data-i18n="export_title">Export Security Report</h4>
-                <p class="text-muted" data-i18n="export_sub">Select file layout criteria for data mapping.</p>
-                <div class="report-grid">
-                    <div class="report-card-opt" id="opt-pdf" onclick="selectReportFormat('pdf')">
-                        <div class="format-icon">📕</div>
-                        <div class="format-title" data-i18n="pdf_doc">PDF Document</div>
-                        <div class="format-sub" data-i18n="pdf_sub">Executive Presentation</div>
-                    </div>
-                    <div class="report-card-opt" id="opt-json" onclick="selectReportFormat('json')">
-                        <div class="format-icon">📦</div>
-                        <div class="format-title" data-i18n="json_data">JSON Dataset</div>
-                        <div class="format-sub" data-i18n="json_sub">Automation Merges</div>
-                    </div>
-                    <div class="report-card-opt" id="opt-html" onclick="selectReportFormat('html')">
-                        <div class="format-icon">🌐</div>
-                        <div class="format-title" data-i18n="html_view">HTML Engine</div>
-                        <div class="format-sub" data-i18n="html_sub">Instant Viewport</div>
-                    </div>
-                </div>
-                <div class="d-flex justify-content-end gap-3 mt-4">
-                    <button class="btn btn-outline-secondary px-4 py-2" style="border-radius:12px; color:var(--text);" onclick="closeReportModal()" data-i18n="close">Close</button>
-                    <button class="btn-accent px-4 py-2" id="modal-download-btn" onclick="executeModalDownload()" disabled>
-                        <span id="modal-download-spinner" class="spinner-border spinner-border-sm d-none"></span>
-                        <span data-i18n="download_now">Download Now</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-        <div class="toast-container position-fixed bottom-0 end-0 p-4" id="toast-container" style="z-index: 1060;"></div>
-        <footer class="text-center py-4 mt-5 animate-pop delay-4" style="border-top:1px solid var(--glass-border);">
-            <small style="color:var(--text-secondary); font-size:0.9rem;">
+
+        <footer class="text-center py-3 mb-2 animate-pop delay-4" style="border-top:1px solid var(--glass-border);">
+            <small style="color:var(--text-secondary); font-size:0.85rem;">
                 🛡️ <strong style="color:var(--text); font-weight:800;">Pipeline Sentinel</strong> · crafted by
                 <a href="https://github.com/Mehrdoost" class="text-decoration-none fw-bold" style="color:var(--accent)" target="_blank">ReverseForge</a>
-                <span class="version-badge shadow-sm" style="background:var(--accent-2); color:#fff;">v0.4.4</span> ·
+                <span class="badge shadow-sm mx-1" style="background:var(--accent-2); color:#fff; font-size: 0.7rem;">v0.4.4</span> ·
                 <a href="https://github.com/Mehrdoost/devsecops-radar" class="text-decoration-none fw-bold" style="color:var(--accent)" target="_blank">View on GitHub</a>
             </small>
         </footer>
     </div>
     </main>
+
+    <!-- Sim Overlay -->
+    <div class="sim-overlay" id="simOverlay" role="dialog" aria-modal="true">
+        <div class="sim-panel">
+            <button class="sim-close" onclick="closeSimPanel()">&times;</button>
+            <div id="sim-panel-content">
+                <div class="text-center py-5">
+                    <div class="spinner-border" style="color:var(--accent); width:3rem; height:3rem; border-width:3px;"></div>
+                    <h5 class="mt-4" id="sim-title" data-i18n="simulating" style="color:var(--text); font-weight:800;">Simulating attack chain...</h5>
+                    <p class="text-muted mt-2 fw-bold" data-i18n="sim_sub" style="font-size: 0.85rem;">Executing sandbox PoC environment</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Report Modal -->
+    <div class="report-modal-overlay" id="reportModal" role="dialog" aria-modal="true">
+        <div class="report-modal-panel">
+            <button class="sim-close" onclick="closeReportModal()">&times;</button>
+            <h5 class="fw-bold" style="color:var(--accent);" data-i18n="export_title">Export Security Report</h5>
+            <p class="text-muted" data-i18n="export_sub" style="font-size: 0.85rem;">Select file layout criteria for data mapping.</p>
+            <div class="report-grid">
+                <div class="report-card-opt" id="opt-pdf" onclick="selectReportFormat('pdf')">
+                    <div class="format-icon">📕</div>
+                    <div class="format-title" data-i18n="pdf_doc">PDF Document</div>
+                    <div class="format-sub" data-i18n="pdf_sub">Executive Presentation</div>
+                </div>
+                <div class="report-card-opt" id="opt-json" onclick="selectReportFormat('json')">
+                    <div class="format-icon">📦</div>
+                    <div class="format-title" data-i18n="json_data">JSON Dataset</div>
+                    <div class="format-sub" data-i18n="json_sub">Automation Merges</div>
+                </div>
+                <div class="report-card-opt" id="opt-html" onclick="selectReportFormat('html')">
+                    <div class="format-icon">🌐</div>
+                    <div class="format-title" data-i18n="html_view">HTML Engine</div>
+                    <div class="format-sub" data-i18n="html_sub">Instant Viewport</div>
+                </div>
+            </div>
+            <div class="d-flex justify-content-end gap-2 mt-4">
+                <button class="btn btn-outline-secondary px-3 py-1" style="border-radius:10px; color:var(--text); font-size:0.85rem;" onclick="closeReportModal()" data-i18n="close">Close</button>
+                <button class="btn-accent px-3 py-1" id="modal-download-btn" onclick="executeModalDownload()" disabled style="font-size:0.85rem;">
+                    <span id="modal-download-spinner" class="spinner-border spinner-border-sm d-none"></span>
+                    <span data-i18n="download_now">Download Now</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" id="toast-container" style="z-index: 1060;"></div>
 
     <script src="{{ url_for('static', filename='js/bootstrap.bundle.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/echarts.min.js') }}"></script>
@@ -820,7 +881,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         //  PRODUCTION-READY AUTHENTICATION & DASHBOARD LOGIC
         // =====================================================
 
-        // -------- Token management ----------
         let AUTH_TOKEN = localStorage.getItem('ps_token') || null;
 
         function saveToken(token) {
@@ -840,7 +900,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             return {};
         }
 
-        // -------- Secure fetch wrapper (auto-relogin on 401) ----------
         let _reloginInProgress = false;
 
         function fetchWithAuth(url, options = {}) {
@@ -862,13 +921,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             });
         }
 
-        // -------- Logout ----------
         function forceReLogin() {
             clearToken();
             document.getElementById('loginModalOverlay').style.display = 'flex';
             document.getElementById('loginPassword').value = '';
             document.getElementById('loginError').style.display = 'none';
-            // Clear dashboard visually
             document.getElementById('tableBody').innerHTML = '';
             document.querySelectorAll('#stats-row span[id^="stat-"]').forEach(el => el.textContent = '0');
             if (severityChartInstance) severityChartInstance.dispose();
@@ -877,7 +934,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             document.getElementById('exec-summary').textContent = 'No AI analysis available. Run with --analyze.';
         }
 
-        // -------- Login UI ----------
         function showLoginError(msg) {
             document.getElementById('loginError').textContent = msg;
             document.getElementById('loginError').style.display = 'block';
@@ -914,7 +970,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
         }
 
-        // -------- Internationalization (T object) ----------
         const T = {
             en: {
                 critical: "CRITICAL", high: "HIGH", medium: "MEDIUM", low: "LOW",
@@ -1156,7 +1211,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             container.innerHTML = '';
             flags.forEach(f => {
                 const col = document.createElement('div');
-                col.className = 'col-md-6 col-lg-4';
+                col.className = 'col-md-6 col-lg-4 col-xl-3';
                 const descText = (T[CL] && T[CL][f.desc]) ? T[CL][f.desc] : f.desc;
                 col.innerHTML = `
                     <div class="cli-flag-card">
@@ -1319,7 +1374,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             toastEl.setAttribute('role', 'alert');
             toastEl.innerHTML = `
                 <div class="d-flex">
-                    <div class="toast-body fw-bold px-3 py-3" style="font-size:1.05rem;">
+                    <div class="toast-body fw-bold px-3 py-3" style="font-size:0.95rem;">
                         ${message}
                     </div>
                     <button type="button" class="btn-close btn-close-white mx-3 m-auto" data-bs-dismiss="toast"></button>
@@ -1382,7 +1437,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 });
         }
 
-        // -------- XSS-safe rendering helper ----------
         function escapeHtml(text) {
             if (!text) return '';
             return text.replace(/&/g, '&amp;')
@@ -1396,7 +1450,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
         let selectedFindings = new Set();
         let currentSeverityFilter = null;
         let currentPage = 1;
-        const itemsPerPage = 5;
+        const itemsPerPage = 6; /* Slightly increased for better table feel */
 
         function truncate(t, m) {
             return (!t) ? t : (t.length > m ? t.substring(0, m) + '...' : t);
@@ -1427,22 +1481,26 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const pageItems = filteredFindings.slice(startIndex, endIndex);
 
             const fragment = document.createDocumentFragment();
-            pageItems.forEach(f => {
+            pageItems.forEach((f, idx) => {
                 const row = document.createElement('tr');
+                // Subtle staggered entry animation
+                row.style.animation = `fadeIn 0.3s ease forwards ${idx * 0.05}s`;
+                row.style.opacity = '0';
+
                 row.setAttribute('data-finding-id', f.id);
                 const isChecked = selectedFindings.has(f.id) ? 'checked' : '';
                 const sColor = severityColor(f.severity);
 
                 row.innerHTML = `
-                    <td style="text-align:center;">
+                    <td style="text-align:center; padding: 12px;">
                       <input type="checkbox" class="finding-checkbox form-check-input"
                              data-id="${escapeHtml(f.id)}" ${isChecked}>
                     </td>
                     <td class="fw-bold">${escapeHtml(f.tool)}</td>
-                    <td><code style="color:var(--accent); background:transparent; font-weight:700;">${escapeHtml(f.id)}</code></td>
-                    <td><span class="badge bg-${sColor} px-3 py-2 rounded-pill">${escapeHtml(f.severity)}</span></td>
+                    <td><code style="color:var(--accent); background:transparent; font-weight:700; font-size:0.85rem;">${escapeHtml(f.id)}</code></td>
+                    <td><span class="badge bg-${sColor} px-3 py-2 rounded-pill shadow-sm" style="font-size: 0.75rem;">${escapeHtml(f.severity)}</span></td>
                     <td class="fw-medium">${escapeHtml(f.target)}</td>
-                    <td style="color:var(--text-secondary);">${escapeHtml(truncate(f.description, 70))}</td>`;
+                    <td style="color:var(--text-secondary); font-size: 0.85rem;">${escapeHtml(truncate(f.description, 70))}</td>`;
 
                 const detailRow = document.createElement('tr');
                 detailRow.className = 'finding-detail-row';
@@ -1457,23 +1515,23 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 detailRow.innerHTML = `
                     <td colspan="6" style="padding:0; border:none; background:transparent;">
                     <div class="finding-detail mx-3 my-2">
-                        <div class="row">
+                        <div class="row g-3">
                           <div class="col-md-6">
-                            <strong style="color:var(--accent);">${idLbl}:</strong> ${escapeHtml(f.id)}<br>
-                            <strong style="color:var(--accent);">${sevLbl}:</strong> ${escapeHtml(f.severity)}<br>
-                            <strong style="color:var(--accent);">${toolLbl}:</strong> ${escapeHtml(f.tool)}
+                            <strong style="color:var(--accent); font-size: 0.85rem;">${idLbl}:</strong> <span style="font-size: 0.85rem;">${escapeHtml(f.id)}</span><br>
+                            <strong style="color:var(--accent); font-size: 0.85rem;">${sevLbl}:</strong> <span style="font-size: 0.85rem;">${escapeHtml(f.severity)}</span><br>
+                            <strong style="color:var(--accent); font-size: 0.85rem;">${toolLbl}:</strong> <span style="font-size: 0.85rem;">${escapeHtml(f.tool)}</span>
                           </div>
                           <div class="col-md-6">
-                            <strong style="color:var(--accent);">${targLbl}:</strong> ${escapeHtml(f.target)}<br>
+                            <strong style="color:var(--accent); font-size: 0.85rem;">${targLbl}:</strong> <span style="font-size: 0.85rem;">${escapeHtml(f.target)}</span><br>
                             ${lineInfo}
                           </div>
                         </div>
                         <div class="mt-3">
-                          <strong style="color:var(--accent);">${descLbl}:</strong><br>
-                          <span style="line-height:1.6;">${escapeHtml(f.description || 'N/A')}</span>
+                          <strong style="color:var(--accent); font-size: 0.85rem;">${descLbl}:</strong><br>
+                          <span style="line-height:1.6; font-size: 0.85rem;">${escapeHtml(f.description || 'N/A')}</span>
                         </div>
-                        <hr style="border-color:var(--glass-border); margin:15px 0;">
-                        <small class="text-muted">💡 ${T[CL]?.no_ai || 'Run with --analyze'}</small>
+                        <hr style="border-color:var(--glass-border); margin:12px 0;">
+                        <small class="text-muted" style="font-size: 0.75rem;">💡 ${T[CL]?.no_ai || 'Run with --analyze'}</small>
                     </div>
                     </td>`;
 
@@ -1615,11 +1673,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 tooltip: {
                     trigger: 'item',
                     backgroundColor: bgTertiary,
-                    borderColor: 'var(--glass-border)',
+                    borderColor: 'var(--accent)',
                     textStyle: { color: textColor },
                     padding: 12,
                     formatter: p => `<div style="font-weight:800; border-bottom:1px solid var(--glass-border); margin-bottom:8px; padding-bottom:6px;">${p.name}</div>
-                                     <span style="color:${p.color}; font-size:1.5rem; vertical-align:middle;">●</span>
+                                     <span style="color:${p.color}; font-size:1.5rem; vertical-align:middle; filter:drop-shadow(0 0 5px ${p.color});">●</span>
                                      <b style="font-size:1.2rem;">${p.value}</b>
                                      <span style="color:var(--text-secondary)">(${p.percent}%)</span>`
                 },
@@ -1629,14 +1687,14 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     center: ['50%', '50%'],
                     avoidLabelOverlap: false,
                     itemStyle: {
-                        borderRadius: 12,
-                        borderColor: 'var(--glass)',
-                        borderWidth: 3,
-                        shadowBlur: 20,
-                        shadowColor: 'rgba(0,0,0,0.4)'
+                        borderRadius: 14,
+                        borderColor: 'var(--bg-secondary)',
+                        borderWidth: 4,
+                        shadowBlur: 15,
+                        shadowColor: 'rgba(0,0,0,0.5)'
                     },
                     label: { show: false },
-                    emphasis: { scaleSize: 15, itemStyle: { shadowBlur: 30, shadowColor: 'rgba(0,0,0,0.6)', borderWidth: 0 } },
+                    emphasis: { scaleSize: 10, itemStyle: { shadowBlur: 25, shadowColor: 'rgba(0,0,0,0.7)', borderWidth: 0 } },
                     data: [
                         { value: counts.CRITICAL, name: tNames[0], itemStyle: { color: '#FF4D6D' } },
                         { value: counts.HIGH, name: tNames[1], itemStyle: { color: '#FFB100' } },
@@ -1678,69 +1736,70 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 tooltip: {
                     trigger: 'axis',
                     backgroundColor: bgTertiary,
-                    borderColor: glassBorder,
+                    borderColor: 'var(--accent)',
                     textStyle: { color: textColor },
-                    padding: 12,
-                    axisPointer: { type: 'line', lineStyle: { color: 'var(--accent)', type: 'dashed', width: 2 } }
+                    padding: 14,
+                    borderRadius: 12,
+                    axisPointer: { type: 'line', lineStyle: { color: 'var(--accent)', type: 'dashed', width: 2, shadowBlur: 10, shadowColor: 'var(--accent-glow)' } }
                 },
                 legend: {
                     data: [tCritical, tHigh, tMedium, tLow],
-                    textStyle: { color: textSecondary, fontWeight: 700 },
+                    textStyle: { color: textSecondary, fontWeight: 700, fontSize: 11 },
                     top: 0,
-                    icon: 'roundRect',
-                    itemGap: 20
+                    icon: 'circle',
+                    itemGap: 15
                 },
-                grid: { left: '2%', right: '3%', bottom: '2%', containLabel: true },
+                grid: { left: '3%', right: '4%', bottom: '3%', top: '15%', containLabel: true },
                 xAxis: {
                     type: 'category',
                     boundaryGap: false,
                     data: labels,
-                    axisLabel: { color: textSecondary, margin: 15, fontWeight: 600 },
+                    axisLabel: { color: textSecondary, margin: 15, fontWeight: 600, fontSize: 11 },
                     axisLine: { lineStyle: { color: glassBorder } }
                 },
                 yAxis: {
                     type: 'value',
-                    axisLabel: { color: textSecondary, fontWeight: 600 },
+                    axisLabel: { color: textSecondary, fontWeight: 600, fontSize: 11 },
                     splitLine: { lineStyle: { color: glassBorder, type: 'dashed' } }
                 },
                 series: [
                     {
                         name: tCritical, type: 'line',
                         data: safeScans.map(s => s.critical),
-                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
-                        lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(255,77,109,0.5)' },
+                        smooth: 0.4, symbol: 'circle', symbolSize: 6,
+                        lineStyle: { width: 3, shadowBlur: 10, shadowColor: 'rgba(255,77,109,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(255,77,109,0.8)'},{offset:1, color:'rgba(255,77,109,0.2)'}]) },
+                            {offset:0, color:'rgba(255,77,109,0.5)'},{offset:1, color:'rgba(255,77,109,0.05)'}]) },
                         itemStyle: { color: '#FF4D6D', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     },
                     {
                         name: tHigh, type: 'line',
                         data: safeScans.map(s => s.high),
-                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
-                        lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(255,177,0,0.5)' },
+                        smooth: 0.4, symbol: 'circle', symbolSize: 6,
+                        lineStyle: { width: 3, shadowBlur: 10, shadowColor: 'rgba(255,177,0,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(255,177,0,0.8)'},{offset:1, color:'rgba(255,177,0,0.2)'}]) },
+                            {offset:0, color:'rgba(255,177,0,0.5)'},{offset:1, color:'rgba(255,177,0,0.05)'}]) },
                         itemStyle: { color: '#FFB100', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     },
                     {
                         name: tMedium, type: 'line',
                         data: safeScans.map(s => s.medium),
-                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
-                        lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(0,180,216,0.5)' },
+                        smooth: 0.4, symbol: 'circle', symbolSize: 6,
+                        lineStyle: { width: 3, shadowBlur: 10, shadowColor: 'rgba(0,180,216,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(0,180,216,0.8)'},{offset:1, color:'rgba(0,180,216,0.2)'}]) },
+                            {offset:0, color:'rgba(0,180,216,0.5)'},{offset:1, color:'rgba(0,180,216,0.05)'}]) },
                         itemStyle: { color: '#00B4D8', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     },
                     {
                         name: tLow, type: 'line',
                         data: safeScans.map(s => s.low),
-                        smooth: 0.5, symbol: 'circle', symbolSize: 6,
-                        lineStyle: { width: 4, shadowBlur: 15, shadowColor: 'rgba(6,214,160,0.5)' },
+                        smooth: 0.4, symbol: 'circle', symbolSize: 6,
+                        lineStyle: { width: 3, shadowBlur: 10, shadowColor: 'rgba(6,214,160,0.6)' },
                         areaStyle: { color: new echarts.graphic.LinearGradient(0,0,0,1,[
-                            {offset:0, color:'rgba(6,214,160,0.8)'},{offset:1, color:'rgba(6,214,160,0.2)'}]) },
+                            {offset:0, color:'rgba(6,214,160,0.5)'},{offset:1, color:'rgba(6,214,160,0.05)'}]) },
                         itemStyle: { color: '#06D6A0', borderColor: '#fff', borderWidth: 2 },
                         emphasis: { focus: 'series' }
                     }
@@ -1806,9 +1865,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     dt.innerHTML = `
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
-                                <strong style="font-size:1.2rem; color:var(--accent);">${escapeHtml(d.id)}</strong><br>
-                                <span class="badge bg-${sColor} mt-2 mb-2">${escapeHtml(d.severity)}</span><br>
-                                <span style="color:var(--text); font-weight:600;">${escapeHtml(d.title)}</span><br>
+                                <strong style="font-size:1.1rem; color:var(--accent);">${escapeHtml(d.id)}</strong><br>
+                                <span class="badge bg-${sColor} mt-2 mb-2 shadow-sm">${escapeHtml(d.severity)}</span><br>
+                                <span style="color:var(--text); font-weight:600; font-size: 0.9rem;">${escapeHtml(d.title)}</span><br>
                                 <small style="color:var(--text-secondary);">Target: ${escapeHtml(d.target)}</small>
                             </div>
                             <button class="btn-accent shadow-lg" onclick="simulateAttack(['${escapeHtml(d.id)}'])">${btnTxt}</button>
@@ -1857,9 +1916,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             const subTxt = T[CL]?.sim_sub || 'Executing sandbox PoC environment';
             document.getElementById('sim-panel-content').innerHTML = `
                 <div class="text-center py-5">
-                    <div class="spinner-border" style="color:var(--accent); width:3.5rem; height:3.5rem; border-width:4px;"></div>
-                    <h4 class="mt-4" aria-live="polite" style="color:var(--text); font-weight:800;">${simTxt}</h4>
-                    <p class="text-muted mt-2 fw-bold">${subTxt}</p>
+                    <div class="spinner-border" style="color:var(--accent); width:3rem; height:3rem; border-width:3px;"></div>
+                    <h5 class="mt-4" aria-live="polite" style="color:var(--text); font-weight:800;">${simTxt}</h5>
+                    <p class="text-muted mt-2 fw-bold" style="font-size: 0.85rem;">${subTxt}</p>
                 </div>`;
         }
 
@@ -1871,9 +1930,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             if (e.target === this) closeSimPanel();
         });
 
-        // -------- Data loading (called after login / token available) ----------
         function loadDashboardData() {
-            // Findings
             fetchWithAuth('/api/findings')
                 .then(r => r.json())
                 .then(data => {
@@ -1907,7 +1964,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     });
                 });
 
-            // History
             fetchWithAuth('/api/history')
                 .then(r => r.json())
                 .then(sc => {
@@ -1917,7 +1973,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     }
                 });
 
-            // Summary / AI
             fetchWithAuth('/api/summary')
                 .then(r => r.json())
                 .then(d => {
@@ -1939,7 +1994,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                             document.getElementById('ai-meta-info').style.setProperty('display', 'flex', 'important');
                             document.getElementById('ai-hardware').textContent = d.hardware_profile;
                         }
-                        if (d.risk_score) renderRiskScore(d.risk_score);
                     } else {
                         const aiStat = document.getElementById('ai-status');
                         const noAiMsg = T[CL]?.no_ai || 'Run with --analyze';
@@ -1947,7 +2001,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                     }
                 });
 
-            // Attack paths
             fetchWithAuth('/api/attack-paths')
                 .then(r => r.json())
                 .then(d => {
@@ -1983,27 +2036,27 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 const soStr = escapeHtml(d.sandbox_output);
                 const so = d.sandbox_output ? `
                     <div class="mt-4">
-                        <strong style="color:var(--accent); font-size:1.1rem;">${soTitle}</strong>
+                        <strong style="color:var(--accent); font-size:0.95rem;">${soTitle}</strong>
                         <pre class="bg-dark text-light p-3 mt-2 rounded shadow-inner"
-                             style="max-height:250px; overflow-y:auto; border:1px solid #333;
-                                    font-family:'SF Mono', 'Fira Code', monospace;">${soStr}</pre>
+                             style="max-height:220px; overflow-y:auto; border:1px solid #333;
+                                    font-family:'SF Mono', 'Fira Code', monospace; font-size: 0.85rem;">${soStr}</pre>
                     </div>` : '';
                 const simRes = T[CL]?.sim_results || 'Simulation Results';
                 const descTitle = T[CL]?.description || 'Description';
                 content.innerHTML = `
-                    <h4 style="color:var(--accent); font-weight:800; margin-bottom:20px;">
+                    <h5 style="color:var(--accent); font-weight:800; margin-bottom:15px;">
                         <span aria-hidden="true">⚡</span> ${simRes}
-                    </h4>
-                    <pre class="bg-dark text-light p-4 rounded shadow-inner"
-                         style="max-height:300px; overflow-y:auto; border:1px solid #333;
-                                font-family:'SF Mono', 'Fira Code', monospace; font-size:0.95rem;">
+                    </h5>
+                    <pre class="bg-dark text-light p-3 rounded shadow-inner"
+                         style="max-height:250px; overflow-y:auto; border:1px solid #333;
+                                font-family:'SF Mono', 'Fira Code', monospace; font-size:0.85rem;">
                          ${escapeHtml(d.script)}
                     </pre>
-                    <p class="mt-4 p-3 rounded"
-                       style="color:var(--text); font-size:1.05rem; background:var(--bg-tertiary);
+                    <p class="mt-3 p-3 rounded"
+                       style="color:var(--text); font-size:0.95rem; background:var(--bg-tertiary);
                               border:1px solid var(--glass-border);">
-                        <strong style="color:var(--accent);">${descTitle}:</strong> <br>
-                        <span class="mt-2 d-block line-height-lg">${escapeHtml(d.description)}</span>
+                        <strong style="color:var(--accent); font-size: 0.85rem;">${descTitle}:</strong> <br>
+                        <span class="mt-1 d-block line-height-lg">${escapeHtml(d.description)}</span>
                     </p>
                     ${so}`;
             } catch (err) {
@@ -2012,15 +2065,12 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
             }
         }
 
-        // -------- Initialisation (after DOM ready) ----------
         document.addEventListener('DOMContentLoaded', function() {
-            // Logout button handler
             document.getElementById('logoutBtn').addEventListener('click', () => {
                 forceReLogin();
                 showToast('You have been logged out.', 'info');
             });
 
-            // Login flow
             if (AUTH_TOKEN) {
                 document.getElementById('loginModalOverlay').style.display = 'none';
                 loadDashboardData();
@@ -2044,7 +2094,6 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
                 }
             });
 
-            // Rest of UI init
             const savedTheme = localStorage.getItem('pipeline-theme') || 'cyber';
             switchTheme(savedTheme);
             switchLanguage(CL);
