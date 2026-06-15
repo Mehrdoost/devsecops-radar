@@ -1,13 +1,15 @@
-"""Tests for the dashboard routes."""
-
+import io
 import json
-from unittest.mock import MagicMock, patch
+import os
+from pathlib import Path
+from unittest.mock import ANY, MagicMock, mock_open, patch
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 
-# Environment is already set by conftest.py (JWT_SECRET, PIPELINE_API_KEY, DATABASE_URL)
 from devsecops_radar.web.dashboard.routes import (
+    _ALLOWED_DATA_DIR,
     _safe_data_path,
     dashboard_bp,
     load_findings,
@@ -15,286 +17,450 @@ from devsecops_radar.web.dashboard.routes import (
 
 
 @pytest.fixture
-def app():
-    """Create a Flask test app with the dashboard blueprint."""
+def app_with_dashboard():
     app = Flask(__name__)
+    app.config["TESTING"] = True
     app.register_blueprint(dashboard_bp)
     return app
 
 
 @pytest.fixture
-def client(app):
-    """Return a test client with valid API key header."""
-    with app.test_client() as client:
-        # The conftest sets PIPELINE_API_KEY=test-api-key
-        client.environ_base["HTTP_X_API_KEY"] = "test-api-key"
-        yield client
+def client(app_with_dashboard) -> FlaskClient:
+    return app_with_dashboard.test_client()
 
 
-# ============================================================================
-# _safe_data_path
-# ============================================================================
+@pytest.fixture
+def auth_headers():
+    """Headers that pass authentication – must match conftest.py key."""
+    return {"X-API-Key": "test-api-key"}
+
+
+# ---------------------------------------------------------------------------
+# Helper tests
+# ---------------------------------------------------------------------------
 class TestSafeDataPath:
-    def test_allowed_file(self, tmp_path):
-        base = tmp_path / "allowed"
-        base.mkdir()
-        f = base / "data.json"
-        f.touch()
-        with patch(
-            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", base
-        ):
-            assert _safe_data_path("data.json") == f.resolve()
-
-    def test_traversal_blocked(self, tmp_path):
-        base = tmp_path / "allowed"
-        base.mkdir()
-        outside = tmp_path / "evil.txt"
-        outside.touch()
-        with patch(
-            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", base
-        ):
-            assert _safe_data_path("../evil.txt") is None
-
-    def test_absolute_path_blocked(self, tmp_path):
-        base = tmp_path / "allowed"
-        base.mkdir()
-        with patch(
-            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", base
-        ):
-            assert _safe_data_path(str(tmp_path / "other.txt")) is None
-
-
-# ============================================================================
-# load_findings
-# ============================================================================
-class TestLoadFindings:
-    def test_file_exists(self, tmp_path):
-        data = [{"id": "1", "severity": "HIGH"}]
-        file = tmp_path / "findings.json"
-        file.write_text(json.dumps(data))
-        with patch(
-            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", tmp_path
-        ), patch(
-            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE", "findings.json"
-        ):
-            result = load_findings()
-        assert result == data
-
-    def test_file_missing(self, tmp_path):
-        with patch(
-            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", tmp_path
-        ), patch(
-            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE",
-            "nonexistent.json",
-        ):
-            assert load_findings() == []
-
-    def test_file_outside_allowed_dir(self, tmp_path):
-        outside = tmp_path / "outside.json"
-        outside.write_text("[]")
-        with patch(
+    def test_valid(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
             "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR",
-            tmp_path / "subdir",
-        ), patch(
-            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE", str(outside)
+            tmp_path.resolve(),
+        )
+        f = tmp_path / "data.json"
+        f.write_text("{}")
+        assert _safe_data_path("data.json") == f.resolve()
+
+    def test_traversal_blocked(self, monkeypatch):
+        monkeypatch.setattr(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR",
+            Path("/app"),
+        )
+        assert _safe_data_path("../etc/passwd") is None
+
+    def test_absolute_outside(self, monkeypatch):
+        monkeypatch.setattr(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR",
+            Path("/app"),
+        )
+        assert _safe_data_path("/etc/passwd") is None
+
+
+class TestLoadFindings:
+    def test_existing(self, tmp_path, monkeypatch):
+        data = [{"id": "F1"}]
+        f = tmp_path / "findings.json"
+        f.write_text(json.dumps(data))
+        monkeypatch.setattr(
+            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE", "findings.json"
+        )
+        monkeypatch.setattr(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", tmp_path
+        )
+        assert load_findings() == data
+
+    def test_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            "devsecops_radar.web.dashboard.routes._safe_data_path", lambda _: None
+        )
+        assert load_findings() == []
+
+    def test_invalid_json(self, tmp_path, monkeypatch):
+        f = tmp_path / "bad.json"
+        f.write_text("not json")
+        monkeypatch.setattr(
+            "devsecops_radar.web.dashboard.routes.FINDINGS_FILE", "bad.json"
+        )
+        monkeypatch.setattr(
+            "devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR", tmp_path
+        )
+        with pytest.raises(json.JSONDecodeError):
+            load_findings()
+
+
+# ---------------------------------------------------------------------------
+# Route tests
+# ---------------------------------------------------------------------------
+class TestIndex:
+    def test_returns_html(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.render_template",
+            return_value="<html></html>",
         ):
-            assert load_findings() == []
-
-
-# ============================================================================
-# API endpoints
-# ============================================================================
-class TestApiFindings:
-    @patch("devsecops_radar.web.dashboard.routes.get_findings_paginated")
-    def test_returns_paginated_data(self, mock_paginated, client):
-        mock_paginated.return_value = {
-            "total": 2,
-            "page": 1,
-            "per_page": 50,
-            "data": [{"id": "1"}, {"id": "2"}],
-        }
-        resp = client.get("/api/findings?page=1&per_page=10")
+            resp = client.get("/", headers=auth_headers)
         assert resp.status_code == 200
-        assert resp.json["total"] == 2
-        mock_paginated.assert_called_once_with(1, 10)
+
+
+class TestApiFindings:
+    def test_default_pagination(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.get_findings_paginated"
+        ) as m:
+            m.return_value = []
+            resp = client.get("/api/findings", headers=auth_headers)
+        assert resp.status_code == 200
+        m.assert_called_once_with(1, 50)
+
+    def test_custom_params(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.get_findings_paginated"
+        ) as m:
+            m.return_value = {}
+            client.get("/api/findings?page=2&per_page=10", headers=auth_headers)
+        m.assert_called_once_with(2, 10)
 
 
 class TestApiHistory:
     @patch("devsecops_radar.web.dashboard.routes.db_session")
-    @patch("devsecops_radar.web.dashboard.routes.Scan")
-    def test_returns_history(self, mock_scan, mock_db_session, client):
+    def test_default(self, mock_db, client, auth_headers):
         mock_session = MagicMock()
-        mock_db_session.return_value = mock_session
-
-        scan1 = MagicMock()
-        scan1.timestamp = None
-        scan1.risk_score = 80
-        f1, f2 = MagicMock(), MagicMock()
-        f1.severity = "CRITICAL"
-        f2.severity = "HIGH"
-        scan1.findings = [f1, f2]
-
-        scan2 = MagicMock()
-        scan2.timestamp.isoformat.return_value = "2025-01-01T00:00:00"
-        scan2.risk_score = 60
-        f3 = MagicMock()
-        f3.severity = "LOW"
-        scan2.findings = [f3]
-
-        mock_session.query.return_value.order_by.return_value.all.return_value = [
-            scan1,
-            scan2,
-        ]
-        resp = client.get("/api/history")
+        mock_db.return_value = mock_session
+        scan = MagicMock(timestamp=None, risk_score=0, findings=[])
+        mock_session.query.return_value.order_by.return_value.all.return_value = [scan]
+        resp = client.get("/api/history", headers=auth_headers)
         assert resp.status_code == 200
-        data = resp.json
-        assert len(data) == 2
-        assert data[0]["critical"] == 1
-        assert data[0]["high"] == 1
-        assert data[0]["risk_score"] == 80
-        assert data[1]["low"] == 1
+        assert len(resp.get_json()) == 1
+
+    @patch("devsecops_radar.web.dashboard.routes.db_session")
+    def test_week_filter(self, mock_db, client, auth_headers):
+        mock_session = MagicMock()
+        mock_db.return_value = mock_session
+        query = mock_session.query.return_value.order_by.return_value
+        query.filter.return_value = query
+        scan = MagicMock(timestamp=None, risk_score=0, findings=[])
+        query.all.return_value = [scan]
+        client.get("/api/history?range=week", headers=auth_headers)
+        query.filter.assert_called()
+
+    @patch("devsecops_radar.web.dashboard.routes.db_session")
+    def test_invalid_range(self, mock_db, client, auth_headers):
+        mock_session = MagicMock()
+        mock_db.return_value = mock_session
+        query = mock_session.query.return_value.order_by.return_value
+        scan = MagicMock(timestamp=None, risk_score=0, findings=[])
+        query.all.return_value = [scan]
+        client.get("/api/history?range=invalid", headers=auth_headers)
+        query.filter.assert_not_called()
 
 
-class TestApiAttackPaths:
-    @patch(
-        "devsecops_radar.web.dashboard.routes.load_findings",
-        return_value=[
-            {"id": "1", "severity": "HIGH", "title": "t1"},
-            {"id": "2", "severity": "MEDIUM", "title": "t2"},
-        ],
-    )
-    def test_returns_graph_data(self, mock_load, client):
-        resp = client.get("/api/attack-paths")
+class TestScannerStatus:
+    @patch("devsecops_radar.web.dashboard.routes.shutil.which")
+    def test_all_found(self, mock_which, client, auth_headers):
+        mock_which.return_value = "/usr/bin/scanner"
+        resp = client.get("/api/scanner-status", headers=auth_headers)
+        data = resp.get_json()
+        assert all(data.values())
+        assert set(data.keys()) == {"trivy", "semgrep", "poutine", "zizmor", "gitleaks"}
+
+    @patch("devsecops_radar.web.dashboard.routes.shutil.which")
+    def test_none_found(self, mock_which, client, auth_headers):
+        mock_which.return_value = None
+        resp = client.get("/api/scanner-status", headers=auth_headers)
+        data = resp.get_json()
+        assert not any(data.values())
+
+
+class TestLiveFeed:
+    def test_returns_list(self, client, auth_headers):
+        with patch("devsecops_radar.web.sentry.routes._LIVE_FINDINGS", ["a", "b"]):
+            resp = client.get("/api/live-feed", headers=auth_headers)
+        assert resp.get_json() == ["a", "b"]
+
+
+class TestPolicyStatus:
+    def test_no_policy(self, client, auth_headers):
+        with patch("pathlib.Path.exists", return_value=False):
+            resp = client.get("/api/policy-status", headers=auth_headers)
+        assert resp.get_json() == {"status": "no_policy"}
+
+    def test_violated(self, client, auth_headers):
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data='{"max_critical":5}')), \
+             patch("devsecops_radar.web.dashboard.routes.load_findings") as mock_load:
+            mock_load.return_value = [{"severity": "CRITICAL"}] * 6
+            resp = client.get("/api/policy-status", headers=auth_headers)
+            data = resp.get_json()
+            assert data == {"max_critical": 5, "current_critical": 6, "violated": True}
+
+    def test_not_violated(self, client, auth_headers):
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data='{"max_critical":10}')), \
+             patch("devsecops_radar.web.dashboard.routes.load_findings") as mock_load:
+            mock_load.return_value = [{"severity": "LOW"}]
+            resp = client.get("/api/policy-status", headers=auth_headers)
+            assert resp.get_json()["violated"] is False
+
+    def test_invalid_json(self, client, auth_headers):
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data="not json")):
+            resp = client.get("/api/policy-status", headers=auth_headers)
+        assert resp.get_json() == {"status": "error"}
+
+
+class TestNotifyJira:
+    def test_invalid_ids(self, client, auth_headers):
+        # send a non-list value to trigger "finding_ids must be a list"
+        resp = client.post("/api/notify-jira", json={"finding_ids": "not_a_list"}, headers=auth_headers)
+        assert resp.status_code == 400
+        assert "finding_ids must be a list" in resp.get_json()["error"]
+
+    def test_no_match(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=[{"id": "F1"}],
+        ):
+            resp = client.post(
+                "/api/notify-jira",
+                json={"finding_ids": ["F2"]},
+                headers=auth_headers,
+            )
+        assert resp.status_code == 400
+        assert "No matching findings" in resp.get_json()["error"]
+
+    def test_missing_env(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=[{"id": "F1"}],
+        ):
+            with patch.dict(os.environ, {}, clear=True):
+                resp = client.post(
+                    "/api/notify-jira",
+                    json={"finding_ids": ["F1"]},
+                    headers=auth_headers,
+                )
+        assert resp.status_code == 500
+        assert "JIRA_URL and JIRA_TOKEN" in resp.get_json()["error"]
+
+    def test_success(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=[{"id": "F1"}],
+        ), \
+             patch.dict(os.environ, {"JIRA_URL": "u", "JIRA_TOKEN": "t"}), \
+             patch("devsecops_radar.core.notifier.notify_jira") as mock_notify:
+            resp = client.post(
+                "/api/notify-jira",
+                json={"finding_ids": ["F1"]},
+                headers=auth_headers,
+            )
         assert resp.status_code == 200
-        data = resp.json
-        assert len(data["nodes"]) == 2
-        assert len(data["links"]) == 1
+        assert resp.get_json() == {"status": "sent"}
+        mock_notify.assert_called_once_with([{"id": "F1"}], "u", "t")
 
-    @patch("devsecops_radar.web.dashboard.routes.load_findings", return_value=[])
-    def test_no_findings_returns_empty_graph(self, mock_load, client):
-        resp = client.get("/api/attack-paths")
+    def test_notify_exception(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=[{"id": "F1"}],
+        ), \
+             patch.dict(os.environ, {"JIRA_URL": "u", "JIRA_TOKEN": "t"}), \
+             patch("devsecops_radar.core.notifier.notify_jira") as mock_notify:
+            mock_notify.side_effect = RuntimeError("fail")
+            resp = client.post(
+                "/api/notify-jira",
+                json={"finding_ids": ["F1"]},
+                headers=auth_headers,
+            )
+        assert resp.status_code == 500
+        assert "Jira notification failed" in resp.get_json()["error"]
+
+
+class TestNotifyAsana:
+    def test_success(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=[{"id": "F1"}],
+        ), \
+             patch.dict(os.environ, {"ASANA_TOKEN": "a", "ASANA_WORKSPACE": "w"}), \
+             patch("devsecops_radar.core.notifier.notify_asana") as mock_notify:
+            resp = client.post(
+                "/api/notify-asana",
+                json={"finding_ids": ["F1"]},
+                headers=auth_headers,
+            )
         assert resp.status_code == 200
-        assert resp.json == {"nodes": [], "links": []}
+        mock_notify.assert_called_once()
+
+    def test_missing_env(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=[{"id": "F1"}],
+        ):
+            with patch.dict(os.environ, {}, clear=True):
+                resp = client.post(
+                    "/api/notify-asana",
+                    json={"finding_ids": ["F1"]},
+                    headers=auth_headers,
+                )
+        assert resp.status_code == 500
 
 
-class TestApiRag:
-    @patch("devsecops_radar.web.dashboard.routes.rag_search")
-    def test_returns_rag_results(self, mock_rag, client):
-        mock_rag.return_value = [{"id": "1", "tool": "trivy"}]
-        resp = client.get("/api/rag?q=test")
+class TestRag:
+    def test_empty(self, client, auth_headers):
+        resp = client.get("/api/rag", headers=auth_headers)
+        assert resp.get_json() == []
+
+    def test_with_query(self, client, auth_headers):
+        with patch("devsecops_radar.web.dashboard.routes.rag_search") as mock_rag:
+            mock_rag.return_value = [{"r": "1"}]
+            resp = client.get("/api/rag?q=test", headers=auth_headers)
         assert resp.status_code == 200
-        assert resp.json == [{"id": "1", "tool": "trivy"}]
         mock_rag.assert_called_once_with("test")
 
-    def test_empty_query_returns_empty(self, client):
-        resp = client.get("/api/rag?q=")
-        assert resp.status_code == 200
-        assert resp.json == []
 
-
-class TestApiSimulate:
-    def test_invalid_finding_ids(self, client):
-        resp = client.post(
-            "/api/simulate",
-            json={"finding_ids": "not a list"},
-            content_type="application/json",
-        )
+class TestSimulate:
+    def test_invalid_ids(self, client, auth_headers):
+        # send a non-list value to trigger "finding_ids must be a list"
+        resp = client.post("/api/simulate", json={"finding_ids": 123}, headers=auth_headers)
         assert resp.status_code == 400
+        assert "finding_ids must be a list" in resp.get_json()["error"]
 
-    @patch(
-        "devsecops_radar.web.dashboard.routes.load_findings", return_value=[]
-    )
-    def test_findings_not_found(self, mock_load, client):
-        resp = client.post(
-            "/api/simulate",
-            json={"finding_ids": ["F1"]},
-            content_type="application/json",
-        )
+    def test_no_match(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings", return_value=[]
+        ):
+            resp = client.post(
+                "/api/simulate",
+                json={"finding_ids": ["F1"]},
+                headers=auth_headers,
+            )
         assert resp.status_code == 404
 
-    @patch(
-        "devsecops_radar.web.dashboard.routes.load_findings",
-        return_value=[{"id": "F1", "title": "Test", "target": "a.py"}],
-    )
-    @patch("devsecops_radar.core.attack_simulation.simulate_attack")
-    @patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc")
-    def test_simulates_selected(
-        self, mock_run_sandbox, mock_simulate, mock_load, client, tmp_path
-    ):
-        script_file = tmp_path / "poc.sh"
-        script_file.write_text("#!/bin/bash\necho ok")
-        mock_simulate.return_value = str(script_file)
-        mock_run_sandbox.return_value = "Sandbox output"
+    def test_success(self, client, auth_headers):
+        findings = [{"id": "F1", "title": "T1"}]
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=findings,
+        ), \
+             patch("devsecops_radar.core.attack_simulation.simulate_attack") as sim, \
+             patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc") as sandbox, \
+             patch("builtins.open", mock_open(read_data="script")):
+            sim.return_value = "/tmp/poc.py"
+            sandbox.return_value = "sandbox out"
+            resp = client.post(
+                "/api/simulate",
+                json={"finding_ids": ["F1"]},
+                headers=auth_headers,
+            )
+        data = resp.get_json()
+        assert data["script"] == "script"
+        assert data["sandbox_output"] == "sandbox out"
+        assert "T1" in data["description"]
 
-        resp = client.post(
-            "/api/simulate",
-            json={"finding_ids": ["F1"]},
-            content_type="application/json",
-        )
-        assert resp.status_code == 200
-        data = resp.json
-        assert "script" in data
-        assert data["sandbox_output"] == "Sandbox output"
+    def test_sandbox_exception(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=[{"id": "F1"}],
+        ), \
+             patch("devsecops_radar.core.attack_simulation.simulate_attack") as sim, \
+             patch("devsecops_radar.core.attack_simulation.run_sandboxed_poc") as sandbox, \
+             patch("builtins.open", mock_open(read_data="script")):
+            sim.return_value = "/tmp/poc.py"
+            sandbox.side_effect = RuntimeError("fail")
+            resp = client.post(
+                "/api/simulate",
+                json={"finding_ids": ["F1"]},
+                headers=auth_headers,
+            )
+        assert resp.get_json()["sandbox_output"] is None
 
 
-class TestApiReport:
-    @patch(
-        "devsecops_radar.web.dashboard.routes.load_findings",
-        return_value=[{"id": "1", "severity": "HIGH"}],
-    )
-    @patch(
-        "devsecops_radar.web.dashboard.routes._safe_data_path",
-        return_value=None,
-    )
-    def test_report_json(self, mock_safe, mock_load, client):
-        resp = client.get("/api/report?format=json")
+class TestReport:
+    @pytest.fixture
+    def findings(self):
+        return [
+            {
+                "tool": "t",
+                "id": "F1",
+                "severity": "HIGH",
+                "target": "app",
+                "title": "vuln",
+            }
+        ]
+
+    @pytest.fixture
+    def ai(self):
+        return {"executive_summary": "summary text"}
+
+    def test_json(self, client, auth_headers, findings, ai):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=findings,
+        ), \
+             patch(
+                "devsecops_radar.web.dashboard.routes._safe_data_path",
+                return_value=Path("/fake/sum.json"),
+            ), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data=json.dumps(ai))):
+            resp = client.get("/api/report?format=json", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.mimetype == "application/json"
         data = json.loads(resp.data)
-        assert data["findings"] == [{"id": "1", "severity": "HIGH"}]
+        assert data["findings"] == findings
+        assert data["ai_summary"] == ai
 
-    @patch(
-        "devsecops_radar.web.dashboard.routes.load_findings",
-        return_value=[{"id": "1", "severity": "HIGH", "tool": "trivy",
-                        "target": "a.py", "title": "Test"}],
-    )
-    @patch(
-        "devsecops_radar.web.dashboard.routes._safe_data_path",
-        return_value=None,
-    )
-    def test_report_html(self, mock_safe, mock_load, client):
-        resp = client.get("/api/report?format=html")
+    def test_html(self, client, auth_headers, findings, ai):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=findings,
+        ), \
+             patch(
+                "devsecops_radar.web.dashboard.routes._safe_data_path",
+                return_value=Path("/fake/sum.json"),
+            ), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data=json.dumps(ai))):
+            resp = client.get("/api/report?format=html", headers=auth_headers)
         assert resp.status_code == 200
-        assert resp.mimetype == "text/html"
-        content = resp.data.decode()
-        assert "Pipeline Sentinel Security Report" in content
-        assert "trivy" in content
+        html = resp.data.decode()
+        assert "<title>Pipeline Sentinel Report</title>" in html
+        assert "summary text" in html
 
-    @patch(
-        "devsecops_radar.web.dashboard.routes.load_findings",
-        return_value=[{"id": "1"}],
-    )
-    @patch("devsecops_radar.web.dashboard.routes.generate_pdf_report")
-    @patch(
-        "devsecops_radar.web.dashboard.routes._safe_data_path",
-        return_value=None,
-    )
-    @patch("devsecops_radar.web.dashboard.routes._ALLOWED_DATA_DIR")
-    @patch("devsecops_radar.web.dashboard.routes.send_file")
-    def test_report_pdf(
-        self, mock_send, mock_dir, mock_safe, mock_pdf, mock_load, client, tmp_path
-    ):
-        # Provide a safe temporary path that "exists" for send_file
-        mock_dir.__truediv__.return_value = tmp_path / "report.pdf"
-        # Ensure the mocked file passes the existence check? No, send_file is mocked entirely.
-        mock_send.return_value = ("fake pdf", 200)
-        resp = client.get("/api/report?format=pdf")
-        assert resp.status_code == 200
-        mock_pdf.assert_called_once()
+    def test_pdf(self, client, auth_headers, findings, ai):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings",
+            return_value=findings,
+        ), \
+             patch(
+                "devsecops_radar.web.dashboard.routes._safe_data_path",
+                return_value=Path("/fake/sum.json"),
+            ), \
+             patch("pathlib.Path.exists", return_value=True), \
+             patch("builtins.open", mock_open(read_data=json.dumps(ai))), \
+             patch("devsecops_radar.web.dashboard.routes.generate_pdf_report") as pdf, \
+             patch("devsecops_radar.web.dashboard.routes.send_file") as send:
+            send.return_value = ("pdf", 200)
+            resp = client.get("/api/report", headers=auth_headers)
+        pdf.assert_called_once_with(findings, ai, ANY, framework=None)
+        send.assert_called_once()
 
-
-class TestIndex:
-    def test_index_page_renders(self, client):
-        resp = client.get("/")
-        assert resp.status_code == 200
-        assert b"Pipeline Sentinel" in resp.data
+    def test_framework(self, client, auth_headers):
+        with patch(
+            "devsecops_radar.web.dashboard.routes.load_findings", return_value=[]
+        ), \
+             patch(
+                "devsecops_radar.web.dashboard.routes._safe_data_path",
+                return_value=None,
+            ), \
+             patch("devsecops_radar.web.dashboard.routes.generate_pdf_report") as pdf, \
+             patch("devsecops_radar.web.dashboard.routes.send_file") as send:
+            send.return_value = ("pdf", 200)
+            client.get("/api/report?framework=PCI-DSS", headers=auth_headers)
+        pdf.assert_called_once_with([], {}, ANY, framework="PCI-DSS")

@@ -29,6 +29,7 @@ class FindingSchema(BaseModel):
     title: str
     description: str | None = ""
     line: int | None = None
+    dynamic_risk_score: float = 0.0
 
     @field_validator("severity")
     @classmethod
@@ -80,6 +81,7 @@ class Finding(Base):                       # type: ignore[valid-type, misc]
     title = Column(String, nullable=False)
     description = Column(String, default="")
     line = Column(Integer, nullable=True)
+    dynamic_risk_score = Column(Float, nullable=True, default=0.0)
     scan = relationship("Scan", back_populates="findings")
 
 
@@ -88,7 +90,7 @@ class Finding(Base):                       # type: ignore[valid-type, misc]
 # ==============================
 DB_URL = os.environ.get("DATABASE_URL", "sqlite:///pipeline_sentinel.db")
 
-engine_kwargs: dict[str, Any] = {          # نوع صریح
+engine_kwargs: dict[str, Any] = {
     "pool_pre_ping": True,
     "pool_recycle": 3600,
 }

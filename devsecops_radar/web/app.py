@@ -19,7 +19,6 @@ from devsecops_radar.web.sentry.routes import sentry_bp
 from devsecops_radar.web.summary.routes import summary_bp
 from devsecops_radar.web.topology.routes import topology_bp
 
-# Optional: Rich for fancy terminal output
 try:
     from rich.console import Console
     from rich.panel import Panel
@@ -71,10 +70,7 @@ def _check_file(path: str) -> bool:
 
 
 def print_startup_banner(host: str, port: int, debug: bool) -> None:
-    """
-    Display a rich, informative startup banner.
-    Falls back to plain text if Rich is not installed.
-    """
+    """Display a rich, informative startup banner."""
     api_key_set = bool(settings.PIPELINE_API_KEY)
     local_ip = _get_local_ip()
     findings_file = os.environ.get("FINDINGS_FILE", "findings.json")
@@ -138,16 +134,12 @@ def print_startup_banner(host: str, port: int, debug: bool) -> None:
 # Application factory
 # ---------------------------------------------------------------------------
 def create_app() -> Flask:
-    """
-    Application Factory for the DevSecOps Radar Web Gateway.
-    Implements secure defaults, CORS, and modular routing.
-    """
     app = Flask(__name__)
 
     # 1. Security: Restrict maximum payload size to 1MB to prevent memory DoS
     app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
-    # 2. Security: Configure CORS using environment variable, never wide open in production
+    # 2. Security: Configure CORS using environment variable
     allowed_origins = os.environ.get(
         "CORS_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"
     )
@@ -161,17 +153,24 @@ def create_app() -> Flask:
     app.register_blueprint(summary_bp, url_prefix="/api")
     app.register_blueprint(sentry_bp, url_prefix="/api")
 
+    # Optional global auth check for API routes (defense in depth)
+    @app.before_request
+    def global_auth_check():
+        if request.path.startswith("/api/") and request.path != "/api/auth/login":
+            # Only check if neither API key nor Bearer token present;
+            # actual validation is done by the endpoint decorators.
+            if not request.headers.get("X-API-Key") and not request.headers.get("Authorization"):
+                return jsonify({"error": "Authentication required"}), 401
+
     # ------------------------------------------------------------------
     # Authentication endpoint
     # ------------------------------------------------------------------
     @app.route("/api/auth/login", methods=["POST"])
     def login():
-        """Secure authentication endpoint with rate limiting."""
         ip = request.remote_addr or "unknown"
         if not _check_login_rate(ip):
             return jsonify({"error": "Too many login attempts. Please try again later."}), 429
 
-        # Accept only application/json
         if not request.is_json:
             return jsonify({"error": "Content-Type must be application/json"}), 400
 
@@ -236,10 +235,6 @@ def create_app() -> Flask:
 # Server entry point
 # ---------------------------------------------------------------------------
 def start_server():
-    """
-    Bootstraps the web server.
-    Always uses Waitress for production‑grade stability; never runs Flask dev server.
-    """
     app = create_app()
 
     host = settings.HOST or "0.0.0.0"

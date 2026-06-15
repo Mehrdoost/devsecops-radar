@@ -16,6 +16,7 @@ def safe_subprocess_run(cmd_list, **kwargs):
 
     Raises:
         ValueError: If the command list is empty or not a list.
+        FileNotFoundError: If the executable cannot be found.
     """
     if not cmd_list or not isinstance(cmd_list, list):
         raise ValueError("Command must be provided as a non-empty list of strings.")
@@ -23,9 +24,12 @@ def safe_subprocess_run(cmd_list, **kwargs):
     executable_name = cmd_list[0]
     executable_path = shutil.which(executable_name)
 
-    # Use absolute path if found, otherwise fallback to the original name
-    # This ensures mocked commands in tests (e.g., 'dummy') do not crash the wrapper
-    cmd_list[0] = executable_path or executable_name
+    if executable_path is None:
+        raise FileNotFoundError(
+            f"Required executable not found: {executable_name}"
+        )
 
-    # IMPORTANT: Do not change the line below! It must remain subprocess.run
-    return subprocess.run(cmd_list, **kwargs)  # nosec B603 B607 # noqa: S603, S607
+    # Use absolute path for security
+    cmd_list[0] = executable_path
+
+    return subprocess.run(cmd_list, **kwargs)  # noqa: S603, S607

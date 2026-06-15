@@ -469,56 +469,21 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## 🔐 v0.4.4 中的安全加固与生产就绪
+## ✨ v0.4.5 更新内容
 
-此版本是一次全面的安全性和稳定性改造。已修复 Web 界面、API 和扫描器逻辑中的
-所有已知漏洞。项目现已满足企业级安全要求，尤其是在气隙（air‑gapped）环境中。
-
-### 🔐 安全修复（严重和高危）
-- 存储型 XSS – 仪表板表格行和详情视图不再将原始发现数据注入 DOM；所有值均
-  正确转义。
-- 路径遍历 – 数据文件（findings.json、AI 摘要、拓扑数据）会验证是否位于
-  工作目录内。通过环境变量读取任意文件已被阻止。
-- 认证绕过 – 端点 `/api/attack-paths`、`/api/summary`、`/api/topology` 和
-  `/api/scan-result` 现在正确强制要求 API‑key 认证。
-- API 密钥泄露 – 仪表板不再在页面源代码中渲染真实的 API 密钥。
-- 攻击模拟中的命令注入 – 脚本生成现在仅允许安全的字符子集；多行和特殊字符
-  会被删除。
-- 报告中的密钥泄露 – Gitleaks 发现结果不再在描述中包含实际密钥；PDF/HTML
-  报告会在所有字段中脱敏常见令牌模式（GitHub、GitLab、AWS、JWT）。
-
-### 🧱 架构与性能
-- 速率限制 – 登录及所有受 API‑key 保护的端点均已限流（内存级，线程安全）。
-- 会话管理 – 不再手动关闭数据库作用域会话，避免多步请求中的 “instance not
-  bound” 错误。
-- 数据库模式 – `execution_time` 现存储为 `Float`（秒）；删除了冗余列
-  `findings_json`；在 `scans.timestamp` 上添加了索引。
-- AI 分析器 – 并发块处理限制为 5；Ollama 端点限制为 `localhost`，以确保符合
-  气隙要求。
-- 策略引擎 – 新增 `on_violation` 字段（`warn` / `fail`），允许灵活的策略
-  执行。
-
-### 🛡 扫描器改进
-- 所有扫描器（`trivy`、`semgrep`、`zizmor`、`poutine`、`gitleaks`）现在在
-  解析任何文件前都会调用 `_validate_target_path`，在适配器层阻止路径遍历。
-- `Trivy` 现在支持镜像摘要（`repo@sha256:...`）。
-- `Semgrep` 和 `Gitleaks` 能正确处理表示发现结果的非零退出码。
-
-### 🎨 开发者与运维
-- `semgrep` 已移至可选依赖项
-  （`pip install devsecops-radar[extra]`）。
-- 启用了 `Ruff` 并配置了安全规则（S）；行长度设置为 120。
-- Jira 项目键和问题类型可通过 `JIRA_PROJECT_KEY` 和 `JIRA_ISSUE_TYPE` 配置。
-- CORS 来源由 `CORS_ORIGINS` 环境变量控制（不再是 `*`）。
-- 所有 Python 文件已按新标准格式化。
-
-### ⬆️ 升级说明
-1. 拉取最新镜像或更新软件包：
-   `pip install --upgrade devsecops-radar`
-2. 检查 `.env` 文件 – 确保 `JWT_SECRET` 和 `PIPELINE_API_KEY` 足够强
-   （≥ 32 个字符）。
-3. 如果使用 Jira，请设置 `JIRA_PROJECT_KEY` 和 `JIRA_ISSUE_TYPE`。
-4. 重启 Web 服务器。
+- **实时 Sentry 推送** – CI/CD 发现结果自动实时显示  
+- **扫描器状态** – 查看哪些工具已安装并就绪  
+- **AI 修复计划** – 控制台中直接提供分步修复说明  
+- **策略状态** – 来自 `policy.json` 的实时违规指示  
+- **拓扑图** – 基础设施资产的可交互地图  
+- **高级过滤器** – 按工具、严重性、目标或描述进行筛选  
+- **一键 Jira 和 Asana** – 直接从报告弹窗发送发现结果  
+- **自动主题** – 跟随操作系统的浅色/深色偏好  
+- **所有 CLI 标志现已生效** – `--export-sarif`、`--export-cyclonedx`、`--compliance`、`--notify-jira`、`--notify-asana`、`--update-rules`、`--rego-policy`  
+- **考虑 Token 的 AI 分块** – 防止本地模型上下文溢出  
+- **加权风险评分** – 合并结果反映真实的发现密度  
+- **蓝图重组** – 消除重复路由，架构更清晰  
+- **严格的 lint 和类型检查** – 零 Ruff/mypy 错误
 
 ---
 

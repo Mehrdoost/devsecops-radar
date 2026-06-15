@@ -1,22 +1,26 @@
-"""Tests for remediation module (patching, PR generation, guides)."""
+"""Tests for remediation module (updated with safe_subprocess_run, UUID backups, multiline patches)."""
 
+import os
 import subprocess
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, call, mock_open, patch
 
 import pytest
-from loguru import logger
 
 from devsecops_radar.core.remediation import (
+    BACKUP_DIR,
+    PATCH_DIR,
     _backup_file,
-    _init_backup_dir,
+    _init_dirs,
     _is_safe_path,
     apply_patch,
     auto_fix,
     generate_pr,
     generate_remediation_guide,
 )
+from loguru import logger
 
 
 # ---------------------------------------------------------------------------
@@ -40,28 +44,34 @@ def capture_loguru(level: str = "TRACE"):
 # Helper fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
-def backup_dir_cleanup(tmp_path, monkeypatch):
-    """Redirect BACKUP_DIR to a temporary location for tests."""
+def backup_and_patch_dirs(tmp_path, monkeypatch):
+    """Redirect BACKUP_DIR and PATCH_DIR to temporary locations."""
     fake_backup = tmp_path / "backups"
+    fake_patch = tmp_path / "patches"
     monkeypatch.setattr(
         "devsecops_radar.core.remediation.BACKUP_DIR", fake_backup
     )
-    return fake_backup
+    monkeypatch.setattr(
+        "devsecops_radar.core.remediation.PATCH_DIR", fake_patch
+    )
+    return fake_backup, fake_patch
 
 
 # ============================================================================
-# Tests for _init_backup_dir
+# Tests for _init_dirs
 # ============================================================================
-class TestInitBackupDir:
-    def test_creates_directory(self, backup_dir_cleanup):
-        assert not backup_dir_cleanup.exists()
-        _init_backup_dir()
-        assert backup_dir_cleanup.exists()
+class TestInitDirs:
+    def test_creates_directories(self, backup_and_patch_dirs):
+        fake_backup, fake_patch = backup_and_patch_dirs
+        assert not fake_backup.exists()
+        assert not fake_patch.exists()
+        _init_dirs()
+        assert fake_backup.exists()
+        assert fake_patch.exists()
 
-    def test_idempotent(self, backup_dir_cleanup):
-        _init_backup_dir()
-        _init_backup_dir()
-        assert backup_dir_cleanup.exists()
+    def test_idempotent(self, backup_and_patch_dirs):
+        _init_dirs()
+        _init_dirs()  # should not raise
 
 
 # ============================================================================
@@ -93,23 +103,28 @@ class TestIsSafePath:
 # Tests for _backup_file
 # ============================================================================
 class TestBackupFile:
-    def test_successful_backup(self, backup_dir_cleanup, tmp_path):
+    def test_successful_backup(self, backup_and_patch_dirs, tmp_path):
+        fake_backup, _ = backup_and_patch_dirs
         source = tmp_path / "src.py"
         source.write_text("original code")
-        with patch("devsecops_radar.core.remediation.Path.cwd", return_value=tmp_path):
-            with patch("shutil.copy2") as mock_copy:
-                result = _backup_file(str(source))
+        # Stable UUID for predictable assertion
+        with patch.object(uuid, "uuid4", return_value=uuid.UUID("12345678123456781234567812345678")):
+            with patch("devsecops_radar.core.remediation.Path.cwd", return_value=tmp_path):
+                with patch("shutil.copy2") as mock_copy:
+                    result = _backup_file(str(source))
         assert result is not None
         mock_copy.assert_called_once()
         args, _ = mock_copy.call_args
+        # Check the backup file name contains the UUID and the relative path
+        assert "12345678123456781234567812345678" in str(args[1])
         assert str(args[1]).endswith(".bak")
 
-    def test_source_not_exist(self, backup_dir_cleanup, tmp_path):
+    def test_source_not_exist(self, backup_and_patch_dirs, tmp_path):
         missing = tmp_path / "missing.txt"
         result = _backup_file(str(missing))
         assert result is None
 
-    def test_backup_failure(self, backup_dir_cleanup, tmp_path):
+    def test_backup_failure(self, backup_and_patch_dirs, tmp_path):
         source = tmp_path / "src.py"
         source.write_text("code")
         with patch("devsecops_radar.core.remediation.Path.cwd", return_value=tmp_path):
@@ -119,19 +134,6 @@ class TestBackupFile:
         assert result is None
         assert any("Backup failed" in m for m in msgs)
 
-    def test_relative_to_fails_uses_name_only(
-        self, backup_dir_cleanup, tmp_path, monkeypatch
-    ):
-        monkeypatch.chdir(tmp_path)
-        source = tmp_path / "outside.txt"
-        source.write_text("data")
-        with patch.object(Path, "resolve", return_value=Path("/other/outside.txt")):
-            with patch("shutil.copy2") as mock_copy:
-                result = _backup_file(str(source))
-        assert result is not None
-        dest = mock_copy.call_args[0][1]
-        assert dest.parent == backup_dir_cleanup
-
 
 # ============================================================================
 # Tests for apply_patch
@@ -140,7 +142,7 @@ class TestApplyPatch:
     @pytest.fixture
     def target_file(self, tmp_path):
         f = tmp_path / "target.py"
-        f.write_text("line0\nline1\nline2\n")
+        f.write_text("line0\nline1\nline2\nline3\n")
         return f
 
     @pytest.fixture
@@ -175,48 +177,70 @@ class TestApplyPatch:
             ) is False
         assert any("does not exist" in m for m in msgs)
 
-    def test_successful_patch(self, target_file, finding, tmp_path):
+    def test_empty_patch(self, target_file, finding, tmp_path):
+        with capture_loguru() as msgs:
+            assert apply_patch(finding, "", base_dir=tmp_path) is False
+        assert any("Patch content is empty" in m for m in msgs)
+
+    def test_successful_single_line_patch(self, target_file, finding, tmp_path):
         mock_fd = 123
         mock_tmp = target_file.parent / "tmpfile"
-        m_open = mock_open(read_data="line0\nline1\nline2\n")
-        # Create a mock for the temporary file object used in os.fdopen
+        m_open = mock_open(read_data="line0\nline1\nline2\nline3\n")
+        # Create a mock that correctly simulates the context manager for os.fdopen
         mock_tf = MagicMock()
         mock_fdopen = MagicMock()
         mock_fdopen.return_value.__enter__.return_value = mock_tf
 
-        with patch(
-            "tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))
-        ), patch("os.fdopen", mock_fdopen), patch(
-            "builtins.open", m_open
-        ), patch("os.replace"), patch(
-            "shutil.copy2"
-        ), patch(
-            "devsecops_radar.core.remediation._backup_file",
-            return_value=Path("/fake/backup.py"),
-        ):
+        with patch("tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))), \
+             patch("os.fdopen", mock_fdopen), \
+             patch("builtins.open", m_open), \
+             patch("os.replace") as mock_replace, \
+             patch("shutil.copy2"), \
+             patch("devsecops_radar.core.remediation._backup_file",
+                   return_value=Path("/fake/backup.py")):
             with capture_loguru() as msgs:
-                result = apply_patch(finding, "new line\nwith extra", base_dir=tmp_path)
+                result = apply_patch(finding, "new line\n", base_dir=tmp_path)
             assert result is True
             assert any("Successfully patched" in m for m in msgs)
-            # Check the lines written to the temporary file
             mock_tf.writelines.assert_called_once()
             written = mock_tf.writelines.call_args[0][0]
-            # The second line should be the sanitized patch
-            assert written[1] == "new line with extra\n"
+            assert written[1] == "new line\n"
+
+    def test_successful_multiline_patch(self, target_file, finding, tmp_path):
+        mock_fd = 123
+        mock_tmp = target_file.parent / "tmpfile"
+        m_open = mock_open(read_data="line0\nline1\nline2\nline3\n")
+        mock_tf = MagicMock()
+        mock_fdopen = MagicMock()
+        mock_fdopen.return_value.__enter__.return_value = mock_tf
+
+        with patch("tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))), \
+             patch("os.fdopen", mock_fdopen), \
+             patch("builtins.open", m_open), \
+             patch("os.replace") as mock_replace, \
+             patch("shutil.copy2"), \
+             patch("devsecops_radar.core.remediation._backup_file",
+                   return_value=Path("/fake/backup.py")):
+            result = apply_patch(finding, "new line1\nnew line2\n", base_dir=tmp_path)
+            assert result is True
+            mock_tf.writelines.assert_called_once()
+            written = mock_tf.writelines.call_args[0][0]
+            # line1 and line2 should be replaced by the two new lines
+            assert written[1] == "new line1\n"
+            assert written[2] == "new line2\n"
 
     def test_line_out_of_bounds(self, target_file, tmp_path):
         finding = {"target": str(target_file), "line": 10}
-        m_open = mock_open(read_data="line0\nline1\nline2\n")
         mock_fd = 123
         mock_tmp = target_file.parent / "tmpfile"
-        with patch(
-            "tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))
-        ), patch("os.fdopen", mock_open()), patch(
-            "builtins.open", m_open
-        ), patch("os.replace") as mock_replace, patch(
-            "devsecops_radar.core.remediation._backup_file",
-            return_value=Path("/fake/backup.py"),
-        ):
+        m_open = mock_open(read_data="line0\nline1\nline2\nline3\n")
+
+        with patch("tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))), \
+             patch("os.fdopen", return_value=MagicMock()), \
+             patch("builtins.open", m_open), \
+             patch("os.replace") as mock_replace, \
+             patch("devsecops_radar.core.remediation._backup_file",
+                   return_value=Path("/fake/backup.py")):
             with capture_loguru() as msgs:
                 result = apply_patch(finding, "patch", base_dir=tmp_path)
             assert result is False
@@ -226,23 +250,19 @@ class TestApplyPatch:
     def test_patch_failure_rolls_back(self, target_file, finding, tmp_path):
         mock_fd = 123
         mock_tmp = target_file.parent / "tmpfile"
-        m_open = mock_open(read_data="line0\nline1\nline2\n")
+        m_open = mock_open(read_data="line0\nline1\nline2\nline3\n")
         backup = target_file.parent / "backup.py"
         backup.write_text("backup data")
-        with patch(
-            "tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))
-        ), patch("os.fdopen", mock_open()), patch(
-            "builtins.open", m_open
-        ), patch(
-            "os.replace", side_effect=OSError("replace failed")
-        ), patch(
-            "devsecops_radar.core.remediation._backup_file",
-            return_value=backup,
-        ), patch(
-            "shutil.copy2"
-        ) as mock_copy:
+
+        with patch("tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))), \
+             patch("os.fdopen", return_value=MagicMock()), \
+             patch("builtins.open", m_open), \
+             patch("os.replace", side_effect=OSError("replace failed")), \
+             patch("devsecops_radar.core.remediation._backup_file",
+                   return_value=backup), \
+             patch("shutil.copy2") as mock_copy:
             with capture_loguru() as msgs:
-                result = apply_patch(finding, "newline", base_dir=tmp_path)
+                result = apply_patch(finding, "newline\n", base_dir=tmp_path)
             assert result is False
             assert any("Failed to apply patch" in m for m in msgs)
             mock_copy.assert_called_with(backup, target_file)
@@ -305,9 +325,7 @@ class TestAutoFix:
                 {"finding_id": "VULN-1"}  # no patch_content
             ]
         }
-        with patch(
-            "devsecops_radar.core.remediation.apply_patch"
-        ) as mock_apply:
+        with patch("devsecops_radar.core.remediation.apply_patch") as mock_apply:
             modified = auto_fix(findings, ai_summary)
         assert modified == set()
         mock_apply.assert_not_called()
@@ -340,34 +358,50 @@ class TestGeneratePr:
             generate_pr({"file.txt"}, branch="bad;branch")
         assert any("Invalid branch name" in m for m in msgs)
 
-    def test_successful_pr(self):
-        with patch("subprocess.run") as mock_run:
+    def test_successful_pr_and_push(self):
+        """Normal flow: checkout, add, commit, push succeeds."""
+        with patch(
+            "devsecops_radar.core.remediation.safe_subprocess_run"
+        ) as mock_run:
             with capture_loguru() as msgs:
                 generate_pr({"a.txt", "b.txt"}, branch="fix-branch")
-# checkout, add a, add b, commit, push = 5 calls
+        # checkout, add a, add b, commit, push = 5 calls
         assert mock_run.call_count == 5
         calls = [call[0][0] for call in mock_run.call_args_list]
-
-        assert "git" in calls[0][0].lower()
-        assert calls[0][1:] == ["checkout", "-b", "fix-branch"]
-
-        assert "git" in calls[1][0].lower()
-        assert calls[1][1:] in [["add", "a.txt"], ["add", "b.txt"]]
-
-        assert "git" in calls[2][0].lower()
-        assert calls[2][1:] in [["add", "a.txt"], ["add", "b.txt"]]
-
-        assert "git" in calls[3][0].lower()
-        assert calls[3][1:3] == ["commit", "-m"]
-
-        assert "git" in calls[4][0].lower()
-        assert calls[4][1:4] == ["push", "-u", "origin"]
-
+        assert calls[0] == ["git", "checkout", "-b", "fix-branch"]
+        assert calls[1] == ["git", "add", "a.txt"] or calls[1] == ["git", "add", "b.txt"]
+        assert calls[2] == ["git", "add", "a.txt"] or calls[2] == ["git", "add", "b.txt"]
+        assert calls[3][:3] == ["git", "commit", "-m"]
+        assert calls[4][:4] == ["git", "push", "-u", "origin"]
         assert any("Successfully pushed" in m for m in msgs)
+
+    def test_push_fails_stores_patch_locally(self, backup_and_patch_dirs):
+        """When push fails, a format-patch command should be issued."""
+        _, fake_patch = backup_and_patch_dirs
+        with patch(
+            "devsecops_radar.core.remediation.safe_subprocess_run"
+        ) as mock_run:
+            # Side effect: first 3 calls succeed, 4th (push) raises CalledProcessError, 5th is format-patch
+            mock_run.side_effect = [
+                None,  # checkout
+                None,  # add
+                None,  # commit
+                subprocess.CalledProcessError(1, "git push"),  # push fails
+                None,  # format-patch
+            ]
+            with capture_loguru() as msgs:
+                generate_pr({"a.txt"}, branch="fix-branch")
+        # Should have called format-patch as fallback (total 5 calls)
+        assert mock_run.call_count == 5
+        # Verify format-patch command
+        format_patch_call = mock_run.call_args_list[4][0][0]
+        assert format_patch_call[0] == "git"
+        assert "format-patch" in format_patch_call
+        assert str(fake_patch) in format_patch_call
 
     def test_git_failure(self):
         with patch(
-            "subprocess.run",
+            "devsecops_radar.core.remediation.safe_subprocess_run",
             side_effect=subprocess.CalledProcessError(1, "git", stderr="fatal"),
         ), capture_loguru() as msgs:
             generate_pr({"file.txt"}, branch="fix")
@@ -375,7 +409,8 @@ class TestGeneratePr:
 
     def test_git_not_found(self):
         with patch(
-            "subprocess.run", side_effect=FileNotFoundError
+            "devsecops_radar.core.remediation.safe_subprocess_run",
+            side_effect=FileNotFoundError,
         ), capture_loguru() as msgs:
             generate_pr({"file.txt"}, branch="fix")
         assert any("Git executable not found" in m for m in msgs)

@@ -9,12 +9,25 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+COMPLIANCE_MAP: dict[str, list[str]] = {
+    "CIS": [
+        "CIS Control 1: Inventory and Control of Enterprise Assets",
+        "CIS Control 3: Data Protection",
+        "CIS Control 7: Continuous Vulnerability Management",
+        "CIS Control 16: Application Software Security",
+    ],
+    "PCI-DSS": [
+        "PCI DSS 6.5: Address common coding vulnerabilities",
+        "PCI DSS 11.2: Run internal and external network vulnerability scans",
+    ],
+    "ISO27001": [
+        "ISO 27001 A.12.6: Technical Vulnerability Management",
+        "ISO 27001 A.14.2: Security in Development and Support Processes",
+    ],
+}
+
 
 def _validate_output_path(output_file: str, base_dir: Path | None = None) -> Path:
-    """
-    Security check: ensure the output path stays inside the allowed directory.
-    Prevents path traversal attacks (e.g., '../../etc/passwd').
-    """
     if base_dir is None:
         base_dir = Path.cwd()
     else:
@@ -29,16 +42,13 @@ def _validate_output_path(output_file: str, base_dir: Path | None = None) -> Pat
 
 
 def redact_sensitive(text: str, patterns: list[str] | None = None) -> str:
-    """
-    Replace high‑entropy secrets and common credential patterns with ***REDACTED***.
-    """
     if patterns is None:
         patterns = [
             r'(?i)(password|secret|token|key)\s*[:=]\s*\S+',
             r'ghp_[a-zA-Z0-9]{36}',
             r'eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+',
-            r'glpat-[a-zA-Z0-9\-_]+',           # GitLab personal access tokens
-            r'AKIA[0-9A-Z]{16}',                 # AWS Access Key IDs (mask)
+            r'glpat-[a-zA-Z0-9\-_]+',
+            r'AKIA[0-9A-Z]{16}',
         ]
     for pat in patterns:
         text = re.sub(pat, '***REDACTED***', text)
@@ -51,18 +61,8 @@ def generate_pdf_report(
     output_file: str = "report.pdf",
     redact: bool = True,
     base_dir: Path | None = None,
+    framework: str | None = None,
 ) -> None:
-    """
-    Generate a professional PDF security report.
-
-    Args:
-        findings: list of finding dicts.
-        ai_summary: AI analysis summary.
-        output_file: relative or absolute output filename. Traversal is prevented.
-        redact: whether to sanitise sensitive data.
-        base_dir: directory the output is constrained to (default: current working directory).
-    """
-    # Validate output path securely
     safe_path = _validate_output_path(output_file, base_dir)
 
     doc = SimpleDocTemplate(
@@ -76,7 +76,6 @@ def generate_pdf_report(
     elements = []
     styles = getSampleStyleSheet()
 
-    # Custom styles
     cell_style = ParagraphStyle(
         "CellStyle",
         parent=styles["Normal"],
@@ -93,10 +92,21 @@ def generate_pdf_report(
     )
 
     elements.append(Paragraph("Pipeline Sentinel — Security Report", title_style))
-    # Use timezone-aware UTC timestamp
     generated_time = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     elements.append(Paragraph(f"Generated: {generated_time}", styles["Normal"]))
     elements.append(Spacer(1, 20))
+
+    # Compliance mapping (if framework is selected)
+    if framework and framework.upper() in COMPLIANCE_MAP:
+        elements.append(Paragraph("Compliance Mapping", styles["Heading2"]))
+        elements.append(Paragraph(
+            f"Framework: {framework.upper()}",
+            styles["Normal"],
+        ))
+        controls = COMPLIANCE_MAP[framework.upper()]
+        for ctrl in controls:
+            elements.append(Paragraph(f"• {ctrl}", styles["Normal"]))
+        elements.append(Spacer(1, 16))
 
     # Executive summary (AI)
     if ai_summary.get("executive_summary"):
@@ -128,19 +138,16 @@ def generate_pdf_report(
         table_data.append(header)
 
         for f in findings[:50]:
-            # Redact all text fields that could contain secrets
             tool = f.get("tool", "")
             fid = f.get("id", "")
             title = f.get("title", "")
             target = f.get("target", "")
-            description = f.get("description", "")
 
             if redact:
                 tool = redact_sensitive(tool)
                 fid = redact_sensitive(fid)
                 title = redact_sensitive(title)
                 target = redact_sensitive(target)
-                description = redact_sensitive(description)
 
             row = [
                 Paragraph(tool, cell_style),

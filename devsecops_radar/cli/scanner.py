@@ -154,6 +154,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--report', type=str, help='Generate PDF report to specified path')
     parser.add_argument('--wizard', action='store_true', help='Safe interactive first-time setup')
 
+    parser.add_argument('--export-sarif', type=str, help='Export findings as SARIF to the given path')
+    parser.add_argument('--export-cyclonedx', type=str, help='Export findings as CycloneDX to the given path')
+    parser.add_argument('--compliance', type=str, choices=['CIS', 'PCI-DSS', 'ISO27001'],
+                        help='Compliance framework for reporting')
+    parser.add_argument('--notify-jira', action='store_true', help='Create Jira issues for CRITICAL findings')
+    parser.add_argument('--notify-asana', action='store_true', help='Create Asana tasks for CRITICAL findings')
+    parser.add_argument('--update-rules', action='store_true', help='Download/update community rules')
+    parser.add_argument('--rego-policy', type=str, help='Path to OPA Rego policy file (beta)')
+
     return parser.parse_args()
 
 
@@ -257,7 +266,7 @@ async def execute_ai_analysis(
         return {}
 
     elapsed = int(time.time() - start_time)
-    analysis["execution_time"] = f"{elapsed}s"
+    analysis["execution_time"] = elapsed     # integer seconds
     analysis["hardware_profile"] = hw_type
 
     with open(summary_file, 'w', encoding='utf-8') as fh:
@@ -355,9 +364,16 @@ async def run_app() -> None:
     )
 
     plugins = discover_plugins()
+
+    # Community rules update (before scan)
+    if args.update_rules:
+        RuleFusionEngine().update_community_rules()
+        logger.success("Community rules updated.")
+        return
+
     findings = await run_all_scanners(args, plugins)
 
-    rule_engine = None
+    rule_engine: RuleFusionEngine | None = None
     if args.rules:
         rule_engine = RuleFusionEngine(rules_dir=args.rules)
         rule_engine.load_all_rules()
@@ -380,6 +396,7 @@ async def run_app() -> None:
     for finding in findings:
         finding['dynamic_risk_score'] = compute_dynamic_risk_score(finding, topology)
 
+    # Policy evaluation (JSON)
     if args.policy:
         if rule_engine is None:
             rule_engine = RuleFusionEngine(rules_dir=".")
@@ -388,8 +405,17 @@ async def run_app() -> None:
             logger.error("Build failed due to strict policy violations.")
             sys.exit(1)
 
+    # Rego policy placeholder (future full OPA integration)
+    if args.rego_policy:
+        logger.warning("OPA Rego policy evaluation is not yet implemented. Ignoring --rego-policy.")
+
+    # Save to file and database
     try:
-        with open(args.output, 'w', encoding='utf-8') as fh:
+        out_path = Path(args.output).resolve()
+        if not out_path.is_relative_to(Path.cwd()):
+            logger.error("Output file must be inside the current working directory.")
+            sys.exit(1)
+        with open(out_path, 'w', encoding='utf-8') as fh:
             json.dump(findings, fh, indent=2)
         save_scan(findings)
         logger.success(f"Aggregated {len(findings)} findings into {args.output}")
@@ -398,6 +424,7 @@ async def run_app() -> None:
 
     ai_summary = await execute_ai_analysis(args, findings, topology)
 
+    # Auto-fix / review
     if args.fix and ai_summary:
         if args.review:
             interactive_remediation(findings, ai_summary)
@@ -407,9 +434,39 @@ async def run_app() -> None:
             if modified:
                 generate_pr(modified)
 
+    # Export reports
     if args.report:
         generate_pdf_report(findings, ai_summary, args.report)
         logger.success(f"PDF report generated: {args.report}")
+
+    if args.export_sarif:
+        from devsecops_radar.core.sarif_export import export_sarif
+        export_sarif(findings, args.export_sarif)
+        logger.success(f"SARIF report exported to {args.export_sarif}")
+
+    if args.export_cyclonedx:
+        from devsecops_radar.core.sarif_export import export_cyclonedx
+        export_cyclonedx(findings, args.export_cyclonedx)
+        logger.success(f"CycloneDX report exported to {args.export_cyclonedx}")
+
+    # Notifications
+    if args.notify_jira:
+        jira_url = os.environ.get("JIRA_URL")
+        jira_token = os.environ.get("JIRA_TOKEN")
+        if jira_url and jira_token:
+            from devsecops_radar.core.notifier import notify_jira
+            await notify_jira(findings, jira_url, jira_token)
+        else:
+            logger.error("JIRA_URL and JIRA_TOKEN must be set in environment for --notify-jira.")
+
+    if args.notify_asana:
+        asana_token = os.environ.get("ASANA_TOKEN")
+        asana_workspace = os.environ.get("ASANA_WORKSPACE")
+        if asana_token and asana_workspace:
+            from devsecops_radar.core.notifier import notify_asana
+            await notify_asana(findings, asana_token, asana_workspace)
+        else:
+            logger.error("ASANA_TOKEN and ASANA_WORKSPACE must be set in environment for --notify-asana.")
 
 
 def main() -> None:

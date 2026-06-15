@@ -12,6 +12,7 @@ _ALLOWED_DATA_DIR = Path.cwd().resolve()
 AI_SUMMARY_FILE = os.environ.get("AI_SUMMARY_FILE", "findings_ai_summary.json")
 FINDINGS_FILE = os.environ.get("FINDINGS_FILE", "findings.json")
 
+
 def _safe_data_path(filename: str) -> Path | None:
     file_path = (_ALLOWED_DATA_DIR / filename).resolve()
     try:
@@ -21,6 +22,7 @@ def _safe_data_path(filename: str) -> Path | None:
         pass
     return None
 
+
 def _load_findings() -> list[dict]:
     safe_path = _safe_data_path(FINDINGS_FILE)
     if not safe_path or not safe_path.exists():
@@ -28,41 +30,69 @@ def _load_findings() -> list[dict]:
     with open(safe_path, encoding="utf-8") as f:
         return json.load(f)
 
+
 @attack_paths_bp.route("/attack-paths")
 @require_any_auth
 def api_attack_paths():
-    safe_summary_path = _safe_data_path(AI_SUMMARY_FILE)
-    if not safe_summary_path or not safe_summary_path.exists():
+    findings = _load_findings()
+    if not findings:
         return jsonify({"attack_paths": [], "nodes": [], "links": []})
 
-    with open(safe_summary_path, encoding="utf-8") as f:
-        analysis = json.load(f)
+    safe_summary_path = _safe_data_path(AI_SUMMARY_FILE)
+    analysis = {}
+    if safe_summary_path and safe_summary_path.exists():
+        with open(safe_summary_path, encoding="utf-8") as f:
+            analysis = json.load(f)
 
     attack_paths = analysis.get("attack_paths", [])
-    findings_list = _load_findings()
-    findings_by_id = {f.get("id"): f for f in findings_list}
+    findings_by_id = {f.get("id"): f for f in findings}
 
     nodes = []
     links = []
     node_ids = set()
 
+    # Try to build graph from AI-provided involved_findings, otherwise fallback to linear chain
+    used_findings = set()
     for path in attack_paths:
         involved = path.get("involved_findings", [])
-        for fid in involved:
+        if involved:
+            for fid in involved:
+                if fid not in node_ids:
+                    finding = findings_by_id.get(fid)
+                    nodes.append({
+                        "id": fid,
+                        "label": fid,
+                        "severity": finding.get("severity", "UNKNOWN") if finding else "UNKNOWN",
+                        "title": (finding.get("title", "")[:50] if finding else ""),
+                    })
+                    node_ids.add(fid)
+                used_findings.add(fid)
+            for i in range(len(involved) - 1):
+                links.append({
+                    "source": involved[i],
+                    "target": involved[i + 1],
+                    "description": path.get("description", ""),
+                })
+
+    # Fallback: if no involved_findings provided, build a linear chain from all findings
+    if not nodes:
+        for f in findings:
+            fid = f.get("id", "UNKNOWN")
             if fid not in node_ids:
-                finding = findings_by_id.get(fid)
                 nodes.append({
                     "id": fid,
                     "label": fid,
-                    "severity": finding.get("severity", "UNKNOWN") if finding else "UNKNOWN",
-                    "title": (finding.get("title", "")[:50] if finding else ""),
+                    "severity": f.get("severity", "UNKNOWN").upper(),
+                    "title": (f.get("title", "")[:50]),
                 })
                 node_ids.add(fid)
-        for i in range(len(involved) - 1):
+        # Create links between consecutive findings
+        finding_ids = [f.get("id", "UNKNOWN") for f in findings]
+        for i in range(len(finding_ids) - 1):
             links.append({
-                "source": involved[i],
-                "target": involved[i + 1],
-                "description": path.get("description", ""),
+                "source": finding_ids[i],
+                "target": finding_ids[i + 1],
+                "description": "Fallback chain",
             })
 
     return jsonify({"attack_paths": attack_paths, "nodes": nodes, "links": links})

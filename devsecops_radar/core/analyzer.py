@@ -4,13 +4,20 @@ import os
 import re
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+try:
+    import tiktoken
+    TOKENIZER: tiktoken.Encoding | None = tiktoken.get_encoding("cl100k_base")
+except ImportError:
+    TOKENIZER = None
+    logger.warning("tiktoken not installed; token‑aware chunking disabled.")
 
 
 class AttackPath(BaseModel):
@@ -32,6 +39,10 @@ class Remediation(BaseModel):
     remediation_steps: list[str] = Field(
         ..., description="Step-by-step human-readable instructions to fix the issue"
     )
+    patch_content: str | None = Field(
+        default=None,
+        description="Optional unified diff or patch content to apply automatically",
+    )
 
 
 class AIAnalysisResponse(BaseModel):
@@ -39,10 +50,20 @@ class AIAnalysisResponse(BaseModel):
         ..., description="High-level summary of the security posture"
     )
     risk_score: float = Field(
-        ..., ge=0, le=100, description="Overall risk score between 0 and 100"
+        ..., ge=-1, le=100, description="Overall risk score between -1 and 100. -1 means analysis failed."
     )
     attack_paths: list[AttackPath] = Field(default_factory=list)
     top_remediations: list[Remediation] = Field(default_factory=list)
+
+
+def _count_tokens(text: str) -> int:
+    if TOKENIZER:
+        try:
+            return len(TOKENIZER.encode(text))
+        except Exception:
+            logger.debug("tiktoken encoding failed, falling back to character count", exc_info=True)
+    # Fallback: approximate by characters / 4
+    return len(text) // 4
 
 
 class AIAnalyzer(ABC):
@@ -63,14 +84,17 @@ class AIAnalyzer(ABC):
         return model
 
     def _build_prompt(
-        self, findings: list[dict[str, Any]], topology: dict[str, Any] | None = None
+        self,
+        findings: list[dict[str, Any]],
+        topology: dict[str, Any] | None = None,
+        include_topology: bool = False,
     ) -> str:
         boundary = uuid.uuid4().hex
         start_tag = f"<FINDINGS_DATA_{boundary}>"
         end_tag = f"</FINDINGS_DATA_{boundary}>"
 
         topology_text = ""
-        if topology:
+        if include_topology and topology:
             topo_str = json.dumps(topology)
             topology_text = (
                 f"\nAsset Topology:\n{topo_str[:2000]}"
@@ -82,8 +106,10 @@ class AIAnalyzer(ABC):
 IMPORTANT: Your response must be a single JSON object with exactly these fields:
 - "executive_summary": string (high-level summary)
 - "risk_score": number between 0 and 100
-- "attack_paths": list of objects with "title", "description", "impact" (string describing the impact)
-- "top_remediations": list of objects with "finding_id", "title", "remediation_steps" (list of strings)
+- "attack_paths": list of objects with "title", "description", "impact"
+- "top_remediations": list of objects with "finding_id", "title",
+  "remediation_steps" (list of strings), and optionally "patch_content"
+  (a string containing the exact code patch to apply, or null)
 
 Make sure every object in "attack_paths" includes all three fields.
 Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
@@ -111,7 +137,7 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
             logger.error("LLM failed to produce parsable JSON. Using safe fallback.")
             return AIAnalysisResponse(
                 executive_summary="Analysis failed due to unparsable AI output.",
-                risk_score=0.0,
+                risk_score=-1.0,
             ).model_dump()
 
         if "$defs" in extracted or "properties" in extracted:
@@ -120,10 +146,8 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
                 "Using safe fallback."
             )
             return AIAnalysisResponse(
-                executive_summary=(
-                    "AI analysis failed due to invalid model output. Please retry."
-                ),
-                risk_score=0.0,
+                executive_summary="AI analysis failed due to invalid model output. Please retry.",
+                risk_score=-1.0,
             ).model_dump()
 
         try:
@@ -132,14 +156,12 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         except ValidationError as e:
             logger.error(f"LLM output failed strict schema validation: {e}")
             return AIAnalysisResponse(
-                executive_summary=(
-                    "Analysis completed but output formatting was corrupted."
-                ),
-                risk_score=0.0,
+                executive_summary="Analysis completed but output formatting was corrupted.",
+                risk_score=-1.0,
             ).model_dump()
 
     def merge_analyses(
-        self, analyses: list[dict[str, Any]]
+        self, analyses: list[dict[str, Any]], chunk_sizes: list[int]
     ) -> dict[str, Any]:
         if not analyses:
             return AIAnalysisResponse(
@@ -148,14 +170,16 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         if len(analyses) == 1:
             return analyses[0]
 
-        valid_scores = [
-            a.get("risk_score", 0)
-            for a in analyses
-            if a.get("risk_score", 0) > 0
-        ]
-        avg_risk = (
-            sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
-        )
+        # Weighted risk score based on number of findings per chunk
+        total_items = sum(chunk_sizes)
+        if total_items > 0:
+            weighted_score = sum(
+                a.get("risk_score", 0) * size
+                for a, size in zip(analyses, chunk_sizes, strict=False)
+                if a.get("risk_score", -1) >= 0
+            ) / total_items
+        else:
+            weighted_score = 0.0
 
         summaries = [
             a.get("executive_summary", "").strip()
@@ -170,8 +194,9 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         merged_remediations = []
         for a in analyses:
             for r in a.get("top_remediations", []):
-                if r.get("finding_id") not in seen_finding_ids:
-                    seen_finding_ids.add(r.get("finding_id"))
+                fid = r.get("finding_id")
+                if fid and fid not in seen_finding_ids:
+                    seen_finding_ids.add(fid)
                     merged_remediations.append(r)
 
         merged_paths = []
@@ -180,7 +205,7 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
 
         return {
             "executive_summary": merged_summary,
-            "risk_score": round(avg_risk, 1),
+            "risk_score": round(weighted_score, 1),
             "attack_paths": merged_paths,
             "top_remediations": merged_remediations,
         }
@@ -193,34 +218,57 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         self,
         findings: list[dict[str, Any]],
         topology: dict[str, Any] | None = None,
-        chunk_size: int = 10,
+        chunk_size: int = 5,
     ) -> dict[str, Any]:
-        chunks = [
-            findings[i : i + chunk_size]
-            for i in range(0, len(findings), chunk_size)
-        ]
+        # Build chunks with token awareness
+        chunks: list[list[dict[str, Any]]] = []
+        current_chunk: list[dict[str, Any]] = []
+        current_tokens = 0
+        max_tokens_per_chunk = 3200  # conservative for many local models
+
+        for finding in findings:
+            finding_json = json.dumps(finding)
+            tokens = _count_tokens(finding_json)
+            # If a single finding exceeds the limit, put it alone
+            if tokens > max_tokens_per_chunk and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_tokens = 0
+            if current_tokens + tokens > max_tokens_per_chunk and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = [finding]
+                current_tokens = tokens
+            else:
+                current_chunk.append(finding)
+                current_tokens += tokens
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
         if len(chunks) > 10:
             logger.warning(
                 f"High load: Processing {len(chunks)} chunks. "
-                "Consider increasing 'chunk_size' to optimize performance."
+                "Consider increasing 'chunk_size' to reduce overhead."
             )
 
         sem = asyncio.Semaphore(5)
-        async def _sem_task(chunk):
-            async with sem:
-                return await self._analyze_chunk(
-                    self._build_prompt(chunk, topology)
-                )
 
-        tasks = [_sem_task(chunk) for chunk in chunks]
+        async def _sem_task(chunk, include_topo=False):
+            async with sem:
+                prompt = self._build_prompt(chunk, topology, include_topo)
+                return await self._analyze_chunk(prompt)
+
+        tasks = [_sem_task(chunks[i], i == 0) for i in range(len(chunks))]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter out exceptions before merging – fixes mypy error
         valid_results: list[dict[str, Any]] = []
-        for res in results:
+        valid_chunk_sizes: list[int] = []
+        for res, chunk in zip(results, chunks, strict=False):
             if not isinstance(res, Exception):
-                valid_results.append(res)       # type: ignore[arg-type]
-        return self.merge_analyses(valid_results)
+                valid_results.append(cast(dict[str, Any], res))
+                valid_chunk_sizes.append(len(chunk))
+
+        return self.merge_analyses(valid_results, valid_chunk_sizes)
 
 
 class OllamaAnalyzer(AIAnalyzer):
@@ -263,6 +311,7 @@ class OllamaAnalyzer(AIAnalyzer):
                 "You are a DevSecOps AI assistant. Analyze security findings and output "
                 "a JSON object with keys: executive_summary, risk_score, attack_paths, top_remediations. "
                 "Each attack path must include title, description, and impact. "
+                "Each remediation may optionally include patch_content. "
                 "Output ONLY the JSON object, no other text."
             ),
         }
@@ -308,6 +357,7 @@ class LiteLLMAnalyzer(AIAnalyzer):
                         "You are a DevSecOps AI assistant. Analyze security findings and output "
                         "a JSON object with keys: executive_summary, risk_score, attack_paths, top_remediations. "
                         "Each attack path must include title, description, and impact. "
+                        "Each remediation may optionally include patch_content. "
                         "Output ONLY the JSON object, no other text."
                     ),
                 },

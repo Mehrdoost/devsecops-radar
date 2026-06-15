@@ -13,19 +13,13 @@ from devsecops_radar.core.models import (
     init_db as models_init_db,
 )
 
-# Scoped session for thread‑safe web requests
 db_session = scoped_session(SessionLocal)
 
-# Track whether tables have already been created (idempotent but avoid repeated effort)
 _tables_initialized = False
 
 
 def init_db() -> None:
-    """
-    Ensure all tables exist. Safe to call multiple times.
-    Also enforces foreign keys on the current connection (redundant with event listener,
-    but kept for explicit certainty).
-    """
+    """Ensure all tables exist. Safe to call multiple times."""
     global _tables_initialized
     if not _tables_initialized:
         models_init_db()
@@ -40,6 +34,32 @@ def _truncate_string(value: str, max_length: int = 2000) -> str:
     return value
 
 
+def _safe_float(value: Any) -> float | None:
+    """Convert a value to float, handling strings like '120s'."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        clean = value.strip().rstrip("s")
+        try:
+            return float(clean)
+        except ValueError:
+            logger.warning(f"Could not convert execution_time '{value}' to float.")
+            return None
+    return None
+
+
+def _safe_int(value: Any) -> int | None:
+    """Safely convert a value to int, returning None if invalid."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
 def save_scan(
     findings: list[dict[str, Any]],
     ai_summary: dict[str, Any] | None = None,
@@ -49,11 +69,15 @@ def save_scan(
 
     session = db_session()
     try:
+        exec_time = _safe_float(
+            ai_summary.get("execution_time") if ai_summary else None
+        )
+
         new_scan = Scan(
             timestamp=datetime.now(UTC),
             risk_score=ai_summary.get("risk_score") if ai_summary else None,
             hardware_profile=ai_summary.get("hardware_profile") if ai_summary else None,
-            execution_time=ai_summary.get("execution_time") if ai_summary else None,
+            execution_time=exec_time,
         )
         session.add(new_scan)
         session.flush()
@@ -67,7 +91,8 @@ def save_scan(
                 target=_truncate_string(f.get("target", "UNKNOWN"), 1000),
                 title=_truncate_string(f.get("title", ""), 500),
                 description=_truncate_string(f.get("description", ""), 2000),
-                line=f.get("line"),
+                line=_safe_int(f.get("line")),
+                dynamic_risk_score=f.get("dynamic_risk_score", 0.0),
             )
             session.add(new_finding)
 
@@ -77,7 +102,6 @@ def save_scan(
         session.rollback()
         logger.error(f"Failed to save scan: {e}")
         raise
-    # Do NOT close the scoped session manually; it will be cleaned up by the registry.
 
 
 def get_all_scans() -> list[dict[str, Any]]:

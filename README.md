@@ -468,63 +468,21 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## 🔐 Security Hardening & Production Readiness in v0.4.4
+## ✨ What's New in v0.4.5
 
-This release is a comprehensive security and stability overhaul. All known
-vulnerabilities in the web interface, API, and scanner logic have been fixed.
-The project now meets enterprise‑grade security expectations, especially in
-air‑gapped environments.
-
-### 🔐 Security Fixes (Critical & High Severity)
-- XSS (Stored) – Dashboard table rows and detail views no longer inject raw
-  finding data into the DOM; all values are properly escaped.
-- Path Traversal – Data files (findings.json, AI summaries, topology) are
-  validated to stay within the working directory. Arbitrary file read via
-  environment variables is blocked.
-- Authentication Bypass – Endpoints /api/attack-paths, /api/summary,
-  /api/topology, and /api/scan-result now correctly enforce API‑key
-  authentication.
-- API Key Exposure – The dashboard no longer renders the real API key in the
-  page source.
-- Command Injection in Attack Simulation – Script generation now allows only
-  a safe subset of characters; multi‑line and special characters are stripped.
-- Secret Leakage in Reports – Gitleaks findings no longer contain the actual
-  secret in the description; PDF/HTML reports redact common token patterns (GitHub,
-  GitLab, AWS, JWT) across all fields.
-
-### 🧱 Architecture & Performance
-- Rate Limiting – Login and all API‑key protected endpoints are rate‑limited
-  (in‑memory, thread‑safe).
-- Session Management – The database scoped session is no longer manually
-  closed, preventing “instance not bound” errors in multi‑step requests.
-- Database Schema – execution_time now stored as Float (seconds); redundant
-  findings_json column removed; index added on scans.timestamp.
-- AI Analyzer – Concurrent chunk processing capped at 5; Ollama endpoint
-  restricted to localhost to guarantee air‑gap compliance.
-- Policy Engine – New on_violation field (warn / fail) allows flexible
-  policy enforcement.
-
-### 🛡 Scanner Improvements
-- All scanners (trivy, semgrep, zizmor, poutine, gitleaks) now call
-  _validate_target_path before parsing any file, blocking path‑traversal at
-  the adapter layer.
-- Trivy now supports image digests (repo@sha256:...).
-- Semgrep and Gitleaks properly treat non‑zero exit codes that indicate findings.
-
-### 🎨 Developer & Operations
-- semgrep moved to optional dependencies (pip install devsecops-radar[extra]).
-- Ruff enabled with security rules (S); line length set to 120.
-- Jira project key and issue type configurable via JIRA_PROJECT_KEY and
-  JIRA_ISSUE_TYPE.
-- CORS origins controlled by CORS_ORIGINS environment variable (no longer *).
-- All Python files formatted to comply with the new standard.
-
-### ⬆️ Upgrade Instructions
-1. Pull the latest image or update the package: pip install --upgrade devsecops-radar
-2. Review your .env file – ensure JWT_SECRET and PIPELINE_API_KEY are strong
-   (≥ 32 characters).
-3. If using Jira, set JIRA_PROJECT_KEY and JIRA_ISSUE_TYPE.
-4. Restart the web server.
+- **Live Sentry Feed** – real‑time CI/CD findings appear automatically  
+- **Scanner Status** – see which tools are installed and ready  
+- **AI Remediation Plan** – step‑by‑step fix instructions right in the dashboard  
+- **Policy Status** – live violation indicator from `policy.json`  
+- **Topology Graph** – interactive map of your infrastructure assets  
+- **Advanced Filters** – filter by tool, severity, target, or description  
+- **One‑click Jira & Asana** – send findings directly from the report modal  
+- **Auto theme** – follows your OS light/dark preference  
+- **All CLI flags now live** – `--export-sarif`, `--export-cyclonedx`, `--compliance`, `--notify-jira`, `--notify-asana`, `--update-rules`, `--rego-policy`  
+- **Token‑aware AI chunking** – prevents context overflow for local models  
+- **Weighted risk scoring** – merged results reflect actual finding density  
+- **Blueprints reorganised** – no more duplicate routes, cleaner architecture  
+- **Strict linting & type checks** – zero Ruff/mypy errors
 
 ---
 

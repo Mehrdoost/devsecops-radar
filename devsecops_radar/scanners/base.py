@@ -67,16 +67,23 @@ class BaseScanner(ABC):
         if not cmd_args:
             raise ValueError("Command arguments cannot be empty.")
 
+        executable = shutil.which(cmd_args[0])
+        if executable is None:
+            raise FileNotFoundError(
+                f"Required executable not found: {cmd_args[0]}"
+            )
+
+        cmd_args[0] = executable
+
         logger.debug(f"Executing {cmd_args[0]} securely.")
 
         try:
-            return safe_subprocess_run(
+            result = safe_subprocess_run(
                 cmd_args,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
                 check=False,
-                # close_fds=True is default on POSIX, safe to omit
             )
         except subprocess.TimeoutExpired:
             logger.error(
@@ -86,6 +93,21 @@ class BaseScanner(ABC):
         except FileNotFoundError:
             logger.error(f"Executable not found in PATH: {cmd_args[0]}")
             raise
+
+        # Truncate output if it exceeds memory limit
+        max_bytes = max_output_mb * 1024 * 1024
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+        if len(stdout.encode()) + len(stderr.encode()) > max_bytes:
+            logger.warning(
+                f"Output of {cmd_args[0]} exceeds {max_output_mb}MB limit. "
+                "Truncating to prevent memory exhaustion."
+            )
+            # Keep first half MB of each, roughly
+            half = max_bytes // 2
+            result.stdout = stdout[:half]
+            result.stderr = stderr[:half]
+        return result
 
     @abstractmethod
     def run(self, target: str) -> list[ScannerFinding]:

@@ -13,15 +13,25 @@ from loguru import logger
 from devsecops_radar.core.settings import settings
 
 # ---------------------------------------------------------------------------
-# Simple in-memory rate limiter (thread‑safe) – only counts failed attempts
+# Simple in-memory rate limiter (thread‑safe)
 # ---------------------------------------------------------------------------
 _rate_limit_store: dict[str, list[float]] = {}
 _rate_limit_lock = threading.Lock()
 
-# Limits are for *failed* attempts per window
-_API_KEY_MAX_FAILURES = 20        # per minute
+_API_KEY_MAX_FAILURES = 20
 _JWT_MAX_FAILURES = 10
 _WINDOW_SECONDS = 60
+
+
+def _cleanup_expired_entries(now: float) -> None:
+    """Remove IP entries that have no timestamps in the current window."""
+    expired_ips = [
+        ip
+        for ip, stamps in _rate_limit_store.items()
+        if all(now - t >= _WINDOW_SECONDS for t in stamps)
+    ]
+    for ip in expired_ips:
+        del _rate_limit_store[ip]
 
 
 def _record_failed_attempt(limit: int) -> bool:
@@ -33,14 +43,12 @@ def _record_failed_attempt(limit: int) -> bool:
     ip = request.remote_addr or "unknown"
     now = time.time()
     with _rate_limit_lock:
+        _cleanup_expired_entries(now)
         timestamps = _rate_limit_store.get(ip, [])
-        # Remove expired entries
         timestamps = [t for t in timestamps if now - t < _WINDOW_SECONDS]
-        # Check limit before adding new failure
         if len(timestamps) >= limit:
             _rate_limit_store[ip] = timestamps
-            return True   # blocked
-        # Record this failure
+            return True
         timestamps.append(now)
         _rate_limit_store[ip] = timestamps
         return False
@@ -54,11 +62,11 @@ def _extract_token_from_header() -> str | None:
     parts = auth_header.split(" ")
     if len(parts) < 2:
         return None
-    return parts[-1]   # take the last part to handle extra spaces
+    return parts[-1]
 
 
 # ---------------------------------------------------------------------------
-# Token creation and validation (unchanged)
+# Token creation and validation
 # ---------------------------------------------------------------------------
 def create_token(user: str = "admin") -> str:
     """Generate a secure JWT token for the authenticated user."""
@@ -77,19 +85,21 @@ def create_token(user: str = "admin") -> str:
 
 
 # ---------------------------------------------------------------------------
-# Authentication decorators – rate limiting only on failures
+# Authentication decorators
 # ---------------------------------------------------------------------------
 def login_required(f: Callable) -> Callable:
     """
     Decorator to protect API endpoints using JWT Bearer token.
-    Failed token attempts are rate‑limited to prevent brute force.
+    Expired tokens do NOT count as brute‑force failures.
     """
     @wraps(f)
     def decorated(*args: Any, **kwargs: Any) -> Any:
         token = _extract_token_from_header()
         if not token:
             if _record_failed_attempt(_JWT_MAX_FAILURES):
-                return jsonify({"error": "Too many login failures. Please slow down."}), 429
+                return jsonify(
+                    {"error": "Too many login failures. Please slow down."}
+                ), 429
             return jsonify(
                 {"error": "Missing or invalid Authorization header. Expected Bearer token."}
             ), 401
@@ -98,13 +108,15 @@ def login_required(f: Callable) -> Callable:
             payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
             request.user = payload.get("user")        # type: ignore[attr-defined]
         except jwt.ExpiredSignatureError:
-            # token expiry counts as a failure
-            if _record_failed_attempt(_JWT_MAX_FAILURES):
-                return jsonify({"error": "Too many login failures. Please slow down."}), 429
-            return jsonify({"error": "Token has expired. Please log in again."}), 401
+            # Expired token is not a brute‑force attempt
+            return jsonify(
+                {"error": "Token has expired. Please log in again."}
+            ), 401
         except jwt.InvalidTokenError:
             if _record_failed_attempt(_JWT_MAX_FAILURES):
-                return jsonify({"error": "Too many login failures. Please slow down."}), 429
+                return jsonify(
+                    {"error": "Too many login failures. Please slow down."}
+                ), 429
             return jsonify({"error": "Invalid token."}), 401
         except Exception as e:
             logger.error(f"Unexpected error during token validation: {str(e)}")
@@ -127,14 +139,20 @@ def require_api_key(f: Callable) -> Callable:
 
         if not api_key:
             if _record_failed_attempt(_API_KEY_MAX_FAILURES):
-                return jsonify({"error": "Too many API key failures. Please slow down."}), 429
-            return jsonify({"error": "Missing API key. Provide X-API-Key header."}), 401
+                return jsonify(
+                    {"error": "Too many API key failures. Please slow down."}
+                ), 429
+            return jsonify(
+                {"error": "Missing API key. Provide X-API-Key header."}
+            ), 401
 
         api_key = api_key.strip()
         if not hmac.compare_digest(api_key, expected_key):
             logger.warning(f"Invalid API key attempt from IP: {request.remote_addr}")
             if _record_failed_attempt(_API_KEY_MAX_FAILURES):
-                return jsonify({"error": "Too many API key failures. Please slow down."}), 429
+                return jsonify(
+                    {"error": "Too many API key failures. Please slow down."}
+                ), 429
             return jsonify({"error": "Invalid API key."}), 401
 
         return f(*args, **kwargs)
@@ -156,17 +174,20 @@ def require_any_auth(f: Callable) -> Callable:
             api_key = api_key.strip()
             if hmac.compare_digest(api_key, settings.PIPELINE_API_KEY):
                 return f(*args, **kwargs)
-            # API key invalid – count as API key failure
             logger.warning(f"Invalid API key attempt from IP: {request.remote_addr}")
             if _record_failed_attempt(_API_KEY_MAX_FAILURES):
-                return jsonify({"error": "Too many API key failures. Please slow down."}), 429
+                return jsonify(
+                    {"error": "Too many API key failures. Please slow down."}
+                ), 429
             return jsonify({"error": "Invalid API key."}), 401
 
         # 2. Fall back to JWT
         token = _extract_token_from_header()
         if not token:
             if _record_failed_attempt(_JWT_MAX_FAILURES):
-                return jsonify({"error": "Too many authentication failures. Please slow down."}), 429
+                return jsonify(
+                    {"error": "Too many authentication failures. Please slow down."}
+                ), 429
             return jsonify(
                 {"error": "Missing authentication. Provide X-API-Key or Bearer token."}
             ), 401
@@ -175,12 +196,14 @@ def require_any_auth(f: Callable) -> Callable:
             payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
             request.user = payload.get("user")        # type: ignore[attr-defined]
         except jwt.ExpiredSignatureError:
-            if _record_failed_attempt(_JWT_MAX_FAILURES):
-                return jsonify({"error": "Too many authentication failures. Please slow down."}), 429
-            return jsonify({"error": "Token has expired. Please log in again."}), 401
+            return jsonify(
+                {"error": "Token has expired. Please log in again."}
+            ), 401
         except jwt.InvalidTokenError:
             if _record_failed_attempt(_JWT_MAX_FAILURES):
-                return jsonify({"error": "Too many authentication failures. Please slow down."}), 429
+                return jsonify(
+                    {"error": "Too many authentication failures. Please slow down."}
+                ), 429
             return jsonify({"error": "Invalid token."}), 401
         except Exception as e:
             logger.error(f"Unexpected error during token validation: {str(e)}")

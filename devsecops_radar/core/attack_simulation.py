@@ -28,19 +28,55 @@ def _cleanup_temp_dir(dir_path: str) -> None:
         logger.error(f"Failed to clean up temp directory {dir_path}: {e}")
 
 
+def _build_poc_script(finding_id: str, finding_title: str, target: str) -> str:
+    """
+    Build a dynamic Proof‑of‑Concept bash script.
+    The script is safe to run inside the read‑only, network‑none sandbox.
+    """
+    safe_id = _sanitize_for_bash(finding_id)[:_MAX_FIELD_LENGTH]
+    safe_title = _sanitize_for_bash(finding_title)[:_MAX_FIELD_LENGTH]
+    safe_target = _sanitize_for_bash(target)[:_MAX_FIELD_LENGTH]
+
+    lines = [
+        "#!/bin/bash",
+        "set -e",
+        "echo '================== Pipeline Sentinel PoC =================='",
+        f"echo 'Finding ID : {safe_id}'",
+        f"echo 'Title      : {safe_title}'",
+    ]
+
+    if safe_target:
+        lines.append(f"echo 'Target     : {safe_target}'")
+        # If target looks like a network address, try a harmless probe
+        if re.match(r"^[a-zA-Z0-9._\-]+$", safe_target) and "." in safe_target:
+            lines.append("echo 'Attempting DNS lookup (will fail in sandbox)...'")
+            lines.append(f"nslookup '{safe_target}' 2>&1 || true")
+            lines.append("echo 'Attempting HTTP request (will fail in sandbox)...'")
+            lines.append(f"curl -s -o /dev/null -w '%{{http_code}}' 'http://{safe_target}' 2>&1 || true")
+        # If target looks like a file path, attempt to cat it (will be empty in sandbox)
+        elif safe_target.startswith("/"):
+            lines.append("echo 'Attempting file read (will fail in sandbox)...'")
+            lines.append(f"cat '{safe_target}' 2>&1 || true")
+        else:
+            lines.append("echo 'No network or file test possible for this target type.'")
+    else:
+        lines.append("echo 'Target     : (none)'")
+
+    lines.append("echo '============================================================'")
+    lines.append("echo 'PoC simulation completed.'")
+    return "\n".join(lines)
+
+
 def simulate_attack(finding: dict) -> str:
     if not isinstance(finding, dict) or not finding.get("id") or not finding.get("title"):
         logger.error("Invalid finding data for attack simulation.")
         return _generate_dummy_script("Invalid finding data provided.")
 
-    finding_id = _sanitize_for_bash(str(finding.get("id")))[:_MAX_FIELD_LENGTH]
-    finding_title = _sanitize_for_bash(str(finding.get("title")))[:_MAX_FIELD_LENGTH]
+    finding_id = str(finding.get("id"))
+    finding_title = str(finding.get("title"))
+    target = str(finding.get("target", ""))
 
-    script_content = (
-        "#!/bin/bash\n"
-        f"# PoC for {finding_id}\n"
-        f"echo 'Simulating {finding_title}'\n"
-    )
+    script_content = _build_poc_script(finding_id, finding_title, target)
 
     try:
         tmpdir = tempfile.mkdtemp(prefix="pipeline_sentinel_sim_")
@@ -66,11 +102,9 @@ def _generate_dummy_script(reason: str) -> str:
 
 
 def _is_docker_available() -> bool:
-    """Check both docker CLI and daemon availability."""
     if not shutil.which("docker"):
         return False
     try:
-        # Quick daemon connectivity test (timeout 3s)
         safe_subprocess_run(
             ["docker", "info"],
             capture_output=True,
@@ -106,7 +140,6 @@ def run_sandboxed_poc(script_path: str) -> str:
         logger.error("TOCTOU check failed: script path resolved outside temp directory.")
         return "Simulation aborted: script path tampering detected."
 
-    # Early check: Docker daemon must be reachable
     if not _is_docker_available():
         return (
             "Docker daemon is not running or not installed. "

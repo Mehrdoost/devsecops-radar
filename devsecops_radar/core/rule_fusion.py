@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field, ValidationError
 from devsecops_radar.core.utils import safe_subprocess_run
 
 
-# --- Strict Schemas for Input Validation ---
 class CustomRuleSchema(BaseModel):
     """Pydantic model to enforce strict validation on custom JSON rules."""
     id: str = Field(..., description="Unique identifier for the rule")
@@ -27,7 +26,7 @@ class CustomRuleSchema(BaseModel):
 class RuleFusionEngine:
     """
     Engine responsible for aggregating, validating, and merging custom security rules.
-    It does NOT parse Trivy or Semgrep outputs (that is the Adapters' job).
+    Also provides policy evaluation (JSON and OPA Rego).
     """
 
     def __init__(
@@ -36,19 +35,14 @@ class RuleFusionEngine:
         self.rules_dir = Path(rules_dir).resolve()
         self.max_file_size_bytes = max_file_size_mb * 1024 * 1024
         self.findings: list[dict[str, Any]] = []
-        self._loaded = False   # Prevent duplicate loads
+        self._loaded = False
 
-        # Ensure rules directory exists securely
         if not self.rules_dir.exists():
             self.rules_dir.mkdir(parents=True, exist_ok=True)
 
     def _is_safe_path(
         self, target_path: Path, base_dir: Path | None = None
     ) -> bool:
-        """
-        Prevent Path Traversal and Symlink attacks.
-        If base_dir is omitted, uses self.rules_dir.
-        """
         if base_dir is None:
             base_dir = self.rules_dir
         try:
@@ -58,17 +52,16 @@ class RuleFusionEngine:
             logger.error(f"Path resolution error: {e}")
             return False
 
+    def add_findings(self, new_findings: list[dict[str, Any]]) -> None:
+        """Safely append external findings without overwriting existing ones."""
+        self.findings.extend(new_findings)
+
     def update_community_rules(self) -> None:
-        """
-        Securely clones community rules from a whitelisted GitHub repository.
-        Prevents SSRF and Command Injection.
-        """
         repo_url = os.environ.get("COMMUNITY_RULES_REPO", "")
         if not repo_url:
             logger.info("No community repository configured. Skipping update.")
             return
 
-        # 1. URL Validation (SSRF Protection)
         parsed_url = urlparse(repo_url)
         if parsed_url.scheme != "https" or parsed_url.netloc != "github.com":
             logger.error(
@@ -77,7 +70,6 @@ class RuleFusionEngine:
             )
             return
 
-        # 2. Path Validation (Ensure no dangerous characters)
         if not repo_url.endswith(".git") or ";" in repo_url or " " in repo_url:
             logger.error(
                 f"Security Error: Invalid characters in repo URL: {repo_url}"
@@ -86,7 +78,6 @@ class RuleFusionEngine:
 
         target_dir = self.rules_dir / "community"
 
-        # Safe Cloning using subprocess with strict arguments
         try:
             if target_dir.exists():
                 logger.info("Updating existing community rules...")
@@ -112,11 +103,9 @@ class RuleFusionEngine:
             )
 
     def _load_and_validate_json(self, file_path: Path) -> None:
-        """Reads a single JSON file with size limits and strict schema validation."""
         if not file_path.is_file():
             return
 
-        # DoS Protection: Check file size before reading
         if file_path.stat().st_size > self.max_file_size_bytes:
             logger.warning(
                 f"File {file_path.name} exceeds size limit. Skipping."
@@ -127,7 +116,6 @@ class RuleFusionEngine:
             with open(file_path, encoding='utf-8') as f:
                 data = json.load(f)
 
-            # Normalize to list
             if isinstance(data, dict):
                 data = data.get("findings", data.get("results", [data]))
 
@@ -142,7 +130,6 @@ class RuleFusionEngine:
                 if not isinstance(item, dict):
                     continue
                 try:
-                    # Strict validation using Pydantic
                     valid_rule = CustomRuleSchema(**item)
                     self.findings.append(valid_rule.model_dump())
                     valid_count += 1
@@ -164,14 +151,12 @@ class RuleFusionEngine:
             logger.error(f"Error processing {file_path.name}: {e}")
 
     def load_all_rules(self) -> list[dict[str, Any]]:
-        """Safely iterates through the rules directory and loads JSON findings."""
         if self._loaded:
             return self.findings
 
         if not self.rules_dir.exists():
             return self.findings
 
-        # Clear any previously loaded findings (reload fresh)
         self.findings.clear()
 
         file_count = 0
@@ -193,13 +178,7 @@ class RuleFusionEngine:
         return self.findings
 
     def evaluate_policy(self, policy_file: str) -> bool:
-        """
-        Evaluates findings against a simple JSON policy file securely.
-        Supports 'on_violation' field: 'fail' (default) or 'warn'.
-        Uses a safe base directory (CWD) for the policy file.
-        """
         policy_path = Path(policy_file)
-        # Allow policy file anywhere under current working directory
         if not self._is_safe_path(policy_path, base_dir=Path.cwd()):
             logger.warning(
                 f"Policy file is outside the allowed base directory: "
@@ -241,7 +220,6 @@ class RuleFusionEngine:
                     )
                     return True
                 else:
-                    # Default to fail (explicit "fail" or missing key)
                     logger.error(
                         f"Policy Violation! Found {critical_count} CRITICAL "
                         f"issues (Max allowed: {max_critical})."
@@ -254,3 +232,45 @@ class RuleFusionEngine:
         except Exception as e:
             logger.error(f"Policy evaluation failed: {e}")
             return False
+
+    def evaluate_rego_policy(self, rego_file: str) -> bool:
+        """
+        Evaluate findings against an OPA Rego policy file.
+        Requires 'opa' binary in PATH.
+        """
+        if not os.path.isfile(rego_file):
+            logger.error(f"Rego policy file not found: {rego_file}")
+            return True
+
+        try:
+            # Create a temporary JSON input for OPA
+            input_data = {"findings": self.findings}
+            input_json = json.dumps(input_data)
+
+            result = safe_subprocess_run(
+                [
+                    "opa", "eval",
+                    "--input", "-",
+                    "--data", rego_file,
+                    "data.pipeline_sentinel.deny",
+                ],
+                input=input_json,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            # If OPA returns any denial reasons, policy fails
+            if result.stdout.strip() and "[]" not in result.stdout:
+                logger.error("OPA Rego policy violation detected.")
+                return False
+            return True
+        except FileNotFoundError:
+            logger.error("OPA executable not found. Skipping Rego policy evaluation.")
+            return True
+        except subprocess.TimeoutExpired:
+            logger.error("OPA evaluation timed out.")
+            return True
+        except Exception as e:
+            logger.error(f"OPA Rego evaluation failed: {e}")
+            return True

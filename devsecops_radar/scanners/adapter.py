@@ -8,6 +8,18 @@ from pydantic import ValidationError
 from devsecops_radar.core.models import FindingSchema
 
 
+def _is_safe_path(target: str, base_dir: Path | None = None) -> bool:
+    """Check if the target path is inside the allowed base directory."""
+    if base_dir is None:
+        base_dir = Path.cwd()
+    try:
+        abs_target = Path(target).resolve(strict=False)
+        return abs_target.is_relative_to(base_dir.resolve())
+    except Exception as e:
+        logger.error(f"Path resolution error for {target}: {e}")
+        return False
+
+
 class ScannerAdapter:
     """
     Adapter class to bridge raw scanner outputs with the internal FindingSchema.
@@ -22,7 +34,7 @@ class ScannerAdapter:
         Safely reads and parses a result file.
         Implements defensive checks, path validation, and partial validation.
         """
-        # 1. Path safety check (leverage the scanner's own validator if available)
+        # 1. Path safety check (use scanner's validator if available, else generic)
         if hasattr(self.scanner, '_validate_target_path'):
             safe_path = self.scanner._validate_target_path(file_path)
             if not safe_path:
@@ -32,6 +44,13 @@ class ScannerAdapter:
                 )
                 return []
             file_path = safe_path
+        else:
+            if not _is_safe_path(file_path):
+                logger.error(
+                    f"Security block: file path '{file_path}' is outside the "
+                    "current working directory."
+                )
+                return []
 
         # 2. File existence and readability
         if not os.path.exists(file_path):

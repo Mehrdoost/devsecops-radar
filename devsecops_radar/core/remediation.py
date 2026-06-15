@@ -3,6 +3,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,12 @@ from loguru import logger
 from devsecops_radar.core.utils import safe_subprocess_run
 
 BACKUP_DIR = Path.home() / ".devsecops-radar" / "backups"
+PATCH_DIR = Path.home() / ".devsecops-radar" / "patches"
 
 
-def _init_backup_dir() -> None:
+def _init_dirs() -> None:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    PATCH_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _is_safe_path(target_file: str, base_dir: Path | None = None) -> bool:
@@ -29,7 +32,7 @@ def _is_safe_path(target_file: str, base_dir: Path | None = None) -> bool:
 
 
 def _backup_file(target_file: str) -> Path | None:
-    _init_backup_dir()
+    _init_dirs()
     source_path = Path(target_file)
     if not source_path.exists():
         return None
@@ -38,8 +41,8 @@ def _backup_file(target_file: str) -> Path | None:
         rel_path = source_path.resolve().relative_to(Path.cwd().resolve())
     except ValueError:
         rel_path = source_path.name
-    safe_name = str(rel_path).replace(os.sep, "_") + ".bak"
-    backup_path = Path(BACKUP_DIR / safe_name)
+    safe_name = f"{uuid.uuid4().hex}_{str(rel_path).replace(os.sep, '_')}.bak"
+    backup_path = BACKUP_DIR / safe_name
     try:
         shutil.copy2(source_path, backup_path)
         logger.debug(f"Backed up {source_path} to {backup_path}")
@@ -63,7 +66,7 @@ def apply_patch(
 
     try:
         line_num = int(raw_line)
-    except ValueError:
+    except (ValueError, TypeError):
         logger.error(f"Invalid line number format: {raw_line}")
         return False
 
@@ -82,8 +85,10 @@ def apply_patch(
     if not backup_path:
         return False
 
-    safe_patch = patch_content.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-    safe_patch = safe_patch.strip() + "\n"
+    patch_lines = patch_content.splitlines(keepends=True)
+    if not patch_lines:
+        logger.warning("Patch content is empty. Nothing to apply.")
+        return False
 
     temp_fd = -1
     temp_path: str | None = None
@@ -96,7 +101,9 @@ def apply_patch(
 
         line_index = line_num - 1
         if 0 <= line_index < len(lines):
-            lines[line_index] = safe_patch
+            # Replace the target line(s) with the patch lines (multiline safe)
+            end_index = min(line_index + len(patch_lines), len(lines))
+            lines[line_index:end_index] = patch_lines
         else:
             logger.error(
                 f"Line number {line_num} is out of bounds for {target_file}"
@@ -191,6 +198,8 @@ def generate_pr(
         )
         return
 
+    _init_dirs()
+
     try:
         safe_subprocess_run(
             ["git", "checkout", "-b", branch],
@@ -208,13 +217,24 @@ def generate_pr(
              "Security Fixes applied by Pipeline Sentinel"],
             check=True, capture_output=True, text=True,
         )
-        safe_subprocess_run(
-            ["git", "push", "-u", "origin", branch],
-            check=True, capture_output=True, text=True,
-        )
-        logger.info(
-            f"✅ Successfully pushed automated fixes to branch: {branch}"
-        )
+
+        # Attempt to push; store patch locally if offline
+        try:
+            safe_subprocess_run(
+                ["git", "push", "-u", "origin", branch],
+                check=True, capture_output=True, text=True,
+            )
+            logger.info(
+                f"✅ Successfully pushed automated fixes to branch: {branch}"
+            )
+        except subprocess.CalledProcessError:
+            logger.warning("Push failed — storing patch file locally for manual upload.")
+            PATCH_DIR / f"{branch}.patch"
+            safe_subprocess_run(
+                ["git", "format-patch", "-1", "HEAD", "-o", str(PATCH_DIR)],
+                check=True, capture_output=True, text=True,
+            )
+            logger.info(f"Patch file saved to {PATCH_DIR}")
 
     except subprocess.CalledProcessError as e:
         logger.error(f"Git operation failed during PR generation:\n{e.stderr}")
