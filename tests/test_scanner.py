@@ -5,11 +5,9 @@ Covers all public functions and major branches with mocked external dependencies
 
 import argparse
 import asyncio
-import json
 import os
 import sys
-from pathlib import Path
-from unittest.mock import ANY, AsyncMock, MagicMock, mock_open, patch
+from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
 import pytest
 
@@ -526,7 +524,7 @@ class TestRunApp:
              patch("devsecops_radar.cli.scanner.execute_ai_analysis", AsyncMock(return_value={"summary": 1})), \
              patch.dict(os.environ, {"JIRA_URL": "url", "JIRA_TOKEN": "t", "ASANA_TOKEN": "a", "ASANA_WORKSPACE": "w"}), \
              patch("devsecops_radar.cli.scanner.Path.cwd", return_value=tmp_path):   # <-- make output relative to tmp_path
-            with patch("builtins.open", mock_open()) as m_open:
+            with patch("builtins.open", mock_open()):
                 asyncio.run(run_app())
         core_patches["devsecops_radar.cli.scanner.save_scan"].assert_called_once()
         core_patches["devsecops_radar.cli.scanner.generate_pdf_report"].assert_called_once()
@@ -544,7 +542,7 @@ class TestRunApp:
         argv = ["prog", "--fix", "--analyze"]
         with patch.object(sys, "argv", argv), \
              patch("devsecops_radar.cli.scanner.execute_ai_analysis", AsyncMock(return_value={"some": "ai"})), \
-             patch("devsecops_radar.cli.scanner.logger") as log:
+             patch("devsecops_radar.cli.scanner.logger"):
             asyncio.run(run_app())
         core_patches["devsecops_radar.cli.scanner.auto_fix"].assert_called_once()
         core_patches["devsecops_radar.cli.scanner.generate_pr"].assert_called_once()

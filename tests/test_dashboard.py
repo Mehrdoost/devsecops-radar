@@ -1,4 +1,3 @@
-import io
 import json
 import os
 from pathlib import Path
@@ -9,7 +8,6 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from devsecops_radar.web.dashboard.routes import (
-    _ALLOWED_DATA_DIR,
     _safe_data_path,
     dashboard_bp,
     load_findings,
@@ -447,7 +445,7 @@ class TestReport:
              patch("devsecops_radar.web.dashboard.routes.generate_pdf_report") as pdf, \
              patch("devsecops_radar.web.dashboard.routes.send_file") as send:
             send.return_value = ("pdf", 200)
-            resp = client.get("/api/report", headers=auth_headers)
+            client.get("/api/report", headers=auth_headers)
         pdf.assert_called_once_with(findings, ai, ANY, framework=None)
         send.assert_called_once()
 

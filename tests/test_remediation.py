@@ -1,17 +1,15 @@
 """Tests for remediation module (updated with safe_subprocess_run, UUID backups, multiline patches)."""
 
-import os
 import subprocess
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, call, mock_open, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+from loguru import logger
 
 from devsecops_radar.core.remediation import (
-    BACKUP_DIR,
-    PATCH_DIR,
     _backup_file,
     _init_dirs,
     _is_safe_path,
@@ -20,7 +18,6 @@ from devsecops_radar.core.remediation import (
     generate_pr,
     generate_remediation_guide,
 )
-from loguru import logger
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +191,7 @@ class TestApplyPatch:
         with patch("tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))), \
              patch("os.fdopen", mock_fdopen), \
              patch("builtins.open", m_open), \
-             patch("os.replace") as mock_replace, \
+             patch("os.replace"), \
              patch("shutil.copy2"), \
              patch("devsecops_radar.core.remediation._backup_file",
                    return_value=Path("/fake/backup.py")):
@@ -217,7 +214,7 @@ class TestApplyPatch:
         with patch("tempfile.mkstemp", return_value=(mock_fd, str(mock_tmp))), \
              patch("os.fdopen", mock_fdopen), \
              patch("builtins.open", m_open), \
-             patch("os.replace") as mock_replace, \
+             patch("os.replace"), \
              patch("shutil.copy2"), \
              patch("devsecops_radar.core.remediation._backup_file",
                    return_value=Path("/fake/backup.py")):
@@ -389,7 +386,7 @@ class TestGeneratePr:
                 subprocess.CalledProcessError(1, "git push"),  # push fails
                 None,  # format-patch
             ]
-            with capture_loguru() as msgs:
+            with capture_loguru():
                 generate_pr({"a.txt"}, branch="fix-branch")
         # Should have called format-patch as fallback (total 5 calls)
         assert mock_run.call_count == 5

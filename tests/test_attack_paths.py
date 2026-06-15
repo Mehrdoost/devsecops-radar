@@ -1,15 +1,14 @@
 """Tests for attack_paths routes – updated for fallback chain."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from flask import Flask
 
 from devsecops_radar.web.attack_paths.routes import (
-    _safe_data_path,
     _load_findings,
+    _safe_data_path,
     attack_paths_bp,
 )
 

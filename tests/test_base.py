@@ -2,13 +2,12 @@
 
 import subprocess
 from contextlib import contextmanager
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from loguru import logger
 
 from devsecops_radar.scanners.base import BaseScanner, ScannerFinding
-from loguru import logger
 
 
 @contextmanager
@@ -56,11 +55,13 @@ class TestInit:
 
 class TestValidateTargetPath:
     def test_safe(self, scanner, safe_base):
-        f = safe_base / "file.txt"; f.touch()
+        f = safe_base / "file.txt"
+        f.touch()
         assert scanner._validate_target_path(str(f)) == str(f)
 
     def test_traversal(self, scanner, safe_base, tmp_path):
-        outside = tmp_path / "outside.txt"; outside.touch()
+        outside = tmp_path / "outside.txt"
+        outside.touch()
         with capture_loguru() as msgs:
             assert scanner._validate_target_path(str(outside)) is None
         assert any("outside the allowed directory" in m for m in msgs)
@@ -91,8 +92,10 @@ class TestSafeRunCommand:
 
 class TestConcreteMethods:
     def test_run(self, scanner, safe_base):
-        target = safe_base / "t"; target.touch()
+        target = safe_base / "t"
+        target.touch()
         assert len(scanner.run(str(target))) == 1
     def test_parse(self, scanner, safe_base):
-        f = safe_base / "r.json"; f.touch()
+        f = safe_base / "r.json"
+        f.touch()
         assert len(scanner.parse(str(f))) == 1

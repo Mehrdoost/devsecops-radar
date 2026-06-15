@@ -1,25 +1,21 @@
 """Tests for the AI analysis engine (updated for token‑aware chunking & new merge)."""
 
-import asyncio
 import json
 from contextlib import contextmanager
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from loguru import logger
 from pydantic import ValidationError
 
 from devsecops_radar.core.analyzer import (
     AIAnalysisResponse,
     AIAnalyzer,
     AttackPath,
-    LiteLLMAnalyzer,
     OllamaAnalyzer,
     Remediation,
-    get_analyzer,
 )
-from loguru import logger
 
 
 @contextmanager

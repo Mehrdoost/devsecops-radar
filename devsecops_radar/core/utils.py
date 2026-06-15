@@ -32,4 +32,5 @@ def safe_subprocess_run(cmd_list, **kwargs):
     # Use absolute path for security
     cmd_list[0] = executable_path
 
-    return subprocess.run(cmd_list, **kwargs)  # noqa: S603, S607
+    return subprocess.run(cmd_list, **kwargs)  # nosec B603 B607  # noqa: S603, S607
+
