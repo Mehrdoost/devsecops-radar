@@ -41,7 +41,7 @@
 11. [القدرات الأساسية](#-القدرات-الأساسية)
 12. [قواعد المجتمع والتحديثات عبر الإنترنت](#-قواعد-المجتمع-والتحديثات-عبر-الإنترنت)
 13. [محاكاة الهجوم وتحليل السيناريوهات](#-محاكاة-الهجوم-وتحليل-السيناريوهات)
-14. [التحسينات الأمنية في الإصدار v0.4.4](#-التحسينات-الأمنية-في-الإصدار-v044)
+14. [التحسينات الأمنية في الإصدار v0.4.5](#-التحسينات-الأمنية-في-الإصدار-v045)
 15. [البنية الهيكلية للمشروع](#-البنية-الهيكلية-للمشروع)
 16. [خارطة الطريق](#-خارطة-الطريق)
 17. [الاختبارات والتكامل المستمر (CI)](#-الاختبارات-والتكامل-المستمر-ci)
@@ -104,24 +104,124 @@
 يوضح المخطط الوظيفي أدناه كيفية انتقال مدخلات الفحص الخام عبر محرك التحليل الخاص بنا لتتم معالجتها وتوحيدها:
 
 ```mermaid
-graph LR
-    subgraph Scanners [مدخلات الفحص المتعددة]
-        T[فحص Trivy] 
-        S[فحص Semgrep] 
-        P[فحص Poutine] 
-        Z[فحص Zizmor] 
-        G[فحص Gitleaks]
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1e1e2e', 'primaryTextColor': '#cdd6f4', 'primaryBorderColor': '#6c7086', 'lineColor': '#89b4fa', 'clusterBkg': '#181825', 'clusterBorder': '#585b70', 'fontFamily': 'system-ui, sans-serif', 'fontSize': '14px'}}}%%
+flowchart LR
+    %% 🎨 Class Definitions for a Beautiful UI
+    classDef scanner fill:#24273a,stroke:#a6e3a1,stroke-width:2px,color:#a6e3a1
+    classDef cliEngine fill:#24273a,stroke:#89b4fa,stroke-width:2px,color:#89b4fa
+    classDef coreModule fill:#24273a,stroke:#f9e2af,stroke-width:2px,color:#f9e2af
+    classDef web fill:#24273a,stroke:#94e2d5,stroke-width:2px,color:#94e2d5
+    classDef dash fill:#24273a,stroke:#cba6f7,stroke-width:2px,color:#cba6f7
+    classDef database fill:#1e1e2e,stroke:#f38ba8,stroke-width:2px,color:#f38ba8
+    classDef external fill:#1e1e2e,stroke:#b4befe,stroke-width:2px,stroke-dasharray: 5 5,color:#b4befe
+
+    subgraph ScannerInputs ["External Scanners"]
+        T([Trivy]):::scanner
+        S([Semgrep]):::scanner
+        P([Poutine]):::scanner
+        Z([Zizmor]):::scanner
+        G([Gitleaks]):::scanner
     end
 
-    Scanners --->|التقارير الخام| CLI(🛡️ محرك devsecops-radar CLI)
-    CLI --->|التوحيد وإزالة التكرار| Out[findings.json]
-    Out ---> Web(📊 تطبيق لوحة Flask)
-    Web ---> UI[🌐 مركز قيادة متصفح الويب الحديث]
+    subgraph CLI ["🛡️ CLI Engine (devsecops-radar)"]
+        Plugins[[Plugin Discovery]]:::cliEngine
+        Adapt[[Scanner Adapter]]:::cliEngine
+        Norm[[Normalize & Validate]]:::cliEngine
+        Risk{{compute_dynamic_risk_score}}:::cliEngine
+    end
 
-    style CLI fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,color:#cdd6f4
-    style Web fill:#1e1e2e,stroke:#10b981,stroke-width:2px,color:#cdd6f4
-    style Out fill:#181825,stroke:#fab387,stroke-width:1px,color:#a6e3a1
-    style UI fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4
+    subgraph Core ["Core Modules"]
+        Analyzer{{🧠 AI Analyzer - Ollama/LiteLLM}}:::coreModule
+        DB[(Database - SQLAlchemy)]:::database
+        Remed([Auto-Fix & PR]):::coreModule
+        RuleEng{{Rule Fusion Engine}}:::coreModule
+        Report>Report Gen]:::coreModule
+        SARIF>SARIF Export]:::coreModule
+        CycloneDX>CycloneDX Export]:::coreModule
+        Notifier([Jira/Asana Notifier]):::coreModule
+        SBOM>SBOM Generator]:::coreModule
+        AttackSim{{Attack Simulation}}:::coreModule
+        RAG[/RAG Search/]:::coreModule
+    end
+
+    subgraph WebApp ["🌐 Web Application"]
+        Flask(Flask App):::web
+        Blueprints([Dashboard / Sentry / Attack-Paths / Topology / Summary]):::web
+        Waitress(Waitress WSGI Server):::web
+    end
+
+    subgraph DashboardUI ["🖥️ Dashboard UI"]
+        LiveFeed([Live Sentry Feed]):::dash
+        Charts[/Severity & Trend Charts/]:::dash
+        AttackGraph[/Attack Path Graph/]:::dash
+        TopoGraph[/Topology Graph/]:::dash
+        FindingsTable[/Findings Table/]:::dash
+        RemedPlan[/AI Remediation Plan/]:::dash
+        Policy[/Policy Status/]:::dash
+        Export[/Report Modal/]:::dash
+    end
+
+    %% External & Outputs Data Definitions
+    Out[(findings.json)]:::database
+    PR[/PR / Patch File/]:::external
+    Ext([External Services]):::external
+    LocalAI{{Local AI Model}}:::external
+    CommunityRepo[(Community Rules Repo)]:::external
+    Sandbox{{Isolated Container}}:::external
+    Syft([Syft CLI]):::external
+    SentryBuffer[(In-Memory Buffer)]:::database
+    TopoFile[(topology.json)]:::database
+
+    %% Scanner data flow
+    ScannerInputs -->|"Raw Reports"| Adapt
+    Adapt --> Norm
+    Norm --> Risk
+
+    %% CLI output
+    Risk -->|"findings.json"| Out
+    Risk --> DB
+    Risk --> Analyzer
+
+    %% Core interactions
+    Analyzer --> DB
+    Analyzer --> Remed
+    Remed -->|"git push/patch"| PR
+    RuleEng -->|"Policy Check"| CLI
+    RuleEng -->|"OPA Rego (beta)"| CLI
+
+    %% Web app
+    Out --> Flask
+    DB --> Flask
+    Flask --> Blueprints
+    Blueprints --> Waitress
+    Waitress --> DashboardUI
+
+    %% External integrations
+    Notifier -->|"Jira/Asana"| Ext
+    Analyzer -->|"Ollama"| LocalAI
+    RuleEng -->|"git clone"| CommunityRepo
+    AttackSim -->|"Docker Sandbox"| Sandbox
+    SBOM -->|"syft"| Syft
+    
+    %% UI details
+    LiveFeed -.- SentryBuffer
+    Charts --> DB
+    AttackGraph --> Analyzer
+    TopoGraph --> TopoFile
+    RemedPlan --> Analyzer
+    Policy --> RuleEng
+    
+    %% Split multiple targets for maximum compatibility
+    Export --> Report 
+    Export --> SARIF 
+    Export --> CycloneDX
+
+    %% Beautiful Subgraph Styling
+    style ScannerInputs fill:#1e1e2e,stroke:#a6e3a1,stroke-width:2px,stroke-dasharray: 5 5,rx:10,ry:10
+    style CLI fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,rx:10,ry:10
+    style Core fill:#1e1e2e,stroke:#f59e0b,stroke-width:2px,rx:10,ry:10
+    style WebApp fill:#1e1e2e,stroke:#10b981,stroke-width:2px,rx:10,ry:10
+    style DashboardUI fill:#11111b,stroke:#a6e3a1,stroke-width:2px,rx:10,ry:10
 ```
 
 ### 🌐 رسم البنية التحتية التشغيلية
@@ -292,6 +392,8 @@ devsecops-radar --trivy trivy.json --analyze --fix
 # مراجعة تفاعلية خطوة بخطوة
 devsecops-radar --trivy trivy.json --analyze --fix --review
 ```
+![fixes ](docs/fixes.png)
+
 > [!NOTE]
 > يتم نسخ جميع الملفات المعدلة احتياطياً بشكل آمن في المسار `~/.devsecops-radar/backups/`. تقوم الأداة تلقائياً بإنشاء فرع git جديد باسم `auto-fix` ودفعه للمراجعة والاعتماد.
 </details>

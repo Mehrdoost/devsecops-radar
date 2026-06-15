@@ -41,7 +41,7 @@
 11. [核心能力](#-核心能力)
 12. [社区规则与在线更新](#-社区规则与在线更新)
 13. [攻击模拟与 “如果...怎么办” 分析](#-攻击模拟与-如果怎么办-分析)
-14. [v0.4.4 版本安全提升](#-v044-版本安全提升)
+14. [v0.4.5 版本安全提升](#-v045-版本安全提升)
 15. [项目架构](#-项目架构)
 16. [发展路线图](#-发展路线图)
 17. [测试与 CI](#-测试与-ci)
@@ -104,24 +104,124 @@ Pipeline Sentinel 具备极高的环境适应性，您可以决定它最适合�
 以下功能流程图展示了原始的多扫描器输入如何通过我们的解析引擎进行标准化和集中化：
 
 ```mermaid
-graph LR
-    subgraph Scanners [多扫描器核心输入]
-        T[Trivy 扫描] 
-        S[Semgrep 扫描] 
-        P[Poutine 扫描] 
-        Z[Zizmor 扫描] 
-        G[Gitleaks 扫描]
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1e1e2e', 'primaryTextColor': '#cdd6f4', 'primaryBorderColor': '#6c7086', 'lineColor': '#89b4fa', 'clusterBkg': '#181825', 'clusterBorder': '#585b70', 'fontFamily': 'system-ui, sans-serif', 'fontSize': '14px'}}}%%
+flowchart LR
+    %% 🎨 Class Definitions for a Beautiful UI
+    classDef scanner fill:#24273a,stroke:#a6e3a1,stroke-width:2px,color:#a6e3a1
+    classDef cliEngine fill:#24273a,stroke:#89b4fa,stroke-width:2px,color:#89b4fa
+    classDef coreModule fill:#24273a,stroke:#f9e2af,stroke-width:2px,color:#f9e2af
+    classDef web fill:#24273a,stroke:#94e2d5,stroke-width:2px,color:#94e2d5
+    classDef dash fill:#24273a,stroke:#cba6f7,stroke-width:2px,color:#cba6f7
+    classDef database fill:#1e1e2e,stroke:#f38ba8,stroke-width:2px,color:#f38ba8
+    classDef external fill:#1e1e2e,stroke:#b4befe,stroke-width:2px,stroke-dasharray: 5 5,color:#b4befe
+
+    subgraph ScannerInputs ["External Scanners"]
+        T([Trivy]):::scanner
+        S([Semgrep]):::scanner
+        P([Poutine]):::scanner
+        Z([Zizmor]):::scanner
+        G([Gitleaks]):::scanner
     end
 
-    Scanners --->|原始报告| CLI(🛡️ devsecops-radar CLI 引擎)
-    CLI --->|标准化与去重| Out[findings.json]
-    Out ---> Web(📊 Flask 仪表盘应用)
-    Web ---> UI[🌐 现代化浏览器指挥中心]
+    subgraph CLI ["🛡️ CLI Engine (devsecops-radar)"]
+        Plugins[[Plugin Discovery]]:::cliEngine
+        Adapt[[Scanner Adapter]]:::cliEngine
+        Norm[[Normalize & Validate]]:::cliEngine
+        Risk{{compute_dynamic_risk_score}}:::cliEngine
+    end
 
-    style CLI fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,color:#cdd6f4
-    style Web fill:#1e1e2e,stroke:#10b981,stroke-width:2px,color:#cdd6f4
-    style Out fill:#181825,stroke:#fab387,stroke-width:1px,color:#a6e3a1
-    style UI fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4
+    subgraph Core ["Core Modules"]
+        Analyzer{{🧠 AI Analyzer - Ollama/LiteLLM}}:::coreModule
+        DB[(Database - SQLAlchemy)]:::database
+        Remed([Auto-Fix & PR]):::coreModule
+        RuleEng{{Rule Fusion Engine}}:::coreModule
+        Report>Report Gen]:::coreModule
+        SARIF>SARIF Export]:::coreModule
+        CycloneDX>CycloneDX Export]:::coreModule
+        Notifier([Jira/Asana Notifier]):::coreModule
+        SBOM>SBOM Generator]:::coreModule
+        AttackSim{{Attack Simulation}}:::coreModule
+        RAG[/RAG Search/]:::coreModule
+    end
+
+    subgraph WebApp ["🌐 Web Application"]
+        Flask(Flask App):::web
+        Blueprints([Dashboard / Sentry / Attack-Paths / Topology / Summary]):::web
+        Waitress(Waitress WSGI Server):::web
+    end
+
+    subgraph DashboardUI ["🖥️ Dashboard UI"]
+        LiveFeed([Live Sentry Feed]):::dash
+        Charts[/Severity & Trend Charts/]:::dash
+        AttackGraph[/Attack Path Graph/]:::dash
+        TopoGraph[/Topology Graph/]:::dash
+        FindingsTable[/Findings Table/]:::dash
+        RemedPlan[/AI Remediation Plan/]:::dash
+        Policy[/Policy Status/]:::dash
+        Export[/Report Modal/]:::dash
+    end
+
+    %% External & Outputs Data Definitions
+    Out[(findings.json)]:::database
+    PR[/PR / Patch File/]:::external
+    Ext([External Services]):::external
+    LocalAI{{Local AI Model}}:::external
+    CommunityRepo[(Community Rules Repo)]:::external
+    Sandbox{{Isolated Container}}:::external
+    Syft([Syft CLI]):::external
+    SentryBuffer[(In-Memory Buffer)]:::database
+    TopoFile[(topology.json)]:::database
+
+    %% Scanner data flow
+    ScannerInputs -->|"Raw Reports"| Adapt
+    Adapt --> Norm
+    Norm --> Risk
+
+    %% CLI output
+    Risk -->|"findings.json"| Out
+    Risk --> DB
+    Risk --> Analyzer
+
+    %% Core interactions
+    Analyzer --> DB
+    Analyzer --> Remed
+    Remed -->|"git push/patch"| PR
+    RuleEng -->|"Policy Check"| CLI
+    RuleEng -->|"OPA Rego (beta)"| CLI
+
+    %% Web app
+    Out --> Flask
+    DB --> Flask
+    Flask --> Blueprints
+    Blueprints --> Waitress
+    Waitress --> DashboardUI
+
+    %% External integrations
+    Notifier -->|"Jira/Asana"| Ext
+    Analyzer -->|"Ollama"| LocalAI
+    RuleEng -->|"git clone"| CommunityRepo
+    AttackSim -->|"Docker Sandbox"| Sandbox
+    SBOM -->|"syft"| Syft
+    
+    %% UI details
+    LiveFeed -.- SentryBuffer
+    Charts --> DB
+    AttackGraph --> Analyzer
+    TopoGraph --> TopoFile
+    RemedPlan --> Analyzer
+    Policy --> RuleEng
+    
+    %% Split multiple targets for maximum compatibility
+    Export --> Report 
+    Export --> SARIF 
+    Export --> CycloneDX
+
+    %% Beautiful Subgraph Styling
+    style ScannerInputs fill:#1e1e2e,stroke:#a6e3a1,stroke-width:2px,stroke-dasharray: 5 5,rx:10,ry:10
+    style CLI fill:#1e1e2e,stroke:#3b82f6,stroke-width:2px,rx:10,ry:10
+    style Core fill:#1e1e2e,stroke:#f59e0b,stroke-width:2px,rx:10,ry:10
+    style WebApp fill:#1e1e2e,stroke:#10b981,stroke-width:2px,rx:10,ry:10
+    style DashboardUI fill:#11111b,stroke:#a6e3a1,stroke-width:2px,rx:10,ry:10
 ```
 
 ### 🌐 运维基础设施映射
@@ -291,6 +391,8 @@ devsecops-radar --trivy trivy.json --analyze --fix
 # 交互式循序渐进审查
 devsecops-radar --trivy trivy.json --analyze --fix --review
 ```
+![fixes ](docs/fixes.png)
+
 > [!NOTE]
 > 所有修改过的文件都将安全备份至 `~/.devsecops-radar/backups/`。工具会自动创建一个新的 git 分支 `auto-fix` 并将其推送以供审核。
 </details>
