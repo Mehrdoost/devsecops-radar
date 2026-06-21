@@ -1,0 +1,17 @@
+{
+    "servers": [
+        {"name": "web-server", "ip": "10.0.1.5", "services": ["http", "https"]},
+        {"name": "app-server", "ip": "10.0.2.10", "services": ["api"]},
+        {"name": "db-server", "ip": "10.0.3.20", "services": ["mysql"]}
+    ],
+    "subnets": [
+        {"name": "dmz", "cidr": "10.0.1.0/24"},
+        {"name": "internal", "cidr": "10.0.2.0/24"},
+        {"name": "database", "cidr": "10.0.3.0/24"}
+    ],
+    "connections": [
+        {"source": "internet", "target": "web-server", "protocol": "HTTPS"},
+        {"source": "web-server", "target": "app-server", "protocol": "HTTP"},
+        {"source": "app-server", "target": "db-server", "protocol": "MySQL"}
+    ]
+}

@@ -1,0 +1,24 @@
+services:
+  radar:
+    build: .
+    container_name: pipeline-sentinel
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set}
+      - PIPELINE_API_KEY=${PIPELINE_API_KEY:?PIPELINE_API_KEY must be set}
+      - FINDINGS_FILE=/data/findings.json
+      - DATABASE_URL=sqlite:///data/pipeline_sentinel.db
+    volumes:
+      - ./findings.json:/data/findings.json:ro   # read-only for security
+      - sentinel_data:/data                       # persist scan history
+    read_only: true                                # rootfs read-only
+    tmpfs:
+      - /tmp                                       # needed for attack simulation temp files
+    security_opt:
+      - no-new-privileges:true                     # drop all additional privileges
+
+volumes:
+  sentinel_data:
+    driver: local

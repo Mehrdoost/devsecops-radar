@@ -1,0 +1,125 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devsecops-radar"
+version = "0.4.6"
+description = "Unified CI/CD Security Dashboard — Pipeline Sentinel"
+readme = "README.md"
+requires-python = ">=3.11,<4.0"
+license = {text = "MIT"}
+authors = [
+    {name = "Mehrdoost", email = "70381337+Mehrdoost@users.noreply.github.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "flask>=3.0,<4.0",
+    "flask-cors>=4.0,<5.0",
+    "waitress>=3.0,<4.0",
+    "psutil>=5.9,<6.0",
+    "tenacity>=8.0,<10.0",
+    "pyyaml>=6.0,<7.0",
+    "requests>=2.31,<3.0",
+    "rich>=13.0,<14.0",
+    "loguru>=0.7,<1.0",
+    "reportlab>=4.0,<5.0",
+    "sqlalchemy>=2.0,<3.0",
+    "pydantic>=2.0,<3.0",
+    "pyjwt>=2.8,<3.0",
+    "httpx>=0.27,<1.0",
+    "werkzeug>=3.0,<4.0",
+    "python-dotenv>=1.0,<2.0",
+]
+
+[project.optional-dependencies]
+ai = [
+    "litellm>=1.50,<2.0",
+    "tiktoken>=0.5,<1.0",
+]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-flask>=1.3,<2.0",
+    "pytest-cov>=4.0,<6.0",
+    "ruff>=0.3.0,<1.0",
+    "mypy>=1.9,<2.0",
+    "pytest-asyncio>=0.21,<1.0",
+    "pytest-mock>=3.10,<4.0",
+    "httpx>=0.24.0",
+    "pre-commit>=3.5,<4.0",
+    "bandit>=1.7,<2.0",
+    "safety>=2.3,<4.0",
+    "types-waitress>=1.0",
+    "alembic>=1.12,<2.0",
+    "types-requests",
+    "types-PyYAML",
+    "types-setuptools",
+]
+extra = [
+    "semgrep>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Mehrdoost/devsecops-radar"
+Source = "https://github.com/Mehrdoost/devsecops-radar"
+
+[project.entry-points."devsecops_radar.plugins"]
+trivy = "devsecops_radar.scanners.trivy:TrivyScanner"
+semgrep = "devsecops_radar.scanners.semgrep:SemgrepScanner"
+poutine = "devsecops_radar.scanners.poutine:PoutineScanner"
+zizmor = "devsecops_radar.scanners.zizmor:ZizmorScanner"
+gitleaks = "devsecops_radar.scanners.gitleaks:GitleaksScanner"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"devsecops_radar.web" = ["templates/*", "static/css/*", "static/js/*"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["devsecops_radar*"]
+
+[project.scripts]
+devsecops-radar = "devsecops_radar.cli.scanner:main"
+devsecops-radar-web = "devsecops_radar.web.app:start_server"
+
+[tool.pytest.ini_options]
+addopts = "-v --cov=devsecops_radar --cov-report=term-missing"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S104", "S105", "S108", "S110", "B017", "E501"]
+"devsecops_radar/web/dashboard/routes.py" = ["E501"]
+"devsecops_radar/web/app.py" = ["S104"]
+"devsecops_radar/core/attack_simulation.py" = ["S103"]
+"devsecops_radar/core/remediation.py" = ["S110"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+
+[tool.bandit]
+exclude = ["build/", "dist/", ".venv/", "venv/"]
+skips = ["B101", "B311", "B404", "B103", "B110", "B104"]

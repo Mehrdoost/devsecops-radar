@@ -1,0 +1,4 @@
+{
+    "max_critical": 5,
+    "on_violation": "fail"
+}

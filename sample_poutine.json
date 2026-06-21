@@ -1,0 +1,34 @@
+{
+    "findings": [
+      {
+        "rule_id": "poutine/hardened-runner",
+        "severity": "HIGH",
+        "message": "Consider using a hardened runner or self-hosted runner with strict security controls.",
+        "description": "The pipeline uses the default shared runner, which may expose build artifacts to other tenants.",
+        "location": {
+          "file": ".gitlab-ci.yml",
+          "line": 5
+        }
+      },
+      {
+        "rule_id": "poutine/secret-detection",
+        "severity": "CRITICAL",
+        "message": "Possible secret detected.",
+        "description": "A string resembling a GitLab token was found in the build script.",
+        "location": {
+          "file": "scripts/deploy.sh",
+          "line": 12
+        }
+      },
+      {
+        "rule_id": "poutine/untrusted-image",
+        "severity": "MEDIUM",
+        "message": "Image is not from a trusted registry.",
+        "description": "The pipeline uses an image from an unverified source. Use images from trusted registries only.",
+        "location": {
+          "file": ".gitlab-ci.yml",
+          "line": 3
+        }
+      }
+    ]
+  }

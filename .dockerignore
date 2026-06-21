@@ -1,0 +1,62 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Database
+*.db
+*.sqlite3
+pipeline_sentinel.db
+
+# Pipeline Sentinel runtime artifacts
+findings.json
+findings_ai_summary.json
+*.sarif
+*.cdx.json
+*.pdf
+.sentinel_backups/
+
+# Coverage & testing
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Linting & type checking
+.ruff_cache/
+.mypy_cache/
+
+# Distribution
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Docker (keep Dockerfile, ignore built images)
+docker-compose.override.yml
+
+# Git
+.github/
+
+# Docs build
+docs/_build/
