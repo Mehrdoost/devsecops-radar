@@ -66,11 +66,11 @@ def safe_subprocess_run(cmd_list: list[str], **kwargs: Any) -> subprocess.Comple
     # Capture common timeout handling to give a better error message
     try:
         return subprocess.run(resolved_cmd, **kwargs)  # nosec B603 B607  # noqa: S603, S607
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as err:
         timeout_val = kwargs.get("timeout", "undefined")
         raise subprocess.TimeoutExpired(
             cmd=resolved_cmd,
             timeout=float(timeout_val) if isinstance(timeout_val, (int, float)) else 0.0,
-        )
+        ) from err
     except Exception:
-        raise
+        raise   # noqa: B904
