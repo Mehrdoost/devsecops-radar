@@ -30,6 +30,10 @@ inputs:
     description: 'Output filename for merged findings'
     required: false
     default: 'findings.json'
+  fail_on_scanner_error:
+    description: 'Fail the workflow if any scanner fails'
+    required: false
+    default: 'true'
 
 outputs:
   critical_count:
@@ -50,21 +54,26 @@ runs:
       with:
         python-version: '3.12'
 
-    - name: Install project (including the CLI)
+    - name: Install project (production mode)
       shell: bash
       run: |
-        pip install -e "${{ github.action_path }}/.."
+        pip install "${{ github.action_path }}/.."
 
     - name: Merge findings
       shell: bash
       run: |
+        FAIL_FLAG=""
+        if [[ "${{ inputs.fail_on_scanner_error }}" == "true" ]]; then
+          FAIL_FLAG="--fail-on-scanner-error"
+        fi
         devsecops-radar \
           --trivy "${{ inputs.trivy_report }}" \
           --semgrep "${{ inputs.semgrep_report }}" \
           --poutine "${{ inputs.poutine_report }}" \
           --zizmor "${{ inputs.zizmor_report }}" \
           --gitleaks "${{ inputs.gitleaks_report }}" \
-          --output "${{ inputs.findings_file }}"
+          --output "${{ inputs.findings_file }}" \
+          $FAIL_FLAG
 
     - name: Generate summary and outputs
       id: parse

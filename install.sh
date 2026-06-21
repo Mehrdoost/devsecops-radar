@@ -11,6 +11,8 @@ YELLOW="\033[33m"
 RED="\033[31m"
 RESET="\033[0m"
 
+NON_INTERACTIVE=false
+
 print_header() {
     echo -e "${GREEN}🛡️  Pipeline Sentinel – Quick Install${RESET}"
     echo -e "${GREEN}------------------------------------${RESET}"
@@ -54,9 +56,14 @@ install_sentinel() {
 }
 
 # ──────────────────────────────────────────────
-# 3. Optional AI setup (Ollama)
+# 3. Optional AI setup (Ollama) – skipped if non‑interactive or offline
 # ──────────────────────────────────────────────
 setup_ai() {
+    if $NON_INTERACTIVE; then
+        info "Skipping AI setup (non‑interactive mode). You can run 'ollama pull llama3.2:latest' later."
+        return
+    fi
+
     if command -v ollama &> /dev/null; then
         info "Ollama is available. Pulling recommended AI model (llama3.2)..."
         ollama pull llama3.2:latest || warn "Could not pull AI model. You can do it later with: ollama pull llama3.2:latest"
@@ -73,14 +80,21 @@ setup_ai() {
 # 4. Run first-time wizard (optional)
 # ──────────────────────────────────────────────
 run_wizard() {
+    if $NON_INTERACTIVE; then
+        info "Skipping interactive wizard (non‑interactive mode)."
+        return
+    fi
+
     if command -v devsecops-radar &> /dev/null; then
         echo ""
         info "You can now run the interactive setup wizard:"
         echo -e "     ${BOLD}devsecops-radar --wizard${RESET}"
         echo ""
-        read -p "Would you like to run it now? [y/N]: " answer
-        if [[ "$answer" =~ ^[Yy]$ ]]; then
-            devsecops-radar --wizard
+        if [ -t 0 ]; then
+            read -p "Would you like to run it now? [y/N]: " answer
+            if [[ "$answer" =~ ^[Yy]$ ]]; then
+                devsecops-radar --wizard
+            fi
         fi
     fi
 }
@@ -89,6 +103,13 @@ run_wizard() {
 # Main
 # ──────────────────────────────────────────────
 main() {
+    # Parse optional --non-interactive flag
+    for arg in "$@"; do
+        if [[ "$arg" == "--non-interactive" ]]; then
+            NON_INTERACTIVE=true
+        fi
+    done
+
     print_header
     check_prereqs
     install_sentinel

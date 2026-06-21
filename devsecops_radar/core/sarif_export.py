@@ -1,20 +1,13 @@
+# devsecops_radar/core/sarif_export.py
 import json
 import urllib.parse
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
-
-def _get_safe_path(output_file: str, allowed_dir: str = ".") -> Path:
-    base_path = Path(allowed_dir).resolve()
-    target_path = (base_path / output_file).resolve()
-    if not target_path.is_relative_to(base_path):
-        raise ValueError(
-            f"Security Violation: Path traversal attempt detected in '{output_file}'"
-        )
-    return target_path
+from devsecops_radar.core.path_security import atomic_write, resolve_safe_path
+from devsecops_radar.core.reporting import redact_sensitive
 
 
 def _safe_int(val: Any, default: int = 1) -> int:
@@ -29,7 +22,8 @@ def export_sarif(
     findings: list[dict[str, Any]], output_file: str = "report.sarif"
 ) -> None:
     try:
-        safe_path = _get_safe_path(output_file)
+        safe_path = resolve_safe_path(output_file)
+
         rules: dict[str, Any] = {}
         results: list[dict[str, Any]] = []
 
@@ -74,8 +68,8 @@ def export_sarif(
             }],
         }
 
-        with open(safe_path, "w", encoding="utf-8") as fh:
-            json.dump(sarif_data, fh, indent=2)
+        with atomic_write(safe_path) as sarif_file:
+            json.dump(sarif_data, sarif_file, indent=2)
 
         logger.success(f"SARIF report successfully exported to {safe_path}")
     except Exception as e:
@@ -86,14 +80,15 @@ def export_cyclonedx(
     findings: list[dict[str, Any]], output_file: str = "report.cdx.json"
 ) -> None:
     try:
-        safe_path = _get_safe_path(output_file)
+        safe_path = resolve_safe_path(output_file)
 
+        # Correct CycloneDX severity format (lowercase)
         severity_map = {
-            "CRITICAL": "Critical",
-            "HIGH": "High",
-            "MEDIUM": "Medium",
-            "LOW": "Low",
-            "UNKNOWN": "Info",
+            "CRITICAL": "critical",
+            "HIGH": "high",
+            "MEDIUM": "medium",
+            "LOW": "low",
+            "UNKNOWN": "info",
         }
 
         components_dict: dict[str, Any] = {}
@@ -112,11 +107,15 @@ def export_cyclonedx(
                 }
 
             raw_sev = str(f.get("severity", "UNKNOWN")).upper()
-            mapped_sev = severity_map.get(raw_sev, "Info")
+            mapped_sev = severity_map.get(raw_sev, "info")
+
+            # Redact sensitive data from descriptions
+            raw_description = str(f.get("description", ""))
+            clean_description = redact_sensitive(raw_description)
 
             vulnerabilities.append({
                 "id": str(f.get("id", "UNKNOWN")),
-                "description": str(f.get("description", "")),
+                "description": clean_description,
                 "ratings": [
                     {
                         "source": {"name": "Pipeline Sentinel Scanner"},
@@ -141,8 +140,8 @@ def export_cyclonedx(
             "vulnerabilities": vulnerabilities,
         }
 
-        with open(safe_path, "w", encoding="utf-8") as fh:
-            json.dump(cdx_data, fh, indent=2)
+        with atomic_write(safe_path) as cdx_file:
+            json.dump(cdx_data, cdx_file, indent=2)
 
         logger.success(f"CycloneDX report successfully exported to {safe_path}")
     except Exception as e:

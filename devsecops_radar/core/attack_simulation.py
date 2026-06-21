@@ -1,104 +1,87 @@
-import os
-import re
+# devsecops_radar/core/attack_simulation.py
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 from loguru import logger
 
 from devsecops_radar.core.utils import safe_subprocess_run
 
-_MAX_FIELD_LENGTH = 200
+
+class SimulationArtifact(NamedTuple):
+    """Container for everything needed to run a sandboxed PoC."""
+    script_path: Path
+    temp_dir: Path
+    finding_id: str
+    finding_title: str
+    target: str
 
 
-def _sanitize_for_bash(value: str) -> str:
-    if not isinstance(value, str):
-        return ""
-    value = value.replace("\n", "").replace("\r", "")
-    sanitized = re.sub(r"[^a-zA-Z0-9_\-./ ]", "", value)
-    return sanitized.strip()
-
-
-def _cleanup_temp_dir(dir_path: str) -> None:
-    try:
-        shutil.rmtree(dir_path)
-        logger.debug(f"Temporary directory removed: {dir_path}")
-    except Exception as e:
-        logger.error(f"Failed to clean up temp directory {dir_path}: {e}")
-
-
-def _build_poc_script(finding_id: str, finding_title: str, target: str) -> str:
+def simulate_attack(finding: dict) -> SimulationArtifact | None:
     """
-    Build a dynamic Proof‑of‑Concept bash script.
-    The script is safe to run inside the read‑only, network‑none sandbox.
+    Create a safe PoC script and return its location together with
+    the finding metadata.
+
+    The script itself is static – all dynamic content is passed via
+    environment variables at runtime.  This eliminates command‑injection
+    risks while preserving the realistic probe behaviour.
     """
-    safe_id = _sanitize_for_bash(finding_id)[:_MAX_FIELD_LENGTH]
-    safe_title = _sanitize_for_bash(finding_title)[:_MAX_FIELD_LENGTH]
-    safe_target = _sanitize_for_bash(target)[:_MAX_FIELD_LENGTH]
-
-    lines = [
-        "#!/bin/bash",
-        "set -e",
-        "echo '================== Pipeline Sentinel PoC =================='",
-        f"echo 'Finding ID : {safe_id}'",
-        f"echo 'Title      : {safe_title}'",
-    ]
-
-    if safe_target:
-        lines.append(f"echo 'Target     : {safe_target}'")
-        # If target looks like a network address, try a harmless probe
-        if re.match(r"^[a-zA-Z0-9._\-]+$", safe_target) and "." in safe_target:
-            lines.append("echo 'Attempting DNS lookup (will fail in sandbox)...'")
-            lines.append(f"nslookup '{safe_target}' 2>&1 || true")
-            lines.append("echo 'Attempting HTTP request (will fail in sandbox)...'")
-            lines.append(f"curl -s -o /dev/null -w '%{{http_code}}' 'http://{safe_target}' 2>&1 || true")
-        # If target looks like a file path, attempt to cat it (will be empty in sandbox)
-        elif safe_target.startswith("/"):
-            lines.append("echo 'Attempting file read (will fail in sandbox)...'")
-            lines.append(f"cat '{safe_target}' 2>&1 || true")
-        else:
-            lines.append("echo 'No network or file test possible for this target type.'")
-    else:
-        lines.append("echo 'Target     : (none)'")
-
-    lines.append("echo '============================================================'")
-    lines.append("echo 'PoC simulation completed.'")
-    return "\n".join(lines)
-
-
-def simulate_attack(finding: dict) -> str:
     if not isinstance(finding, dict) or not finding.get("id") or not finding.get("title"):
         logger.error("Invalid finding data for attack simulation.")
-        return _generate_dummy_script("Invalid finding data provided.")
+        return None
 
     finding_id = str(finding.get("id"))
     finding_title = str(finding.get("title"))
     target = str(finding.get("target", ""))
 
-    script_content = _build_poc_script(finding_id, finding_title, target)
+    # Static script – probes are enabled but all user data comes from env vars.
+    script = r"""#!/bin/bash
+set -e
+
+echo '================== Pipeline Sentinel PoC =================='
+echo "Finding ID : $FINDING_ID"
+echo "Title      : $FINDING_TITLE"
+echo "Target     : $FINDING_TARGET"
+
+if [ -n "$FINDING_TARGET" ]; then
+    # Heuristic probes – all will safely fail inside the locked‑down sandbox.
+    if [[ "$FINDING_TARGET" =~ ^[a-zA-Z0-9._-]+$ ]] && [[ "$FINDING_TARGET" == *"."* ]]; then
+        echo 'Attempting DNS lookup (will fail in sandbox)...'
+        nslookup "$FINDING_TARGET" 2>&1 || true
+        echo 'Attempting HTTP request (will fail in sandbox)...'
+        curl -s -o /dev/null -w '%{http_code}' "http://$FINDING_TARGET" 2>&1 || true
+    elif [[ "$FINDING_TARGET" == /* ]]; then
+        echo 'Attempting file read (will fail in sandbox)...'
+        cat "$FINDING_TARGET" 2>&1 || true
+    else
+        echo 'No network or file test possible for this target type.'
+    fi
+else
+    echo 'Target     : (none)'
+fi
+
+echo '============================================================'
+echo 'PoC simulation completed.'
+"""
 
     try:
-        tmpdir = tempfile.mkdtemp(prefix="pipeline_sentinel_sim_")
-        script_path = os.path.join(tmpdir, "poc.sh")
-        with open(script_path, 'w') as f:
-            f.write(script_content)
-        os.chmod(script_path, 0o755)
+        tmpdir = Path(tempfile.mkdtemp(prefix="pipeline_sentinel_sim_"))
+        script_path = tmpdir / "poc.sh"
+        script_path.write_text(script, encoding="utf-8")
+        script_path.chmod(0o755)
         logger.debug(f"Attack simulation script created at {script_path}")
-        return script_path
+        return SimulationArtifact(
+            script_path=script_path,
+            temp_dir=tmpdir,
+            finding_id=finding_id,
+            finding_title=finding_title,
+            target=target,
+        )
     except OSError as e:
-        logger.error(f"Failed to write simulation script: {e}")
-        return _generate_dummy_script("Script creation failed.")
-
-
-def _generate_dummy_script(reason: str) -> str:
-    safe_reason = _sanitize_for_bash(reason)[:_MAX_FIELD_LENGTH]
-    tmpdir = tempfile.mkdtemp(prefix="pipeline_sentinel_dummy_")
-    dummy_path = os.path.join(tmpdir, "poc.sh")
-    with open(dummy_path, 'w') as f:
-        f.write(f"#!/bin/bash\necho 'Simulation skipped: {safe_reason}'\n")
-    os.chmod(dummy_path, 0o755)
-    return dummy_path
+        logger.error(f"Failed to create simulation script: {e}")
+        return None
 
 
 def _is_docker_available() -> bool:
@@ -106,48 +89,43 @@ def _is_docker_available() -> bool:
         return False
     try:
         safe_subprocess_run(
-            ["docker", "info"],
-            capture_output=True,
-            timeout=3,
-            check=False
+            ["docker", "info"], capture_output=True, timeout=3, check=False
         )
         return True
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
 
 
-def run_sandboxed_poc(script_path: str) -> str:
-    if not script_path:
-        logger.error("No script path provided for sandbox.")
-        return "Simulation aborted: no script path."
+def run_sandboxed_poc(artifact: SimulationArtifact) -> str:
+    """
+    Execute the PoC script inside a locked‑down Docker container.
+    Confinement is verified against *artifact.temp_dir*.
+    """
+    script_path = artifact.script_path
+    temp_dir = artifact.temp_dir
 
-    script_file = Path(script_path).resolve(strict=False)
-    if not script_file.is_file():
+    if not script_path.is_file():
         logger.error(f"Script file does not exist: {script_path}")
         return "Simulation aborted: script file not found."
 
-    temp_root = Path(tempfile.gettempdir()).resolve()
+    # Confinement: script MUST be inside the specific temp_dir
     try:
-        if not script_file.is_relative_to(temp_root):
-            logger.error(f"Script {script_path} is not inside the expected temp directory.")
-            return "Simulation aborted: script location is not allowed."
-    except (ValueError, OSError) as e:
-        logger.error(f"Path resolution error for script: {e}")
-        return "Simulation aborted: invalid script path."
-
-    real_path = os.path.realpath(script_path)
-    if not os.path.commonpath([real_path, str(temp_root)]) == str(temp_root):
-        logger.error("TOCTOU check failed: script path resolved outside temp directory.")
-        return "Simulation aborted: script path tampering detected."
+        script_path.resolve().relative_to(temp_dir.resolve())
+    except ValueError:
+        logger.error(
+            f"Script {script_path} is outside expected temp dir {temp_dir}"
+        )
+        return "Simulation aborted: script location not allowed."
 
     if not _is_docker_available():
         return (
-            "Docker daemon is not running or not installed. "
-            "Simulation script has been generated but will not be executed."
+            "Docker is not available. "
+            "Simulation script has been generated but not executed."
         )
 
     docker_cmd = [
-        "docker", "run",
+        "docker",
+        "run",
         "--rm",
         "--user", "nobody",
         "--read-only",
@@ -155,22 +133,21 @@ def run_sandboxed_poc(script_path: str) -> str:
         "--security-opt", "no-new-privileges",
         "--cap-drop", "ALL",
         "-v", f"{script_path}:/poc.sh:ro",
+        "-e", f"FINDING_ID={artifact.finding_id}",
+        "-e", f"FINDING_TITLE={artifact.finding_title}",
+        "-e", f"FINDING_TARGET={artifact.target}",
         "alpine",
-        "sh", "/poc.sh"
+        "sh", "/poc.sh",
     ]
 
     logger.info(f"Launching sandboxed simulation: {' '.join(docker_cmd)}")
 
     try:
         result = safe_subprocess_run(
-            docker_cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False
+            docker_cmd, capture_output=True, text=True, timeout=30, check=False
         )
     except FileNotFoundError:
-        return "Docker is not installed or not running. Simulation requires Docker."
+        return "Docker is not installed."
     except subprocess.TimeoutExpired:
         logger.error("Sandbox simulation timed out.")
         return "Simulation timed out after 30 seconds."
@@ -183,13 +160,15 @@ def run_sandboxed_poc(script_path: str) -> str:
         logger.warning(
             f"Docker sandbox exited with code {result.returncode}: {output.strip()}"
         )
-        return (
-            f"Sandbox execution failed (exit {result.returncode}):\n{output.strip()}"
-        )
+        return f"Sandbox execution failed (exit {result.returncode}):\n{output.strip()}"
 
     logger.success("Sandbox simulation completed successfully.")
+
+    # Clean up the temporary directory
     try:
-        _cleanup_temp_dir(str(script_file.parent))
+        shutil.rmtree(temp_dir)
+        logger.debug(f"Temporary directory removed: {temp_dir}")
     except Exception as e:
-        logger.error(f"Failed to clean up temporary directory: {e}")
+        logger.error(f"Failed to clean up temp directory {temp_dir}: {e}")
+
     return output.strip()

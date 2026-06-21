@@ -1,8 +1,7 @@
-"""Tests for individual scanner implementations (Gitleaks, Poutine, Semgrep, Trivy, Zizmor)."""
+"""Tests for individual scanner implementations (updated for mkstemp + safe_read_open)."""
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -14,7 +13,7 @@ from devsecops_radar.scanners.zizmor import ZizmorScanner
 
 
 # ---------------------------------------------------------------------------
-# Sample output helpers for each scanner
+# Sample output helpers
 # ---------------------------------------------------------------------------
 def make_gitleaks_list_output():
     return [
@@ -140,21 +139,11 @@ def make_zizmor_output():
 
 
 # ---------------------------------------------------------------------------
-# Helper to create a real temp file and a mock NamedTemporaryFile that points to it
-# ---------------------------------------------------------------------------
-def make_tmpfile_mock(fake_path, suffix=".json"):
-    mock_tmp = MagicMock()
-    mock_tmp.name = str(fake_path)
-    mock_tmp.__enter__.return_value = mock_tmp
-    mock_tmp.__exit__.return_value = None
-    return mock_tmp
-
-
-# ---------------------------------------------------------------------------
-# Fixtures that create each scanner with a safe temporary base directory
+# Fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture(params=[GitleaksScanner, PoutineScanner, SemgrepScanner, ZizmorScanner])
 def scanner(request, tmp_path):
+    """Create scanner with a safe base directory inside tmp_path."""
     cls = request.param
     allowed_base = tmp_path / "scan_root"
     allowed_base.mkdir()
@@ -162,104 +151,105 @@ def scanner(request, tmp_path):
 
 
 @pytest.fixture
-def trivy_scanner():
-    """TrivyScanner without a base dir (image scanning doesn't require one)."""
-    return TrivyScanner()
+def trivy_scanner(tmp_path):
+    """TrivyScanner with a dedicated base dir for test isolation."""
+    base = tmp_path / "trivy_base"
+    base.mkdir()
+    return TrivyScanner(allowed_base_dir=base)
 
 
 # ---------------------------------------------------------------------------
-# Common parse tests (all file/path based scanners)
+# Common parse tests
 # ---------------------------------------------------------------------------
 class TestParseCommon:
     def test_parse_path_rejected(self, scanner):
-        with patch.object(scanner, "_validate_target_path", return_value=None):
+        # path outside allowed_base_dir -> safe_read_open raises ValueError
+        with patch("devsecops_radar.core.path_security.resolve_safe_path",
+                   side_effect=ValueError("outside allowed")):
             assert scanner.parse("/bad/path") == []
 
-    def test_parse_file_not_found(self, scanner, tmp_path):
-        missing = tmp_path / "missing.json"
-        with patch.object(scanner, "_validate_target_path", return_value=str(missing)):
-            assert scanner.parse(str(missing)) == []
+    def test_parse_file_not_found(self, scanner):
+        missing = str(scanner.allowed_base_dir / "missing.json")
+        assert scanner.parse(missing) == []
 
-    def test_parse_file_too_large(self, scanner, tmp_path):
-        big = tmp_path / "big.json"
+    def test_parse_file_too_large(self, scanner):
+        big = scanner.allowed_base_dir / "big.json"
         big.write_bytes(b"x" * (51 * 1024 * 1024))  # 51 MB
-        with patch.object(scanner, "_validate_target_path", return_value=str(big)):
-            assert scanner.parse(str(big)) == []
+        assert scanner.parse(str(big)) == []
 
-    def test_parse_cannot_stat(self, scanner, tmp_path):
-        f = tmp_path / "nostat.json"
-        f.touch()
-        # Let the file exist, but make Path.stat raise inside the try block
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)), \
-             patch.object(Path, "exists", return_value=True), \
-             patch.object(Path, "is_file", return_value=True), \
-             patch.object(Path, "stat", side_effect=OSError("nope")):
+    def test_parse_cannot_stat(self, scanner):
+        f = scanner.allowed_base_dir / "nostat.json"
+        f.write_text("[]")
+        # Make fstat fail inside safe_read_open
+        with patch("os.fstat", side_effect=OSError("nope")):
             assert scanner.parse(str(f)) == []
 
-    def test_parse_invalid_json(self, scanner, tmp_path):
-        f = tmp_path / "bad.json"
+    def test_parse_invalid_json(self, scanner):
+        f = scanner.allowed_base_dir / "bad.json"
         f.write_text("not json")
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            assert scanner.parse(str(f)) == []
+        assert scanner.parse(str(f)) == []
 
 
 # ---------------------------------------------------------------------------
-# Common run tests (all scanners, with special handling for Trivy)
+# Common run tests
 # ---------------------------------------------------------------------------
 class TestRunCommon:
     def test_run_path_rejected(self, scanner):
         with patch.object(scanner, "_validate_target_path", return_value=None):
             assert scanner.run("/bad") == []
 
-    def test_run_success_and_calls_parse(self, scanner, tmp_path):
-        target = tmp_path / "repo"
-        target.mkdir()
-        fake_tmp = tmp_path / "fake_output.json"
-        fake_tmp.write_text(json.dumps(self._make_valid_output(scanner)))
+    def test_run_success_and_calls_parse(self, scanner):
+        target_dir = scanner.allowed_base_dir / "repo"
+        target_dir.mkdir()
 
-        mock_tmp = make_tmpfile_mock(fake_tmp)
+        # Create a known output file inside allowed_base_dir
+        out_path = scanner.allowed_base_dir / "output.json"
+        out_path.write_text(json.dumps(self._make_valid_output(scanner)))
 
-        with patch.object(scanner, "_validate_target_path", return_value=str(target)), \
+        mock_fd = 999  # arbitrary
+        with patch("tempfile.mkstemp", return_value=(mock_fd, str(out_path))), \
+             patch("os.close"), \
+             patch.object(scanner, "_validate_target_path", return_value=str(target_dir)), \
              patch.object(scanner, "_safe_run_command") as mock_run, \
-             patch("tempfile.NamedTemporaryFile", return_value=mock_tmp), \
              patch.object(scanner, "parse", wraps=scanner.parse) as mock_parse:
+
             mock_run.return_value.returncode = (
                 0 if isinstance(scanner, (PoutineScanner, ZizmorScanner)) else 1
             )
-            scanner.run(str(target))
+            scanner.run(str(target_dir))
 
         mock_run.assert_called_once()
-        mock_parse.assert_called_once_with(str(fake_tmp))
+        mock_parse.assert_called_once_with(str(out_path))
 
-    def test_run_unexpected_return_code(self, scanner, tmp_path):
-        target = tmp_path / "repo"
+    def test_run_unexpected_return_code(self, scanner):
+        target = scanner.allowed_base_dir / "repo"
         target.mkdir()
-        fake_tmp = tmp_path / "output.json"
-        fake_tmp.touch()
 
-        mock_tmp = make_tmpfile_mock(fake_tmp)
+        out_path = scanner.allowed_base_dir / "output.json"
+        out_path.write_text("[]")
 
-        with patch.object(scanner, "_validate_target_path", return_value=str(target)), \
-             patch.object(scanner, "_safe_run_command") as mock_run, \
-             patch("tempfile.NamedTemporaryFile", return_value=mock_tmp):
+        with patch("tempfile.mkstemp", return_value=(1, str(out_path))), \
+             patch("os.close"), \
+             patch.object(scanner, "_validate_target_path", return_value=str(target)), \
+             patch.object(scanner, "_safe_run_command") as mock_run:
             mock_run.return_value.returncode = 99  # unexpected
             assert scanner.run(str(target)) == []
 
-    def test_run_exception_and_cleanup(self, scanner, tmp_path):
-        target = tmp_path / "repo"
+    def test_run_exception_and_cleanup(self, scanner):
+        target = scanner.allowed_base_dir / "repo"
         target.mkdir()
-        fake_tmp = tmp_path / "output.json"
-        fake_tmp.touch()
 
-        mock_tmp = make_tmpfile_mock(fake_tmp)
+        out_path = scanner.allowed_base_dir / "output.json"
+        out_path.write_text("[]")
 
-        with patch.object(scanner, "_validate_target_path", return_value=str(target)), \
-             patch.object(scanner, "_safe_run_command", side_effect=RuntimeError("fail")), \
-             patch("tempfile.NamedTemporaryFile", return_value=mock_tmp):
+        with patch("tempfile.mkstemp", return_value=(1, str(out_path))), \
+             patch("os.close"), \
+             patch.object(scanner, "_validate_target_path", return_value=str(target)), \
+             patch.object(scanner, "_safe_run_command", side_effect=RuntimeError("fail")):
             assert scanner.run(str(target)) == []
-        # The real file is deleted because the finally block calls outfile.unlink()
-        # on a Path constructed from mock_tmp.name (the real file path)
-        assert not fake_tmp.exists()
+
+        # The finally block should delete the real output file
+        assert not out_path.exists()
 
     @staticmethod
     def _make_valid_output(scanner):
@@ -275,34 +265,33 @@ class TestRunCommon:
 
 
 # ---------------------------------------------------------------------------
-# Trivy-specific run tests (image validation)
+# Trivy-specific run tests
 # ---------------------------------------------------------------------------
 class TestTrivyRun:
     def test_run_image_rejected(self, trivy_scanner):
         with patch.object(trivy_scanner, "_validate_image_target", return_value=""):
             assert trivy_scanner.run("--invalid") == []
 
-    def test_run_success(self, trivy_scanner, tmp_path):
-        fake_tmp = tmp_path / "trivy_out.json"
-        fake_tmp.write_text(json.dumps(make_trivy_output()))
+    def test_run_success(self, trivy_scanner):
+        # Trivy uses the scanner's allowed_base_dir for temporary output
+        out_path = trivy_scanner.allowed_base_dir / "trivy_out.json"
+        out_path.write_text(json.dumps(make_trivy_output()))
 
-        mock_tmp = make_tmpfile_mock(fake_tmp)
-
-        with patch.object(trivy_scanner, "_validate_image_target", return_value="nginx:latest"), \
+        with patch("tempfile.mkstemp", return_value=(1, str(out_path))), \
+             patch("os.close"), \
+             patch.object(trivy_scanner, "_validate_image_target", return_value="nginx:latest"), \
              patch.object(trivy_scanner, "_safe_run_command") as mock_run, \
-             patch("tempfile.NamedTemporaryFile", return_value=mock_tmp), \
-             patch.object(trivy_scanner, "_validate_target_path", return_value=str(fake_tmp)), \
              patch.object(trivy_scanner, "parse", wraps=trivy_scanner.parse) as mock_parse:
             mock_run.return_value.returncode = 0
             result = trivy_scanner.run("nginx:latest")
 
         mock_run.assert_called_once()
-        mock_parse.assert_called_once_with(str(fake_tmp))
+        mock_parse.assert_called_once_with(str(out_path))
         assert len(result) == 2
 
 
 # ---------------------------------------------------------------------------
-# Trivy _validate_image_target tests
+# Trivy _validate_image_target
 # ---------------------------------------------------------------------------
 class TestTrivyImageValidation:
     @pytest.mark.parametrize(
@@ -331,31 +320,29 @@ class TestTrivyImageValidation:
 
 
 # ---------------------------------------------------------------------------
-# Scanner-specific parse tests
+# Scanner-specific parse tests (files created inside allowed_base_dir)
 # ---------------------------------------------------------------------------
 class TestGitleaksParse:
     @pytest.fixture
     def scanner(self, tmp_path):
-        allowed_base = tmp_path / "scan_root"
-        allowed_base.mkdir()
-        return GitleaksScanner(allowed_base_dir=allowed_base)
+        base = tmp_path / "scan_root"
+        base.mkdir()
+        return GitleaksScanner(allowed_base_dir=base)
 
-    def test_list_format(self, scanner, tmp_path):
-        f = tmp_path / "report.json"
+    def test_list_format(self, scanner):
+        f = scanner.allowed_base_dir / "report.json"
         f.write_text(json.dumps(make_gitleaks_list_output()))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 2
         assert findings[0]["id"] == "gitlab-pat"
         assert findings[0]["severity"] == "CRITICAL"
         assert "redacted" in findings[0]["description"].lower()
         assert findings[1]["id"] == "aws-access-key"
 
-    def test_dict_format(self, scanner, tmp_path):
-        f = tmp_path / "report.json"
+    def test_dict_format(self, scanner):
+        f = scanner.allowed_base_dir / "report.json"
         f.write_text(json.dumps(make_gitleaks_dict_output()))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 1
         assert findings[0]["id"] == "generic-api-key"
         assert findings[0]["line"] == 42
@@ -364,26 +351,24 @@ class TestGitleaksParse:
 class TestPoutineParse:
     @pytest.fixture
     def scanner(self, tmp_path):
-        allowed_base = tmp_path / "scan_root"
-        allowed_base.mkdir()
-        return PoutineScanner(allowed_base_dir=allowed_base)
+        base = tmp_path / "scan_root"
+        base.mkdir()
+        return PoutineScanner(allowed_base_dir=base)
 
-    def test_valid_report(self, scanner, tmp_path):
-        f = tmp_path / "poutine.json"
+    def test_valid_report(self, scanner):
+        f = scanner.allowed_base_dir / "poutine.json"
         f.write_text(json.dumps(make_poutine_output()))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 2
         assert findings[0]["id"] == "PO-001"
         assert findings[0]["line"] == 15
         assert findings[1]["severity"] == "CRITICAL"
 
-    def test_missing_location(self, scanner, tmp_path):
+    def test_missing_location(self, scanner):
         data = {"findings": [{"rule_id": "R1", "severity": "LOW", "message": "test"}]}
-        f = tmp_path / "noloc.json"
+        f = scanner.allowed_base_dir / "noloc.json"
         f.write_text(json.dumps(data))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert findings[0]["target"] == ""
         assert findings[0]["line"] is None
 
@@ -391,29 +376,27 @@ class TestPoutineParse:
 class TestSemgrepParse:
     @pytest.fixture
     def scanner(self, tmp_path):
-        allowed_base = tmp_path / "scan_root"
-        allowed_base.mkdir()
-        return SemgrepScanner(allowed_base_dir=allowed_base)
+        base = tmp_path / "scan_root"
+        base.mkdir()
+        return SemgrepScanner(allowed_base_dir=base)
 
-    def test_valid_report(self, scanner, tmp_path):
-        f = tmp_path / "semgrep.json"
+    def test_valid_report(self, scanner):
+        f = scanner.allowed_base_dir / "semgrep.json"
         f.write_text(json.dumps(make_semgrep_output()))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 3
         assert findings[0]["severity"] == "MEDIUM"  # WARNING -> MEDIUM
         assert findings[1]["severity"] == "HIGH"  # ERROR -> HIGH
         assert findings[2]["severity"] == "LOW"  # INFO -> LOW
         assert findings[0]["line"] == 10
 
-    def test_no_results_key(self, scanner, tmp_path):
-        f = tmp_path / "empty.json"
+    def test_no_results_key(self, scanner):
+        f = scanner.allowed_base_dir / "empty.json"
         f.write_text('{"other": []}')
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            assert scanner.parse(str(f)) == []
+        assert scanner.parse(str(f)) == []
 
-    def test_skips_invalid_items(self, scanner, tmp_path):
-        f = tmp_path / "mixed.json"
+    def test_skips_invalid_items(self, scanner):
+        f = scanner.allowed_base_dir / "mixed.json"
         f.write_text(
             json.dumps(
                 {
@@ -429,8 +412,7 @@ class TestSemgrepParse:
                 }
             )
         )
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 1
 
 
@@ -439,11 +421,10 @@ class TestTrivyParse:
     def scanner(self, trivy_scanner):
         return trivy_scanner
 
-    def test_valid_report(self, scanner, tmp_path):
-        f = tmp_path / "trivy.json"
+    def test_valid_report(self, scanner):
+        f = scanner.allowed_base_dir / "trivy.json"
         f.write_text(json.dumps(make_trivy_output()))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 2
         assert findings[0]["id"] == "CVE-2024-0001"
         assert findings[0]["severity"] == "CRITICAL"
@@ -452,7 +433,7 @@ class TestTrivyParse:
         assert findings[0]["line"] is None
         assert findings[1]["target"] == "nginx:latest"
 
-    def test_skips_non_dict_vulnerabilities(self, scanner, tmp_path):
+    def test_skips_non_dict_vulnerabilities(self, scanner):
         data = {
             "Results": [
                 {
@@ -469,34 +450,31 @@ class TestTrivyParse:
                 }
             ]
         }
-        f = tmp_path / "mixed.json"
+        f = scanner.allowed_base_dir / "mixed.json"
         f.write_text(json.dumps(data))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 1
 
 
 class TestZizmorParse:
     @pytest.fixture
     def scanner(self, tmp_path):
-        allowed_base = tmp_path / "scan_root"
-        allowed_base.mkdir()
-        return ZizmorScanner(allowed_base_dir=allowed_base)
+        base = tmp_path / "scan_root"
+        base.mkdir()
+        return ZizmorScanner(allowed_base_dir=base)
 
-    def test_valid_report(self, scanner, tmp_path):
-        f = tmp_path / "zizmor.json"
+    def test_valid_report(self, scanner):
+        f = scanner.allowed_base_dir / "zizmor.json"
         f.write_text(json.dumps(make_zizmor_output()))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert len(findings) == 1
         assert findings[0]["id"] == "ZIZ-001"
         assert findings[0]["severity"] == "HIGH"
         assert findings[0]["line"] == 22
 
-    def test_missing_location(self, scanner, tmp_path):
+    def test_missing_location(self, scanner):
         data = {"findings": [{"rule_id": "Z1", "severity": "MEDIUM", "message": "test"}]}
-        f = tmp_path / "noloc.json"
+        f = scanner.allowed_base_dir / "noloc.json"
         f.write_text(json.dumps(data))
-        with patch.object(scanner, "_validate_target_path", return_value=str(f)):
-            findings = scanner.parse(str(f))
+        findings = scanner.parse(str(f))
         assert findings[0]["line"] is None

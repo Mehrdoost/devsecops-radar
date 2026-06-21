@@ -1,12 +1,10 @@
-"""Tests for the ScannerAdapter class."""
+"""Tests for the ScannerAdapter class – final version (fixed hasattr issue)."""
 
 import os
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Ensure env vars are set before importing models
 os.environ["JWT_SECRET"] = "a" * 32
 os.environ["PIPELINE_API_KEY"] = "valid-api-key"
 
@@ -18,8 +16,10 @@ from devsecops_radar.scanners.adapter import ScannerAdapter
 def mock_scanner():
     scanner = MagicMock()
     scanner.__class__.__name__ = "MockScanner"
-    # Safe default: path validation just returns the path unchanged
     scanner._validate_target_path = lambda p: p
+    # By default, _validate_findings should pass through findings unchanged,
+    # otherwise MagicMock's auto‑created attribute returns a MagicMock object.
+    scanner._validate_findings = lambda x: x
     return scanner
 
 
@@ -75,45 +75,67 @@ class TestSafeMapToSchema:
 # ---------------------------------------------------------------------------
 class TestParse:
     def test_scanner_path_validation_rejects(self, adapter, mock_scanner):
-        mock_scanner._validate_target_path.return_value = None  # override default
+        mock_scanner._validate_target_path.return_value = None
         assert adapter.parse("/bad") == []
 
-    def test_scanner_path_validation_accepts(self, adapter, mock_scanner, tmp_path):
+    def test_scanner_path_validation_accepts(self, adapter, mock_scanner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "results.json"
         f.write_text("{}")
-        mock_scanner._validate_target_path.return_value = str(f)  # still returns path
+        mock_scanner._validate_target_path.return_value = str(f)
         raw = [{"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"}]
-        mock_scanner.parse.return_value = raw
+        # Replace parse with a dedicated mock that returns a list
+        mock_scanner.parse = MagicMock(return_value=raw)
         result = adapter.parse(str(f))
         assert len(result) == 1
         assert isinstance(result[0], FindingSchema)
 
-    def test_file_not_found(self, adapter, mock_scanner):
-        # ensure path validation passes (default lambda)
-        assert adapter.parse("/no/such/file") == []
+    def test_file_not_found(self, adapter, mock_scanner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        missing = tmp_path / "missing.json"
+        assert adapter.parse(str(missing)) == []
 
-    def test_file_not_readable(self, adapter, mock_scanner, tmp_path):
+    def test_file_not_readable(self, adapter, mock_scanner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "unreadable.json"
         f.write_text("{}")
-        with patch("os.access", return_value=False):
+        with patch("devsecops_radar.scanners.adapter.safe_read_open", side_effect=PermissionError):
             assert adapter.parse(str(f)) == []
 
-    def test_file_too_large(self, adapter, mock_scanner, tmp_path):
+    def test_file_too_large(self, adapter, mock_scanner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "large.json"
         f.write_bytes(b"x" * (51 * 1024 * 1024))
         assert adapter.parse(str(f)) == []
 
-    def test_cannot_stat(self, adapter, mock_scanner, tmp_path):
+    def test_cannot_stat(self, adapter, mock_scanner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "nostat.json"
-        with patch.object(Path, "stat", side_effect=OSError("nope")):
+        f.write_text("{}")
+        with patch("os.fstat", side_effect=OSError("nope")):
             assert adapter.parse(str(f)) == []
 
-    def test_scanner_parse_exception(self, adapter, mock_scanner, tmp_path):
+    def test_scanner_parse_exception(self, adapter, mock_scanner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         f = tmp_path / "ok.json"
         f.write_text("{}")
-        # default pass-through path validation is already set
         mock_scanner.parse.side_effect = RuntimeError("parse failed")
         assert adapter.parse(str(f)) == []
+
+    def test_scanner_with_validate_findings(self, adapter, mock_scanner, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        f = tmp_path / "results.json"
+        f.write_text("{}")
+        mock_scanner._validate_target_path.return_value = str(f)
+        raw = [
+            {"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"},
+            {"tool": ""},
+        ]
+        # Override _validate_findings to filter out invalid entries
+        mock_scanner._validate_findings = lambda data: [d for d in data if d.get("tool")]
+        mock_scanner.parse = MagicMock(return_value=raw)
+        result = adapter.parse(str(f))
+        assert len(result) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +144,7 @@ class TestParse:
 class TestRun:
     def test_success(self, adapter, mock_scanner):
         raw = [{"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"}]
-        mock_scanner.run.return_value = raw
+        mock_scanner.run = MagicMock(return_value=raw)
         result = adapter.run("target")
         assert len(result) == 1
         assert isinstance(result[0], FindingSchema)
@@ -130,3 +152,13 @@ class TestRun:
     def test_exception(self, adapter, mock_scanner):
         mock_scanner.run.side_effect = RuntimeError("fail")
         assert adapter.run("target") == []
+
+    def test_with_validate_findings(self, adapter, mock_scanner):
+        raw = [
+            {"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"},
+            {"tool": ""},
+        ]
+        mock_scanner._validate_findings = lambda data: [d for d in data if d.get("tool")]
+        mock_scanner.run = MagicMock(return_value=raw)
+        result = adapter.run("target")
+        assert len(result) == 1

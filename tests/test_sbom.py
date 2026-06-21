@@ -1,4 +1,4 @@
-"""Tests for SBOM generation and dependency analysis."""
+"""Tests for SBOM generation and dependency analysis – updated for atomic write and base_dir."""
 
 import json
 import subprocess
@@ -10,7 +10,6 @@ import pytest
 from loguru import logger
 
 from devsecops_radar.core.sbom import (
-    _is_safe_path,
     _validate_file_size,
     apply_vex_filter,
     detect_dependency_confusion,
@@ -40,58 +39,28 @@ def capture_loguru(level: str = "TRACE"):
 # ---------------------------------------------------------------------------
 @pytest.fixture
 def mock_syft_missing():
-    """Simulate syft not installed."""
     with patch("shutil.which", return_value=None):
         yield
 
 
 @pytest.fixture
 def mock_syft_available():
-    """Simulate syft available."""
     with patch("shutil.which", return_value="/usr/local/bin/syft"):
         yield
 
 
 # ============================================================================
-# Tests for _is_safe_path
-# ============================================================================
-class TestIsSafePath:
-    def test_safe_path_inside_cwd(self, tmp_path):
-        # Patch cwd to return tmp_path (a Path object)
-        with patch("pathlib.Path.cwd", return_value=tmp_path):
-            assert _is_safe_path(str(tmp_path / "subdir")) is True
-
-    def test_path_outside_cwd(self, tmp_path):
-        with patch("pathlib.Path.cwd", return_value=tmp_path):
-            outside = Path(tmp_path.anchor) / "outside"
-            assert _is_safe_path(str(outside)) is False
-
-    def test_custom_base_dir(self, tmp_path):
-        base = tmp_path / "base"
-        base.mkdir()
-        safe = base / "inside.txt"
-        assert _is_safe_path(str(safe), base_dir=base) is True
-
-        outside = tmp_path / "outside.txt"
-        assert _is_safe_path(str(outside), base_dir=base) is False
-
-    def test_exception_returns_false(self):
-        with patch("pathlib.Path.resolve", side_effect=OSError("bad")):
-            assert _is_safe_path("anything") is False
-
-
-# ============================================================================
-# Tests for _validate_file_size
+# Tests for _validate_file_size (unchanged helper)
 # ============================================================================
 class TestValidateFileSize:
     def test_small_file(self, tmp_path):
         f = tmp_path / "small.bin"
-        f.write_bytes(b"x" * 1024)  # 1 KB
+        f.write_bytes(b"x" * 1024)
         assert _validate_file_size(f, max_size_mb=1) is True
 
     def test_file_exceeds_limit(self, tmp_path):
         f = tmp_path / "big.bin"
-        f.write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
+        f.write_bytes(b"x" * (2 * 1024 * 1024))
         with capture_loguru() as msgs:
             assert _validate_file_size(f, max_size_mb=1) is False
         assert any("exceeds" in m for m in msgs)
@@ -108,18 +77,17 @@ class TestValidateFileSize:
 # ============================================================================
 class TestGenerateSbom:
     def test_path_not_safe(self, mock_syft_available):
+        # Path outside the allowed directory should cause ValueError and return None
         with patch("pathlib.Path.cwd", return_value=Path("/safe")):
             with capture_loguru() as msgs:
                 result = generate_sbom("/etc/passwd")
         assert result is None
-        assert any("outside allowed path" in m for m in msgs)
+        assert any("blocked" in m.lower() for m in msgs)
 
     def test_target_not_directory(self, mock_syft_available, tmp_path):
         f = tmp_path / "notadir"
         f.touch()
-        with patch(
-            "devsecops_radar.core.sbom._is_safe_path", return_value=True
-        ):
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
             with capture_loguru() as msgs:
                 result = generate_sbom(str(f))
         assert result is None
@@ -128,9 +96,7 @@ class TestGenerateSbom:
     def test_syft_missing(self, mock_syft_missing, tmp_path):
         target = tmp_path / "src"
         target.mkdir()
-        with patch(
-            "devsecops_radar.core.sbom._is_safe_path", return_value=True
-        ):
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
             with capture_loguru() as msgs:
                 result = generate_sbom(str(target))
         assert result is None
@@ -141,7 +107,12 @@ class TestGenerateSbom:
         target.mkdir()
         output = tmp_path / "sbom.json"
         sbom_data = {"bomFormat": "CycloneDX"}
+        # pre-create the output so the final read succeeds
         output.write_text(json.dumps(sbom_data))
+
+        tmp_output = output.with_name(f".tmp-{output.name}")
+        # Simulate syft writing to the tmp file
+        tmp_output.write_text(json.dumps(sbom_data))
 
         with patch("subprocess.run") as mock_run, patch(
             "pathlib.Path.cwd", return_value=tmp_path
@@ -151,6 +122,8 @@ class TestGenerateSbom:
 
         assert result == sbom_data
         mock_run.assert_called_once()
+        # The tmp file should be replaced to the final output
+        assert output.exists()
 
     def test_syft_process_error(self, mock_syft_available, tmp_path):
         target = tmp_path / "src"
@@ -202,10 +175,14 @@ class TestGenerateSbom:
         target = tmp_path / "src"
         target.mkdir()
         output = tmp_path / "sbom.json"
+        # Pre-create the tmp output so that it exists and is large
+        tmp_output = output.with_name(f".tmp-{output.name}")
+        tmp_output.write_bytes(b"x" * (51 * 1024 * 1024))  # 51 MB
 
-        with patch(
-            "devsecops_radar.core.sbom._validate_file_size", return_value=False
-        ), patch("subprocess.run"), patch("pathlib.Path.cwd", return_value=tmp_path):
+        with patch("subprocess.run") as mock_run, patch(
+            "pathlib.Path.cwd", return_value=tmp_path
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
             result = generate_sbom(str(target), str(output))
         assert result is None
 
@@ -227,7 +204,7 @@ class TestDetectDependencyConfusion:
             with capture_loguru() as msgs:
                 result = detect_dependency_confusion(path)
         assert result == []
-        assert any("Manifest file not found" in m for m in msgs)
+        assert any("Cannot read manifest" in m for m in msgs)
 
     def test_package_json(self, tmp_path):
         manifest = tmp_path / "package.json"
@@ -287,6 +264,14 @@ class TestDetectDependencyConfusion:
         assert len(result) == 1
         assert result[0]["package"] == "mycompany-lib"
 
+    def test_requirements_with_extras_and_markers(self, tmp_path):
+        manifest = tmp_path / "requirements.txt"
+        manifest.write_text("mycompany-lib[extra]>=1.0;python_version>'3.8'\n")
+        with patch("pathlib.Path.cwd", return_value=tmp_path):
+            result = detect_dependency_confusion(str(manifest))
+        assert len(result) == 1
+        assert result[0]["package"] == "mycompany-lib"
+
     def test_unsupported_format(self, tmp_path):
         manifest = tmp_path / "Pipfile"
         manifest.write_text("[packages]")
@@ -320,11 +305,11 @@ class TestApplyVexFilter:
         assert apply_vex_filter(findings, "/nonexistent.json") == findings
 
     def test_unsafe_vex_path(self, tmp_path):
-        # Create a real file so os.path.exists returns True
         vex_file = tmp_path / "vex.json"
         vex_file.write_text("{}")
         with patch(
-            "devsecops_radar.core.sbom._is_safe_path", return_value=False
+            "devsecops_radar.core.path_security.resolve_safe_path",
+            side_effect=ValueError("outside allowed"),
         ):
             with capture_loguru() as msgs:
                 result = apply_vex_filter(
@@ -390,4 +375,4 @@ class TestApplyVexFilter:
             with capture_loguru() as msgs:
                 result = apply_vex_filter(findings, str(vex))
         assert result == findings
-        assert any("Failed to read VEX" in m for m in msgs)
+        assert any("VEX file path is not allowed" in m for m in msgs)

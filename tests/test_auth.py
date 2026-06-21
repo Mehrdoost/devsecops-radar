@@ -1,6 +1,5 @@
-"""Tests for authentication and authorisation module (updated)."""
+"""Tests for authentication and authorisation module (updated – no internal rate limiting)."""
 
-import time
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -10,12 +9,7 @@ from flask import Flask, jsonify, request
 from loguru import logger
 
 from devsecops_radar.core.auth import (
-    _API_KEY_MAX_FAILURES,
-    _JWT_MAX_FAILURES,
-    _WINDOW_SECONDS,
     _extract_token_from_header,
-    _rate_limit_store,
-    _record_failed_attempt,
     create_token,
     login_required,
     require_any_auth,
@@ -44,11 +38,6 @@ def capture_loguru(level: str = "TRACE"):
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-@pytest.fixture(autouse=True)
-def reset_rate_limits():
-    _rate_limit_store.clear()
-
-
 @pytest.fixture
 def app():
     app = Flask(__name__)
@@ -81,52 +70,6 @@ class TestExtractToken:
     def test_bearer_no_token(self, app):
         with app.test_request_context(headers={"Authorization": "Bearer "}):
             assert _extract_token_from_header() == ""
-
-
-# ---------------------------------------------------------------------------
-# Tests for _record_failed_attempt (replaces old _enforce_rate_limit)
-# ---------------------------------------------------------------------------
-class TestRecordFailedAttempt:
-    def test_first_failure_not_blocked(self, app):
-        with app.test_request_context(environ_base={"REMOTE_ADDR": "1.2.3.4"}):
-            blocked = _record_failed_attempt(limit=5)
-            assert blocked is False
-
-    def test_blocked_after_max_failures(self, app):
-        ip = "1.2.3.4"
-        with app.test_request_context(environ_base={"REMOTE_ADDR": ip}):
-            # Simulate that limit already reached
-            with patch.dict(
-                "devsecops_radar.core.auth._rate_limit_store",
-                {ip: [time.time()] * 5},
-                clear=True,
-            ):
-                blocked = _record_failed_attempt(limit=5)
-            assert blocked is True
-
-    def test_window_expiry(self, app, monkeypatch):
-        ip = "1.2.3.4"
-        now = time.time()
-        monkeypatch.setattr(time, "time", lambda: now)
-        with app.test_request_context(environ_base={"REMOTE_ADDR": ip}):
-            # Fill failures to reach limit
-            for _ in range(5):
-                blocked = _record_failed_attempt(limit=5)
-                assert blocked is False  # never blocked until limit reached
-            # Next one would be blocked
-            assert _record_failed_attempt(limit=5) is True
-        # Advance past window
-        monkeypatch.setattr(time, "time", lambda: now + _WINDOW_SECONDS + 1)
-        with app.test_request_context(environ_base={"REMOTE_ADDR": ip}):
-            assert _record_failed_attempt(limit=5) is False  # allowed again
-
-    def test_different_ips_independent(self, app):
-        with app.test_request_context(environ_base={"REMOTE_ADDR": "10.0.0.1"}):
-            for _ in range(3):
-                _record_failed_attempt(limit=3)
-            assert _record_failed_attempt(limit=3) is True
-        with app.test_request_context(environ_base={"REMOTE_ADDR": "10.0.0.2"}):
-            assert _record_failed_attempt(limit=3) is False
 
 
 # ---------------------------------------------------------------------------
@@ -199,22 +142,6 @@ class TestLoginRequired:
                 assert "Authentication failed" in resp.json["error"]
         assert any("Unexpected error" in m for m in msgs)
 
-    def test_rate_limit_exceeded_on_failures(self, app, mock_settings, decorated_function):
-        # Exhaust the failure limit
-        ip = "1.1.1.1"
-        with patch.dict(
-            "devsecops_radar.core.auth._rate_limit_store",
-            {ip: [time.time()] * _JWT_MAX_FAILURES},
-        ):
-            with app.test_request_context(
-                environ_base={"REMOTE_ADDR": ip},
-                headers={"Authorization": "Bearer x"},
-            ):
-                with patch("devsecops_radar.core.auth.jwt.decode", side_effect=jwt.InvalidTokenError):
-                    resp, code = decorated_function()
-        assert code == 429
-        assert "Too many login failures" in resp.json["error"]
-
 
 # ---------------------------------------------------------------------------
 # Tests for require_api_key decorator
@@ -254,20 +181,6 @@ class TestRequireApiKey:
         with app.test_request_context(headers={"X-API-Key": "  test-api-key  "}):
             resp, code = decorated_function()
             assert code == 200
-
-    def test_rate_limit_exceeded_on_failures(self, app, mock_settings, decorated_function):
-        ip = "2.2.2.2"
-        with patch.dict(
-            "devsecops_radar.core.auth._rate_limit_store",
-            {ip: [time.time()] * _API_KEY_MAX_FAILURES},
-        ):
-            with app.test_request_context(
-                environ_base={"REMOTE_ADDR": ip},
-                headers={"X-API-Key": "wrong"},
-            ):
-                resp, code = decorated_function()
-        assert code == 429
-        assert "Too many API key failures" in resp.json["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -313,35 +226,6 @@ class TestRequireAnyAuth:
                 resp, code = decorated_function()
                 assert code == 401
                 assert "Invalid token" in resp.json["error"]
-
-    def test_api_key_rate_limit(self, app, mock_settings, decorated_function):
-        ip = "3.3.3.3"
-        with patch.dict(
-            "devsecops_radar.core.auth._rate_limit_store",
-            {ip: [time.time()] * _API_KEY_MAX_FAILURES},
-        ):
-            with app.test_request_context(
-                environ_base={"REMOTE_ADDR": ip},
-                headers={"X-API-Key": "wrong"},
-            ):
-                resp, code = decorated_function()
-        assert code == 429
-        assert "Too many API key failures" in resp.json["error"]
-
-    def test_jwt_rate_limit(self, app, mock_settings, decorated_function):
-        ip = "4.4.4.4"
-        with patch.dict(
-            "devsecops_radar.core.auth._rate_limit_store",
-            {ip: [time.time()] * _JWT_MAX_FAILURES},
-        ):
-            with app.test_request_context(
-                environ_base={"REMOTE_ADDR": ip},
-                headers={"Authorization": "Bearer bad"},
-            ):
-                with patch("devsecops_radar.core.auth.jwt.decode", side_effect=jwt.InvalidTokenError):
-                    resp, code = decorated_function()
-        assert code == 429
-        assert "Too many authentication failures" in resp.json["error"]
 
 
 # ---------------------------------------------------------------------------

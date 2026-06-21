@@ -41,7 +41,7 @@
 11. [Core Capabilities](#-core-capabilities)
 12. [Community Rules & Online Updates](#-community-rules--online-updates)
 13. [Attack Simulation & What‑If Analysis](#-attack-simulation--what‑if-analysis)
-14. [Security Improvements in v0.4.5](#-security-improvements-in-v045)
+14. [Security Improvements in v0.4.6](#-security-improvements-in-v046)
 15. [Architecture](#-architecture)
 16. [Roadmap](#-roadmap)
 17. [Testing & CI](#-testing--ci)
@@ -234,6 +234,8 @@ Once processed, the centralized findings are rendered inside your topology mappi
 ## 📸 Dashboard Preview
 
 *(See the animated demo at the top of this README for a live preview of the UI in action!)*
+
+![Dashboard preview ](docs/Dashboard.png)
 
 ---
 
@@ -570,7 +572,7 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## ✨ What's New in v0.4.5
+## ✨ What's New in v0.4.6
 
 - **Live Sentry Feed** – real‑time CI/CD findings appear automatically  
 - **Scanner Status** – see which tools are installed and ready  

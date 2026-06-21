@@ -1,9 +1,13 @@
+# devsecops_radar/scanners/poutine.py
 import json
+import os
 import tempfile
 from pathlib import Path
+from typing import cast
 
 from loguru import logger
 
+from devsecops_radar.core.path_security import safe_read_open
 from devsecops_radar.scanners.base import BaseScanner, ScannerFinding
 
 
@@ -15,16 +19,23 @@ class PoutineScanner(BaseScanner):
         return "poutine"
 
     def run(self, target: str) -> list[ScannerFinding]:
-        # 1. Strict path validation to prevent Path Traversal
         safe_target = self._validate_target_path(target)
         if not safe_target:
             return []
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            outfile = Path(tmp.name)
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                suffix=".json", dir=str(self.allowed_base_dir)
+            )
+            os.close(tmp_fd)
+            outfile = Path(tmp_path)
+        except OSError as e:
+            logger.error(
+                f"Cannot create temporary file in {self.allowed_base_dir}: {e}"
+            )
+            return []
 
         try:
-            # 2. Secure command construction (no shell=True)
             cmd = [
                 self.binary_path,
                 "scan",
@@ -33,10 +44,8 @@ class PoutineScanner(BaseScanner):
                 "--output", str(outfile),
             ]
 
-            # 3. Execution with built-in timeouts
             result = self._safe_run_command(cmd)
 
-            # 4. Check return code before attempting to parse
             if result.returncode != 0:
                 logger.error(
                     f"Poutine exited with code {result.returncode}: "
@@ -44,7 +53,8 @@ class PoutineScanner(BaseScanner):
                 )
                 return []
 
-            return self.parse(str(outfile))
+            findings = self.parse(str(outfile))
+            return self._validate_findings(cast(list[dict], findings))  # type: ignore[return-value]
 
         except Exception as e:
             logger.error(f"Poutine scan failed: {e}")
@@ -59,35 +69,32 @@ class PoutineScanner(BaseScanner):
                     )
 
     def parse(self, file_path: str) -> list[ScannerFinding]:
-        # 1. Path safety validation (prevent Path Traversal)
-        safe_path = self._validate_target_path(file_path)
-        if not safe_path:
-            return []
-
-        path = Path(safe_path)
-
-        if not path.exists() or not path.is_file():
-            logger.error(f"Poutine report not found: {file_path}")
-            return []
-
-        # 2. Memory Exhaustion Protection (50MB limit)
         try:
-            if path.stat().st_size > 50 * 1024 * 1024:
-                logger.error(
-                    f"Poutine report {path.name} is too large. Skipping."
-                )
+            f = safe_read_open(file_path, base_dir=self.allowed_base_dir)
+        except ValueError as e:
+            logger.error(f"Security or file error: {e}")
+            return []
+        except (FileNotFoundError, PermissionError, OSError) as e:
+            logger.error(f"Could not read Poutine report: {e}")
+            return []
+
+        with f:
+            try:
+                stat = os.fstat(f.fileno())
+                if stat.st_size > 50 * 1024 * 1024:
+                    logger.error(
+                        f"Poutine report too large ({stat.st_size} bytes). Skipping."
+                    )
+                    return []
+            except OSError as e:
+                logger.error(f"Cannot stat report: {e}")
                 return []
-        except OSError as e:
-            logger.error(f"Cannot stat file {path}: {e}")
-            return []
 
-        # 3. Parse JSON safely
-        try:
-            with open(path, encoding="utf-8") as f:
+            try:
                 data = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"Could not parse Poutine output: {e}")
-            return []
+            except json.JSONDecodeError as e:
+                logger.error(f"Could not parse Poutine output: {e}")
+                return []
 
         findings: list[ScannerFinding] = []
         for result in data.get("findings", []):
@@ -95,14 +102,17 @@ class PoutineScanner(BaseScanner):
                 continue
 
             loc = result.get("location", {})
+            if not isinstance(loc, dict):
+                loc = {}
+
             findings.append({
                 "tool": self.name,
-                "target": loc.get("file", "") if isinstance(loc, dict) else "",
+                "target": loc.get("file", ""),
                 "id": result.get("rule_id", ""),
                 "severity": str(result.get("severity", "UNKNOWN")).upper(),
                 "title": result.get("message", ""),
                 "description": result.get("description", ""),
-                "line": loc.get("line") if isinstance(loc, dict) else None,
+                "line": loc.get("line"),
             })
 
         return findings

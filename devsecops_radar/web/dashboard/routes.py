@@ -1,6 +1,10 @@
+# devsecops_radar/web/dashboard/routes.py
+import asyncio
+import io
 import json
 import os
 import shutil
+import tempfile
 from datetime import UTC, datetime, timedelta
 from html import escape as html_escape
 from pathlib import Path
@@ -11,8 +15,10 @@ from loguru import logger
 from devsecops_radar.core.auth import require_any_auth
 from devsecops_radar.core.database import db_session, get_findings_paginated
 from devsecops_radar.core.models import Scan
+from devsecops_radar.core.path_security import safe_read_open
 from devsecops_radar.core.rag import rag_search
 from devsecops_radar.core.reporting import generate_pdf_report, redact_sensitive
+from devsecops_radar.web.sentry.routes import get_live_snapshot  # <-- new import
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
@@ -21,24 +27,23 @@ FINDINGS_FILE = os.environ.get("FINDINGS_FILE", "findings.json")
 AI_SUMMARY_FILE = os.environ.get("AI_SUMMARY_FILE", "findings_ai_summary.json")
 
 
-def _safe_data_path(filename: str) -> Path | None:
-    """Validate that the data file is within the allowed directory."""
-    file_path = (_ALLOWED_DATA_DIR / filename).resolve()
+def load_findings() -> list[dict]:
+    """Load findings from the validated JSON file (TOCTOU‑safe)."""
     try:
-        if file_path.is_relative_to(_ALLOWED_DATA_DIR):
-            return file_path
-    except ValueError:
-        pass
-    return None
-
-
-def load_findings():
-    """Load findings from the validated JSON file."""
-    safe_path = _safe_data_path(FINDINGS_FILE)
-    if not safe_path or not safe_path.exists():
+        with safe_read_open(FINDINGS_FILE, base_dir=_ALLOWED_DATA_DIR) as f:
+            return json.load(f)
+    except (ValueError, FileNotFoundError, PermissionError, OSError, json.JSONDecodeError) as e:
+        logger.error(f"Failed to load findings: {e}")
         return []
-    with open(safe_path, encoding="utf-8") as f:
-        return json.load(f)
+
+
+def load_ai_summary() -> dict:
+    """Load AI summary securely."""
+    try:
+        with safe_read_open(AI_SUMMARY_FILE, base_dir=_ALLOWED_DATA_DIR) as f:
+            return json.load(f)
+    except (ValueError, FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
+        return {}
 
 
 # --------------------------------------------------------------------------
@@ -46,7 +51,6 @@ def load_findings():
 # --------------------------------------------------------------------------
 @dashboard_bp.route("/")
 def index():
-    """Serve the single‑page dashboard application."""
     return render_template("index.html")
 
 
@@ -64,8 +68,6 @@ def api_history():
     session = db_session()
     try:
         scans_query = session.query(Scan).order_by(Scan.timestamp.desc())
-
-        # Optional time range filtering
         range_filter = request.args.get("range", "all")
         now = datetime.now(UTC)
         if range_filter == "week":
@@ -79,7 +81,6 @@ def api_history():
             scans_query = scans_query.filter(Scan.timestamp >= since)
 
         scans = scans_query.all()
-
         result = []
         for s in scans:
             counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
@@ -96,37 +97,32 @@ def api_history():
             })
         return jsonify(result)
     finally:
-        pass
+        pass  # scoped session handled by teardown
 
 
 @dashboard_bp.route("/api/scanner-status")
 @require_any_auth
 def scanner_status():
-    """Report which scanners are available on the system."""
     scanners = ["trivy", "semgrep", "poutine", "zizmor", "gitleaks"]
-    status = {}
-    for name in scanners:
-        status[name] = shutil.which(name) is not None
+    status = {name: shutil.which(name) is not None for name in scanners}
     return jsonify(status)
 
 
 @dashboard_bp.route("/api/live-feed")
 @require_any_auth
 def live_feed():
-    """Expose the latest live findings from the sentry buffer."""
-    from devsecops_radar.web.sentry.routes import _LIVE_FINDINGS
-    return jsonify(list(_LIVE_FINDINGS))
+    """Expose the latest live findings from the sentry buffer (TTL‑pruned)."""
+    return jsonify(get_live_snapshot())
 
 
 @dashboard_bp.route("/api/policy-status")
 @require_any_auth
 def policy_status():
-    """Return current policy evaluation status."""
     policy_path = Path("policy.json")
     if not policy_path.exists():
         return jsonify({"status": "no_policy"})
     try:
-        with open(policy_path, encoding="utf-8") as f:
+        with safe_read_open(policy_path, base_dir=_ALLOWED_DATA_DIR) as f:
             policy = json.load(f)
         max_crit = policy.get("max_critical")
         if max_crit is None:
@@ -138,7 +134,7 @@ def policy_status():
             "current_critical": crit_count,
             "violated": crit_count > max_crit,
         })
-    except (json.JSONDecodeError, OSError) as e:
+    except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError) as e:
         logger.error(f"Failed to read policy.json: {e}")
         return jsonify({"status": "error"})
 
@@ -158,8 +154,6 @@ def notify_jira_endpoint():
     jira_token = os.environ.get("JIRA_TOKEN")
     if not jira_url or not jira_token:
         return jsonify({"error": "JIRA_URL and JIRA_TOKEN must be set"}), 500
-
-    import asyncio
 
     from devsecops_radar.core.notifier import notify_jira
     try:
@@ -185,8 +179,6 @@ def notify_asana_endpoint():
     asana_workspace = os.environ.get("ASANA_WORKSPACE")
     if not asana_token or not asana_workspace:
         return jsonify({"error": "ASANA_TOKEN and ASANA_WORKSPACE must be set"}), 500
-
-    import asyncio
 
     from devsecops_radar.core.notifier import notify_asana
     try:
@@ -218,25 +210,33 @@ def api_simulate():
     if not selected:
         return jsonify({"error": "Not found"}), 404
 
-    from devsecops_radar.core.attack_simulation import run_sandboxed_poc, simulate_attack
+    from devsecops_radar.core.attack_simulation import (
+        run_sandboxed_poc,
+        simulate_attack,
+    )
 
     scripts = []
     descs = []
-    last_script_path = None
+    last_artifact = None
     for f in selected:
-        spath = simulate_attack(f)
-        if spath:
-            with open(spath, encoding="utf-8") as sf:
-                scripts.append(sf.read())
-            last_script_path = spath
+        artifact = simulate_attack(f)
+        if artifact:
+            try:
+                # Read script safely – confined to artifact.temp_dir (not /tmp)
+                with safe_read_open(artifact.script_path, base_dir=artifact.temp_dir) as sf:
+                    scripts.append(sf.read())
+                last_artifact = artifact
+            except Exception as e:
+                logger.warning(f"Could not read simulation script {artifact.script_path}: {e}")
         descs.append(f"{f.get('id')}: {f.get('title')}")
+
     full_script = "\n".join(scripts)
     desc = " → ".join(descs)
 
     sandbox_output = None
-    if last_script_path:
+    if last_artifact:
         try:
-            sandbox_output = run_sandboxed_poc(last_script_path)
+            sandbox_output = run_sandboxed_poc(last_artifact)
         except Exception:
             logger.warning("Sandbox execution failed silently.", exc_info=True)
 
@@ -253,14 +253,9 @@ def api_report():
     fmt = request.args.get("format", "pdf")
     framework = request.args.get("framework")
     findings = load_findings()
-    ai_summary = {}
-    safe_summary = _safe_data_path(AI_SUMMARY_FILE)
-    if safe_summary and safe_summary.exists():
-        with open(safe_summary, encoding="utf-8") as f:
-            ai_summary = json.load(f)
+    ai_summary = load_ai_summary()
 
     if fmt == "json":
-        import io
         data = json.dumps({"findings": findings, "ai_summary": ai_summary}, indent=2)
         return send_file(
             io.BytesIO(data.encode()),
@@ -292,18 +287,26 @@ def api_report():
             )
         html_parts.append("</table></body></html>")
         html_content = "\n".join(html_parts)
-        import io
         return send_file(
             io.BytesIO(html_content.encode()),
             mimetype="text/html",
             as_attachment=True,
             download_name="report.html",
         )
-    # PDF (default)
-    report_path = _ALLOWED_DATA_DIR / "report.pdf"
-    generate_pdf_report(findings, ai_summary, str(report_path), framework=framework)
-    return send_file(
-        report_path,
-        as_attachment=True,
-        download_name="pipeline_sentinel_report.pdf",
+
+    # PDF – generate to a unique temp file to avoid race conditions
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        suffix=".pdf", prefix="sentinel_report_", dir=str(_ALLOWED_DATA_DIR)
     )
+    os.close(tmp_fd)  # we'll let generate_pdf_report write to the path
+    try:
+        generate_pdf_report(findings, ai_summary, tmp_path, framework=framework, base_dir=_ALLOWED_DATA_DIR)
+        return send_file(
+            tmp_path,
+            as_attachment=True,
+            download_name="pipeline_sentinel_report.pdf",
+        )
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise

@@ -1,3 +1,4 @@
+# devsecops_radar/web/summary/routes.py
 import json
 import os
 from pathlib import Path
@@ -6,29 +7,23 @@ from flask import Blueprint, jsonify
 
 from devsecops_radar.core.auth import require_any_auth
 from devsecops_radar.core.database import get_scan_by_id
+from devsecops_radar.core.path_security import safe_read_open
 
 summary_bp = Blueprint("summary", __name__)
 
 _ALLOWED_DATA_DIR = Path.cwd().resolve()
 AI_SUMMARY_FILE = os.environ.get("AI_SUMMARY_FILE", "findings_ai_summary.json")
 
-def _safe_data_path(filename: str) -> Path | None:
-    file_path = (_ALLOWED_DATA_DIR / filename).resolve()
-    try:
-        if file_path.is_relative_to(_ALLOWED_DATA_DIR):
-            return file_path
-    except ValueError:
-        pass
-    return None
 
 @summary_bp.route("/summary")
 @require_any_auth
 def api_summary():
-    safe_path = _safe_data_path(AI_SUMMARY_FILE)
-    if safe_path and safe_path.exists():
-        with open(safe_path, encoding="utf-8") as f:
+    try:
+        with safe_read_open(AI_SUMMARY_FILE, base_dir=_ALLOWED_DATA_DIR) as f:
             return jsonify(json.load(f))
-    return jsonify({})
+    except (ValueError, FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
+        return jsonify({})
+
 
 @summary_bp.route("/badge/<int:scan_id>.svg")
 def security_badge(scan_id):

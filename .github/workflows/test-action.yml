@@ -6,15 +6,37 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Pipeline Sentinel
+      - name: Run Pipeline Sentinel Action
+        id: sentinel
         uses: ./action
         with:
           trivy_report: sample_trivy.json
           semgrep_report: sample_semgrep.json
           poutine_report: sample_poutine.json
+          zizmor_report: sample_zizmor.json
+          gitleaks_report: sample_gitleaks.json
+          fail_on_scanner_error: 'false'  # some sample files may not exist yet
+
+      - name: Verify merged findings
+        run: |
+          if [ ! -f findings.json ]; then
+            echo "::error::findings.json was not created"
+            exit 1
+          fi
+          echo "Findings file created successfully"
+          python -c "import json; data=json.load(open('findings.json')); print(f'Total findings: {len(data)}')"
+
+      - name: Show outputs (if any)
+        run: |
+          echo "Critical count: ${{ steps.sentinel.outputs.critical_count }}"
+          echo "High count: ${{ steps.sentinel.outputs.high_count }}"
+          echo "Total count: ${{ steps.sentinel.outputs.total_count }}"

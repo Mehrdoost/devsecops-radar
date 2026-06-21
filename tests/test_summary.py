@@ -1,15 +1,13 @@
-"""Tests for summary routes."""
+"""Tests for summary routes (updated – no _safe_data_path, uses safe_read_open)."""
 
 import json
+from io import StringIO
 from unittest.mock import patch
 
 import pytest
 from flask import Flask
 
-from devsecops_radar.web.summary.routes import (
-    _safe_data_path,
-    summary_bp,
-)
+from devsecops_radar.web.summary.routes import summary_bp
 
 
 @pytest.fixture
@@ -29,42 +27,23 @@ def client(app, monkeypatch):
         yield client
 
 
-class TestSafeDataPath:
-    def test_allowed_file(self, tmp_path):
-        base = tmp_path / "allowed"
-        base.mkdir()
-        f = base / "data.json"
-        f.touch()
-        with patch(
-            "devsecops_radar.web.summary.routes._ALLOWED_DATA_DIR", base
-        ):
-            assert _safe_data_path("data.json") == f.resolve()
-
-    def test_traversal_blocked(self, tmp_path):
-        base = tmp_path / "allowed"
-        base.mkdir()
-        with patch(
-            "devsecops_radar.web.summary.routes._ALLOWED_DATA_DIR", base
-        ):
-            assert _safe_data_path("../evil.txt") is None
-
-
 class TestApiSummary:
     def test_file_not_found(self, client, monkeypatch):
+        # Mock safe_read_open to raise FileNotFoundError
         monkeypatch.setattr(
-            "devsecops_radar.web.summary.routes.AI_SUMMARY_FILE",
-            "nonexistent.json",
+            "devsecops_radar.web.summary.routes.safe_read_open",
+            lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError),
         )
         resp = client.get("/summary")
         assert resp.status_code == 200
         assert resp.json == {}
 
-    def test_valid_summary_file(self, client, tmp_path, monkeypatch):
+    def test_valid_summary_file(self, client, monkeypatch):
         data = {"executive_summary": "All good", "risk_score": 85}
-        file = tmp_path / "summary.json"
-        file.write_text(json.dumps(data))
+        # Mock safe_read_open to return a file-like object containing the JSON data
         monkeypatch.setattr(
-            "devsecops_radar.web.summary.routes._ALLOWED_DATA_DIR", tmp_path
+            "devsecops_radar.web.summary.routes.safe_read_open",
+            lambda path, base_dir=None: StringIO(json.dumps(data)),
         )
         monkeypatch.setattr(
             "devsecops_radar.web.summary.routes.AI_SUMMARY_FILE",
@@ -73,6 +52,25 @@ class TestApiSummary:
         resp = client.get("/summary")
         assert resp.status_code == 200
         assert resp.json == data
+
+    def test_invalid_json(self, client, monkeypatch):
+        # Return a file with invalid JSON content
+        monkeypatch.setattr(
+            "devsecops_radar.web.summary.routes.safe_read_open",
+            lambda path, base_dir=None: StringIO("not json"),
+        )
+        monkeypatch.setattr(
+            "devsecops_radar.web.summary.routes.AI_SUMMARY_FILE",
+            "invalid.json",
+        )
+        resp = client.get("/summary")
+        assert resp.status_code == 200
+        assert resp.json == {}
+
+    def test_unauthenticated(self, app):
+        with app.test_client() as client:
+            resp = client.get("/summary")
+            assert resp.status_code == 401
 
 
 class TestSecurityBadge:

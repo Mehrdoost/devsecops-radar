@@ -1,3 +1,4 @@
+# devsecops_radar/core/analyzer.py
 import asyncio
 import json
 import os
@@ -20,6 +21,9 @@ except ImportError:
     logger.warning("tiktoken not installed; token‑aware chunking disabled.")
 
 
+# ---------------------------------------------------------------------------
+# Pydantic models (updated)
+# ---------------------------------------------------------------------------
 class AttackPath(BaseModel):
     title: str = Field(..., description="Short title of the attack path")
     description: str = Field(
@@ -28,6 +32,10 @@ class AttackPath(BaseModel):
     impact: str = Field(
         default="Impact assessment was not provided by the AI model.",
         description="Potential business or technical impact",
+    )
+    involved_findings: list[str] = Field(          # <-- NEW
+        default_factory=list,
+        description="List of finding IDs that form this attack path",
     )
 
 
@@ -56,16 +64,51 @@ class AIAnalysisResponse(BaseModel):
     top_remediations: list[Remediation] = Field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
 def _count_tokens(text: str) -> int:
     if TOKENIZER:
         try:
             return len(TOKENIZER.encode(text))
         except Exception:
             logger.debug("tiktoken encoding failed, falling back to character count", exc_info=True)
-    # Fallback: approximate by characters / 4
     return len(text) // 4
 
 
+def _sanitize_for_prompt(text: str) -> str:
+    """Remove control characters and null bytes to prevent prompt injection."""
+    if not isinstance(text, str):
+        return ""
+    # Remove null bytes
+    text = text.replace("\x00", "")
+    # Remove ASCII control characters except tab, newline, carriage return
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    return text
+
+
+def _sanitize_finding(finding: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in finding.items():
+        if isinstance(value, str):
+            sanitized[key] = _sanitize_for_prompt(value)
+        elif isinstance(value, dict):
+            sanitized[key] = _sanitize_finding(value)
+        elif isinstance(value, list):
+            sanitized[key] = [
+                _sanitize_finding(item) if isinstance(item, dict)
+                else _sanitize_for_prompt(item) if isinstance(item, str)
+                else item
+                for item in value
+            ]
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+# ---------------------------------------------------------------------------
+# Base Analyzer
+# ---------------------------------------------------------------------------
 class AIAnalyzer(ABC):
     """Abstract base class for AI security analysis engines."""
 
@@ -93,6 +136,9 @@ class AIAnalyzer(ABC):
         start_tag = f"<FINDINGS_DATA_{boundary}>"
         end_tag = f"</FINDINGS_DATA_{boundary}>"
 
+        # Sanitize all findings before putting them in the prompt
+        [_sanitize_finding(f) for f in findings]
+
         topology_text = ""
         if include_topology and topology:
             topo_str = json.dumps(topology)
@@ -106,12 +152,13 @@ class AIAnalyzer(ABC):
 IMPORTANT: Your response must be a single JSON object with exactly these fields:
 - "executive_summary": string (high-level summary)
 - "risk_score": number between 0 and 100
-- "attack_paths": list of objects with "title", "description", "impact"
+- "attack_paths": list of objects with "title", "description", "impact", and
+  "involved_findings" (list of finding IDs that form this attack path)
 - "top_remediations": list of objects with "finding_id", "title",
   "remediation_steps" (list of strings), and optionally "patch_content"
   (a string containing the exact code patch to apply, or null)
 
-Make sure every object in "attack_paths" includes all three fields.
+Make sure every object in "attack_paths" includes all four fields.
 Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
 
 {start_tag}
@@ -170,7 +217,6 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         if len(analyses) == 1:
             return analyses[0]
 
-        # Weighted risk score based on number of findings per chunk
         total_items = sum(chunk_sizes)
         if total_items > 0:
             weighted_score = sum(
@@ -220,30 +266,8 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         topology: dict[str, Any] | None = None,
         chunk_size: int = 5,
     ) -> dict[str, Any]:
-        # Build chunks with token awareness
-        chunks: list[list[dict[str, Any]]] = []
-        current_chunk: list[dict[str, Any]] = []
-        current_tokens = 0
-        max_tokens_per_chunk = 3200  # conservative for many local models
-
-        for finding in findings:
-            finding_json = json.dumps(finding)
-            tokens = _count_tokens(finding_json)
-            # If a single finding exceeds the limit, put it alone
-            if tokens > max_tokens_per_chunk and current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = []
-                current_tokens = 0
-            if current_tokens + tokens > max_tokens_per_chunk and current_chunk:
-                chunks.append(current_chunk)
-                current_chunk = [finding]
-                current_tokens = tokens
-            else:
-                current_chunk.append(finding)
-                current_tokens += tokens
-
-        if current_chunk:
-            chunks.append(current_chunk)
+        # Use chunk_size to split findings into smaller batches
+        chunks = [findings[i:i + chunk_size] for i in range(0, len(findings), chunk_size)]
 
         if len(chunks) > 10:
             logger.warning(
@@ -268,9 +292,39 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
                 valid_results.append(cast(dict[str, Any], res))
                 valid_chunk_sizes.append(len(chunk))
 
-        return self.merge_analyses(valid_results, valid_chunk_sizes)
+        merged = self.merge_analyses(valid_results, valid_chunk_sizes)
+
+        # ------------------------------------------------------------------
+        # Deterministic sanity check – uses dynamic_risk_score to set a floor.
+        # ------------------------------------------------------------------
+        # Compute average dynamic_risk_score as a floor
+        dynamic_scores = [
+            f.get("dynamic_risk_score", 0.0)
+            for f in findings
+            if isinstance(f.get("dynamic_risk_score"), (int, float))
+        ]
+        if dynamic_scores:
+            avg_dynamic = sum(dynamic_scores) / len(dynamic_scores)
+            # Scale from 0-10 to 0-100
+            deterministic_floor = min(100.0, avg_dynamic * 10.0)
+        else:
+            deterministic_floor = 0.0
+
+        if merged["risk_score"] < 0:
+            pass  # already marked as failure
+        elif merged["risk_score"] < deterministic_floor * 0.6:
+            logger.warning(
+                f"LLM reported risk {merged['risk_score']}, but deterministic "
+                f"floor is {deterministic_floor:.1f}. Overriding to deterministic floor."
+            )
+            merged["risk_score"] = round(deterministic_floor, 1)
+
+        return merged
 
 
+# ---------------------------------------------------------------------------
+# Ollama implementation
+# ---------------------------------------------------------------------------
 class OllamaAnalyzer(AIAnalyzer):
     def __init__(
         self, model_name: str = "llama3.2:latest", timeout: int = 300
@@ -310,7 +364,7 @@ class OllamaAnalyzer(AIAnalyzer):
             "system": (
                 "You are a DevSecOps AI assistant. Analyze security findings and output "
                 "a JSON object with keys: executive_summary, risk_score, attack_paths, top_remediations. "
-                "Each attack path must include title, description, and impact. "
+                "Each attack path must include title, description, impact, and involved_findings. "
                 "Each remediation may optionally include patch_content. "
                 "Output ONLY the JSON object, no other text."
             ),
@@ -319,11 +373,17 @@ class OllamaAnalyzer(AIAnalyzer):
             resp = await client.post(self.endpoint, json=payload)
             resp.raise_for_status()
             data = resp.json()
+            if "error" in data:
+                logger.error(f"Ollama API error: {data['error']}")
+                raise RuntimeError(f"Ollama API error: {data['error']}")
             return self._extract_and_validate_json(
                 data.get("response", "{}")
             )
 
 
+# ---------------------------------------------------------------------------
+# LiteLLM implementation
+# ---------------------------------------------------------------------------
 class LiteLLMAnalyzer(AIAnalyzer):
     def __init__(
         self, model_name: str = "gpt-4", timeout: int = 120
@@ -356,7 +416,7 @@ class LiteLLMAnalyzer(AIAnalyzer):
                     "content": (
                         "You are a DevSecOps AI assistant. Analyze security findings and output "
                         "a JSON object with keys: executive_summary, risk_score, attack_paths, top_remediations. "
-                        "Each attack path must include title, description, and impact. "
+                        "Each attack path must include title, description, impact, and involved_findings. "
                         "Each remediation may optionally include patch_content. "
                         "Output ONLY the JSON object, no other text."
                     ),
@@ -371,6 +431,9 @@ class LiteLLMAnalyzer(AIAnalyzer):
         return self._extract_and_validate_json(content)
 
 
+# ---------------------------------------------------------------------------
+# Factory function
+# ---------------------------------------------------------------------------
 def get_analyzer(
     backend: str = "ollama", model: str | None = None
 ) -> AIAnalyzer:

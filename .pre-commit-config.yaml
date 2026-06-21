@@ -16,9 +16,10 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
 
-  # Linting and formatting with Ruff (use the same version as in dev dependencies)
+  # Linting and formatting with Ruff
+  # Keep `rev` in sync with the version range in pyproject.toml (ruff>=0.3.0,<1.0)
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9   # upgrade to a recent stable release
+    rev: v0.6.9
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix]
@@ -26,7 +27,7 @@ repos:
 
   # Static type checking
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.2   # latest stable
+    rev: v1.11.2
     hooks:
       - id: mypy
         additional_dependencies:
@@ -41,10 +42,3 @@ repos:
       - id: bandit
         args: [--configfile, pyproject.toml]
         exclude: ^tests/
-
-  # (Optional) Dependency vulnerability check – uncomment if you want it in every commit
-  # - repo: https://github.com/Lucas-C/pre-commit-hooks-safety
-  #   rev: v1.3.3
-  #   hooks:
-  #     - id: safety
-  #       args: [check, --file=requirements.txt]

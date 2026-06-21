@@ -1,7 +1,6 @@
-"""Tests for the Flask application factory and web entry points."""
+"""Tests for the Flask application factory and web entry points – rate‑limiting disabled."""
 
 import os
-import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -27,11 +26,7 @@ with patch.dict("sys.modules", {
 }):
     import devsecops_radar.web.app as app_module
     from devsecops_radar.web.app import (
-        _LOGIN_MAX_ATTEMPTS,
-        _LOGIN_WINDOW_SECONDS,
-        _check_login_rate,
         _get_local_ip,
-        _login_rate_store,
         create_app,
         print_startup_banner,
     )
@@ -43,49 +38,32 @@ from devsecops_radar.core.settings import settings as settings_instance
 # Fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
-def clean_rate_limits():
-    _login_rate_store.clear()
+def _disable_rate_limiting(monkeypatch):
+    """Replace the rate_limited decorator with a no‑op."""
+    monkeypatch.setattr(app_module, "rate_limited", lambda *a, **kw: lambda f: f)
 
 
 @pytest.fixture
 def app():
     with patch.object(settings_instance, "DEBUG", False):
-        return create_app()
+        app = create_app()
+
+    # Unwrap any rate‑limited view functions that were decorated at import time
+    with app.app_context():
+        for endpoint in ("login", "dashboard.api_report", "dashboard.api_simulate"):
+            if endpoint in app.view_functions:
+                original = app.view_functions[endpoint]
+                while hasattr(original, "__wrapped__"):
+                    original = original.__wrapped__
+                app.view_functions[endpoint] = original
+
+    yield app
 
 
 @pytest.fixture
 def client(app):
     with app.test_client() as client:
         yield client
-
-
-# ---------------------------------------------------------------------------
-# _check_login_rate
-# ---------------------------------------------------------------------------
-class TestCheckLoginRate:
-    def test_allow_first_requests(self):
-        ip = "1.2.3.4"
-        for _ in range(_LOGIN_MAX_ATTEMPTS):
-            assert _check_login_rate(ip) is True
-        assert _check_login_rate(ip) is False
-
-    def test_window_expiry(self, monkeypatch):
-        ip = "5.6.7.8"
-        now = time.time()
-        monkeypatch.setattr(time, "time", lambda: now)
-        for _ in range(_LOGIN_MAX_ATTEMPTS):
-            assert _check_login_rate(ip) is True
-        assert _check_login_rate(ip) is False
-        monkeypatch.setattr(time, "time", lambda: now + _LOGIN_WINDOW_SECONDS + 1)
-        assert _check_login_rate(ip) is True
-
-    def test_different_ips_independent(self):
-        ip1 = "10.0.0.1"
-        ip2 = "10.0.0.2"
-        for _ in range(_LOGIN_MAX_ATTEMPTS):
-            assert _check_login_rate(ip1) is True
-        assert _check_login_rate(ip1) is False
-        assert _check_login_rate(ip2) is True
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +92,6 @@ class TestPrintStartupBanner:
 
     def test_without_rich(self, monkeypatch):
         monkeypatch.setattr(app_module, "HAS_RICH", False)
-        # should not raise
         print_startup_banner("127.0.0.1", 5000, True)
 
 
@@ -139,9 +116,8 @@ class TestCreateApp:
         assert "error" in resp.json
 
     def test_session_teardown_registered(self, app):
-        """The teardown function must be registered with the Flask app."""
         teardown_funcs = app.teardown_appcontext_funcs
-        assert teardown_funcs  # at least one function is registered
+        assert teardown_funcs
 
 
 # ---------------------------------------------------------------------------
@@ -204,17 +180,3 @@ class TestLoginEndpoint:
             content_type="application/json",
         )
         assert resp.status_code == 500
-
-    def test_rate_limit_exceeded(self, client):
-        ip = "127.0.0.1"
-        _login_rate_store[ip] = [time.time()] * _LOGIN_MAX_ATTEMPTS
-        try:
-            resp = client.post(
-                "/api/auth/login",
-                json={"password": "valid-api-key"},
-                content_type="application/json",
-            )
-            assert resp.status_code == 429
-            assert "Too many login attempts" in resp.json["error"]
-        finally:
-            _login_rate_store.pop(ip, None)

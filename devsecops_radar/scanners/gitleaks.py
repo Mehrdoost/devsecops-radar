@@ -1,9 +1,13 @@
+# devsecops_radar/scanners/gitleaks.py
 import json
+import os
 import tempfile
 from pathlib import Path
+from typing import cast
 
 from loguru import logger
 
+from devsecops_radar.core.path_security import safe_read_open
 from devsecops_radar.scanners.base import BaseScanner, ScannerFinding
 
 
@@ -19,8 +23,17 @@ class GitleaksScanner(BaseScanner):
         if not safe_target:
             return []
 
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
-            outfile = Path(tmp.name)
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(
+                suffix=".json", dir=str(self.allowed_base_dir)
+            )
+            os.close(tmp_fd)
+            outfile = Path(tmp_path)
+        except OSError as e:
+            logger.error(
+                f"Cannot create temporary file in {self.allowed_base_dir}: {e}"
+            )
+            return []
 
         try:
             cmd = [
@@ -33,6 +46,7 @@ class GitleaksScanner(BaseScanner):
             ]
 
             result = self._safe_run_command(cmd)
+
             if result.returncode not in (0, 1):
                 logger.error(
                     f"Gitleaks exited with unexpected code "
@@ -40,7 +54,8 @@ class GitleaksScanner(BaseScanner):
                 )
                 return []
 
-            return self.parse(str(outfile))
+            findings = self.parse(str(outfile))
+            return self._validate_findings(cast(list[dict], findings))  # type: ignore[return-value]
 
         except Exception as e:
             logger.error(f"Gitleaks scan failed: {e}")
@@ -55,29 +70,32 @@ class GitleaksScanner(BaseScanner):
                     )
 
     def parse(self, file_path: str) -> list[ScannerFinding]:
-        safe_path = self._validate_target_path(file_path)
-        if not safe_path:
-            return []
-
-        path = Path(safe_path)
-        if not path.exists() or not path.is_file():
-            logger.error(f"Gitleaks report not found: {file_path}")
-            return []
-
         try:
-            if path.stat().st_size > 50 * 1024 * 1024:
-                logger.error(f"Report file {path.name} is too large. Skipping.")
+            f = safe_read_open(file_path, base_dir=self.allowed_base_dir)
+        except ValueError as e:
+            logger.error(f"Security or file error: {e}")
+            return []
+        except (FileNotFoundError, PermissionError, OSError) as e:
+            logger.error(f"Could not read Gitleaks report: {e}")
+            return []
+
+        with f:
+            try:
+                stat = os.fstat(f.fileno())
+                if stat.st_size > 50 * 1024 * 1024:
+                    logger.error(
+                        f"Gitleaks report too large ({stat.st_size} bytes). Skipping."
+                    )
+                    return []
+            except OSError as e:
+                logger.error(f"Cannot stat report: {e}")
                 return []
-        except OSError as e:
-            logger.error(f"Cannot stat file {path}: {e}")
-            return []
 
-        try:
-            with open(path, encoding="utf-8") as f:
+            try:
                 data = json.load(f)
-        except json.JSONDecodeError as e:
-            logger.error(f"Could not parse Gitleaks output: {e}")
-            return []
+            except json.JSONDecodeError as e:
+                logger.error(f"Could not parse Gitleaks output: {e}")
+                return []
 
         if isinstance(data, list):
             raw_findings = data
@@ -92,15 +110,18 @@ class GitleaksScanner(BaseScanner):
             if not isinstance(item, dict):
                 continue
 
-            item.get("Match") or item.get("secret") or ""
+            target = str(item.get("File", item.get("file", "")))
+            rule_id = str(item.get("RuleID", item.get("ruleID", "")))
+
             description = (
-                f"Secret detected (type: {item.get('RuleID', 'unknown')}). "
+                f"Secret detected (type: {rule_id or 'unknown'}). "
                 "Content has been redacted."
             )
+
             findings.append({
                 "tool": self.name,
-                "target": str(item.get("File", item.get("file", ""))),
-                "id": str(item.get("RuleID", item.get("ruleID", ""))),
+                "target": target,
+                "id": rule_id,
                 "severity": "CRITICAL",
                 "title": str(item.get("Description", item.get("description", "Secret detected"))),
                 "description": description,

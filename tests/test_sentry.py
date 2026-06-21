@@ -1,26 +1,41 @@
-"""Tests for sentry routes (live-findings and scan-result)."""
+"""Tests for sentry routes (updated – _LIVE_BUFFER deque with TTL, get_live_snapshot)."""
 
+import time
 
 import pytest
 from flask import Flask
 
-# We import the blueprint and internal constants
 from devsecops_radar.web.sentry.routes import (
-    _LIVE_FINDINGS,
+    _LIVE_BUFFER,
     _LIVE_LOCK,
     _MAX_LIVE_FINDINGS,
+    _TTL_SECONDS,
+    get_live_snapshot,
     sentry_bp,
 )
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _insert_finding(data: dict, timestamp: float | None = None):
+    """Insert a finding into the live buffer (thread‑safe)."""
+    ts = timestamp if timestamp is not None else time.time()
+    with _LIVE_LOCK:
+        _LIVE_BUFFER.append((data, ts))
+
+
+def _clear_buffer():
+    with _LIVE_LOCK:
+        _LIVE_BUFFER.clear()
+
+
 @pytest.fixture(autouse=True)
-def clear_live_findings():
-    """Ensure the live findings buffer is empty before each test."""
-    with _LIVE_LOCK:
-        _LIVE_FINDINGS.clear()
+def clear_live_buffer():
+    """Ensure the live buffer is empty before each test."""
+    _clear_buffer()
     yield
-    with _LIVE_LOCK:
-        _LIVE_FINDINGS.clear()
+    _clear_buffer()
 
 
 @pytest.fixture
@@ -42,9 +57,6 @@ def client(app, monkeypatch):
         yield client
 
 
-# ---------------------------------------------------------------------------
-# Helper to create a valid finding dict
-# ---------------------------------------------------------------------------
 def make_finding(**kwargs):
     base = {
         "tool": "semgrep",
@@ -87,7 +99,6 @@ class TestReceiveScan:
         assert "Expected a JSON object" in resp.json["error"]
 
     def test_payload_too_large(self, client, monkeypatch):
-        # Reduce the max payload size so that even a minimal valid finding is too large.
         monkeypatch.setattr(
             "devsecops_radar.web.sentry.routes._MAX_PAYLOAD_SIZE", 10
         )
@@ -101,7 +112,6 @@ class TestReceiveScan:
         assert "Payload too large" in resp.json["error"]
 
     def test_invalid_finding_format(self, client):
-        # Missing required field 'id'
         data = {"tool": "x", "severity": "LOW", "target": "t", "title": "t"}
         resp = client.post(
             "/scan-result",
@@ -120,29 +130,33 @@ class TestReceiveScan:
         )
         assert resp.status_code == 200
         assert resp.json["status"] == "received"
-        # The finding should now be in the buffer
-        with _LIVE_LOCK:
-            assert len(_LIVE_FINDINGS) == 1
-            assert _LIVE_FINDINGS[0] == data
+        # Should be retrievable via snapshot
+        snapshot = get_live_snapshot()
+        assert len(snapshot) == 1
+        assert snapshot[0] == data
 
     def test_buffer_trim(self, client):
         # Fill the buffer to the maximum limit
+        now = time.time()
         with _LIVE_LOCK:
             for i in range(_MAX_LIVE_FINDINGS):
-                _LIVE_FINDINGS.append({"id": str(i)})
-        # Now send one more finding
+                _LIVE_BUFFER.append(({"id": str(i)}, now))
+        # Send one more finding via the endpoint
         data = make_finding(id="new")
         resp = client.post("/scan-result", json=data, content_type="application/json")
         assert resp.status_code == 200
-        with _LIVE_LOCK:
-            # The oldest entry (id=0) should have been removed
-            assert _LIVE_FINDINGS[0]["id"] == "1"
-            assert _LIVE_FINDINGS[-1]["id"] == "new"
-            assert len(_LIVE_FINDINGS) == _MAX_LIVE_FINDINGS
+        # Check that the oldest was evicted
+        snapshot = get_live_snapshot()
+        assert len(snapshot) == _MAX_LIVE_FINDINGS
+        ids = [f["id"] for f in snapshot]
+        assert "0" not in ids  # oldest removed
+        assert "new" in ids
+        # The oldest remaining should be "1"
+        assert ids[0] == "1"
 
 
 # ============================================================================
-# Tests for GET /live-findings
+# Tests for GET /live-findings (now uses get_live_snapshot)
 # ============================================================================
 class TestGetLiveFindings:
     def test_empty_buffer(self, client):
@@ -150,14 +164,28 @@ class TestGetLiveFindings:
         assert resp.status_code == 200
         assert resp.json == []
 
-    def test_returns_copy(self, client):
+    def test_returns_fresh_findings(self, client):
         data = make_finding()
-        with _LIVE_LOCK:
-            _LIVE_FINDINGS.append(data)
+        _insert_finding(data)
         resp = client.get("/live-findings")
         assert resp.status_code == 200
         assert resp.json == [data]
-        # Ensure it's a copy: modifying the response shouldn't affect the internal list
-        resp.json.append({"fake": True})
-        with _LIVE_LOCK:
-            assert len(_LIVE_FINDINGS) == 1
+
+    def test_expired_entries_not_returned(self, client, monkeypatch):
+        # Insert an old finding that should be pruned
+        old_time = time.time() - (_TTL_SECONDS + 10)
+        _insert_finding(make_finding(id="old"), timestamp=old_time)
+        # Insert a fresh one
+        fresh_data = make_finding(id="fresh")
+        _insert_finding(fresh_data)
+        resp = client.get("/live-findings")
+        assert resp.status_code == 200
+        assert resp.json == [fresh_data]  # old one pruned
+
+    def test_does_not_return_timestamps(self, client):
+        data = make_finding()
+        _insert_finding(data)
+        resp = client.get("/live-findings")
+        assert resp.status_code == 200
+        # Each item should be the original dict, not a tuple
+        assert resp.json[0] == data

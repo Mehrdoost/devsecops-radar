@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import os
 import platform
@@ -15,6 +16,7 @@ from loguru import logger
 
 from devsecops_radar.core.analyzer import get_analyzer
 from devsecops_radar.core.database import save_scan
+from devsecops_radar.core.path_security import resolve_safe_path
 from devsecops_radar.core.remediation import auto_fix, generate_pr, generate_remediation_guide
 from devsecops_radar.core.reporting import generate_pdf_report
 from devsecops_radar.core.rule_fusion import RuleFusionEngine
@@ -23,11 +25,13 @@ from devsecops_radar.core.valuation import compute_dynamic_risk_score
 from devsecops_radar.scanners.adapter import ScannerAdapter
 
 
+# --------------------------------------------------------------------------
+# System profiling helpers
+# --------------------------------------------------------------------------
 def get_system_ram_gb() -> float:
     try:
         return round(psutil.virtual_memory().total / (1024 ** 3), 1)
-    except Exception as e:
-        logger.debug(f"Failed to read system RAM: {e}")
+    except Exception:
         return 4.0
 
 
@@ -35,9 +39,7 @@ def get_gpu_status() -> bool:
     try:
         sys_os = platform.system()
         if sys_os in ["Windows", "Linux"]:
-            result = safe_subprocess_run(
-                ['nvidia-smi'], capture_output=True, text=True, check=False
-            )
+            result = safe_subprocess_run(['nvidia-smi'], capture_output=True, text=True, check=False)
             return result.returncode == 0
         elif sys_os == "Darwin":
             result = safe_subprocess_run(
@@ -45,8 +47,8 @@ def get_gpu_status() -> bool:
                 capture_output=True, text=True, check=False
             )
             return 'apple' in result.stdout.lower()
-    except Exception as e:
-        logger.debug(f"GPU check failed (non-critical): {e}")
+    except Exception:
+        logger.debug("GPU check failed", exc_info=True)
     return False
 
 
@@ -114,21 +116,35 @@ def estimate_analysis(
     return can_run, total_seconds, chunk_size, hardware_type
 
 
+# --------------------------------------------------------------------------
+# Plugin discovery – restricted to internal scanners only
+# --------------------------------------------------------------------------
 def discover_plugins() -> dict[str, Any]:
     plugins = {}
     try:
         for ep in entry_points(group='devsecops_radar.plugins'):
             cls = ep.load()
-            plugins[cls.name] = cls()
+            # Security: only load scanners that belong to the devsecops_radar package
+            if cls.__module__.startswith("devsecops_radar.scanners."):
+                plugins[cls.name] = cls()
+            else:
+                logger.warning(
+                    f"Blocked external plugin '{cls.__name__}' from "
+                    f"'{cls.__module__}'. Only built‑in scanners are allowed."
+                )
     except Exception as e:
         logger.error(f"Failed to load plugins: {e}")
     return plugins
 
 
+# --------------------------------------------------------------------------
+# CLI argument parsing
+# --------------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description='Pipeline Sentinel - Unified CI/CD Security Dashboard'
     )
+    # Scanners
     parser.add_argument('--trivy', type=str)
     parser.add_argument('--semgrep', type=str)
     parser.add_argument('--poutine', type=str)
@@ -137,37 +153,65 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--rules', type=str, help='Path to custom JSON rules directory')
     parser.add_argument('--topology', type=str, help='Path to infrastructure topology JSON')
 
+    # Output
     parser.add_argument('--output', type=str, default='findings.json')
     parser.add_argument('--analyze', action='store_true', help='Run AI analysis on findings')
     parser.add_argument('--force-ai', action='store_true', help='Force AI execution bypassing limits')
-    parser.add_argument(
-        '--llm-backend', type=str, default='ollama', choices=['ollama', 'litellm']
-    )
+    parser.add_argument('--llm-backend', type=str, default='ollama', choices=['ollama', 'litellm'])
     parser.add_argument('--llm-model', type=str, default='llama3.2')
 
+    # Policy and fix
     parser.add_argument('--policy', type=str, help='Path to strict JSON policy limits')
     parser.add_argument('--fix', action='store_true', help='Auto-apply AI suggested patches')
-    parser.add_argument(
-        '--review', action='store_true',
-        help='Interactively review each patch before applying'
-    )
+    parser.add_argument('--review', action='store_true', help='Interactively review each patch before applying')
     parser.add_argument('--report', type=str, help='Generate PDF report to specified path')
     parser.add_argument('--wizard', action='store_true', help='Safe interactive first-time setup')
 
-    parser.add_argument('--export-sarif', type=str, help='Export findings as SARIF to the given path')
-    parser.add_argument('--export-cyclonedx', type=str, help='Export findings as CycloneDX to the given path')
+    # Exports
+    parser.add_argument('--export-sarif', type=str, help='Export findings as SARIF')
+    parser.add_argument('--export-cyclonedx', type=str, help='Export findings as CycloneDX')
     parser.add_argument('--compliance', type=str, choices=['CIS', 'PCI-DSS', 'ISO27001'],
                         help='Compliance framework for reporting')
-    parser.add_argument('--notify-jira', action='store_true', help='Create Jira issues for CRITICAL findings')
-    parser.add_argument('--notify-asana', action='store_true', help='Create Asana tasks for CRITICAL findings')
-    parser.add_argument('--update-rules', action='store_true', help='Download/update community rules')
-    parser.add_argument('--rego-policy', type=str, help='Path to OPA Rego policy file (beta)')
+    parser.add_argument('--notify-jira', action='store_true')
+    parser.add_argument('--notify-asana', action='store_true')
+    parser.add_argument('--update-rules', action='store_true')
+    parser.add_argument('--rego-policy', type=str)
+
+    # New flag: fail on scanner errors
+    parser.add_argument('--fail-on-scanner-error', action='store_true',
+                        help='Exit with error if any scanner fails')
 
     return parser.parse_args()
 
 
+# --------------------------------------------------------------------------
+# Scanner execution with status tracking
+# --------------------------------------------------------------------------
+class ScanStatus:
+    """Track success/failure per scanner."""
+    def __init__(self):
+        self.success = []
+        self.failed = []
+
+    def add_success(self, name: str):
+        self.success.append(name)
+
+    def add_failure(self, name: str, reason: str):
+        self.failed.append((name, reason))
+        logger.error(f"Scanner {name} failed: {reason}")
+
+    def any_failed(self) -> bool:
+        return len(self.failed) > 0
+
+    def report(self):
+        if self.failed:
+            logger.warning("Some scanners failed:")
+            for name, reason in self.failed:
+                logger.warning(f"  - {name}: {reason}")
+
+
 async def run_scanner_async(
-    name: str, target: str, adapter: ScannerAdapter
+    name: str, target: str, adapter: ScannerAdapter, status: ScanStatus
 ) -> list[dict[str, Any]]:
     try:
         if Path(target).is_file():
@@ -176,17 +220,17 @@ async def run_scanner_async(
         else:
             logger.info(f"Running {name} scan on: {target}")
             validated = await asyncio.to_thread(adapter.run, target)
-        return [
-            v.model_dump() if hasattr(v, 'model_dump') else v.dict() for v in validated
-        ]
+        findings = [v.model_dump() if hasattr(v, 'model_dump') else v.dict() for v in validated]
+        status.add_success(name)
+        return findings
     except Exception as e:
-        logger.error(f"{name} plugin execution failed: {e}")
+        status.add_failure(name, str(e))
         return []
 
 
 async def run_all_scanners(
     args: argparse.Namespace, plugins: dict[str, Any]
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], ScanStatus]:
     scanner_targets = {
         'trivy': args.trivy,
         'semgrep': args.semgrep,
@@ -194,25 +238,36 @@ async def run_all_scanners(
         'zizmor': args.zizmor,
         'gitleaks': args.gitleaks,
     }
-
+    status = ScanStatus()
     tasks = []
+    # Create tasks in the same order as scanner_targets
     for name, target in scanner_targets.items():
         if target and name in plugins:
             adapter = ScannerAdapter(plugins[name])
-            tasks.append(run_scanner_async(name, target, adapter))
+            tasks.append(run_scanner_async(name, target, adapter, status))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     all_findings = []
-    for res in results:
+    # Pair results with the original task order (only for tasks that were launched)
+    task_index = 0
+    for name, target in scanner_targets.items():
+        if not target or name not in plugins:
+            continue
+        res = results[task_index]
         if isinstance(res, Exception):
-            logger.error(f"Scanner task failed: {res}")
+            logger.error(f"Scanner task crashed: {res}")
+            status.add_failure(name, str(res))
         elif isinstance(res, list):
             all_findings.extend(res)
+        task_index += 1
 
-    return all_findings
+    return all_findings, status
 
 
+# --------------------------------------------------------------------------
+# Risk sorting & AI analysis
+# --------------------------------------------------------------------------
 def sort_findings_by_risk(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     severity_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0}
     return sorted(
@@ -244,10 +299,7 @@ async def execute_ai_analysis(
 
     if not can_run:
         fallback = {
-            "executive_summary": (
-                "Analysis aborted due to low system resources. "
-                "Use --force-ai to bypass."
-            ),
+            "executive_summary": "Analysis aborted due to low system resources. Use --force-ai to bypass.",
             "risk_score": 0.0,
             "hardware_profile": hw_type
         }
@@ -266,7 +318,7 @@ async def execute_ai_analysis(
         return {}
 
     elapsed = int(time.time() - start_time)
-    analysis["execution_time"] = elapsed     # integer seconds
+    analysis["execution_time"] = elapsed
     analysis["hardware_profile"] = hw_type
 
     with open(summary_file, 'w', encoding='utf-8') as fh:
@@ -276,14 +328,14 @@ async def execute_ai_analysis(
     return analysis
 
 
-def interactive_remediation(
+# --------------------------------------------------------------------------
+# Interactive remediation (non‑blocking)
+# --------------------------------------------------------------------------
+async def interactive_remediation(
     findings: list[dict[str, Any]], ai_summary: dict[str, Any]
 ) -> None:
     if not sys.stdin.isatty():
-        logger.warning(
-            "No TTY detected; interactive review disabled. "
-            "Use --fix without --review for non-interactive auto-fix."
-        )
+        logger.warning("No TTY detected; interactive review disabled. Use --fix without --review.")
         return
 
     remediations = ai_summary.get('top_remediations', [])
@@ -294,32 +346,37 @@ def interactive_remediation(
     logger.info("\n" + generate_remediation_guide(remediations))
 
     approved_fixes = []
+    loop = asyncio.get_running_loop()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        for rem in remediations:
+            fid = rem.get('finding_id', 'UNKNOWN')
+            patch = rem.get('patch_content')
+            if not patch:
+                logger.info(f"Skipping {fid}: Only manual steps provided.")
+                continue
 
-    for rem in remediations:
-        fid = rem.get('finding_id', 'UNKNOWN')
-        patch = rem.get('patch_content')
+            logger.info(f"\n--- Proposed Patch for {fid} ---")
+            logger.info(patch)
 
-        if not patch:
-            logger.info(f"Skipping {fid}: Only manual steps provided.")
-            continue
+            try:
+                choice = await loop.run_in_executor(
+                    pool,
+                    input,
+                    "Apply this patch securely? [y/N/q(uit)]: "
+                )
+                choice = choice.strip().lower()
+            except EOFError:
+                logger.warning("Input stream closed; aborting interactive review.")
+                break
 
-        logger.info(f"\n--- Proposed Patch for {fid} ---")
-        logger.info(patch)
-
-        try:
-            choice = input("Apply this patch securely? [y/N/q(uit)]: ").strip().lower()
-        except EOFError:
-            logger.warning("Input stream closed; aborting interactive review.")
-            break
-
-        if choice == 'q':
-            logger.warning("Aborting interactive review.")
-            break
-        elif choice == 'y':
-            approved_fixes.append(rem)
-            logger.success(f"Patch {fid} queued.")
-        else:
-            logger.info(f"Patch {fid} rejected.")
+            if choice == 'q':
+                logger.warning("Aborting interactive review.")
+                break
+            elif choice == 'y':
+                approved_fixes.append(rem)
+                logger.success(f"Patch {fid} queued.")
+            else:
+                logger.info(f"Patch {fid} rejected.")
 
     if approved_fixes:
         tailored_summary = {"top_remediations": approved_fixes}
@@ -328,9 +385,11 @@ def interactive_remediation(
             generate_pr(modified_files)
 
 
+# --------------------------------------------------------------------------
+# Wizard
+# --------------------------------------------------------------------------
 def safe_wizard() -> None:
     logger.info("Welcome to Pipeline Sentinel Setup")
-
     if not shutil.which("ollama"):
         logger.warning("Ollama is not installed.")
         sys_os = platform.system()
@@ -350,6 +409,9 @@ def safe_wizard() -> None:
         logger.error(f"Failed to pull AI model: {e}")
 
 
+# --------------------------------------------------------------------------
+# Main application orchestrator (refactored)
+# --------------------------------------------------------------------------
 async def run_app() -> None:
     args = parse_args()
 
@@ -358,31 +420,36 @@ async def run_app() -> None:
         return
 
     logger.remove()
-    logger.add(
-        sys.stderr,
-        format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}"
-    )
+    logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
 
     plugins = discover_plugins()
 
-    # Community rules update (before scan)
+    # Update community rules
     if args.update_rules:
         RuleFusionEngine().update_community_rules()
         logger.success("Community rules updated.")
         return
 
-    findings = await run_all_scanners(args, plugins)
+    # Execute scanners
+    findings, scan_status = await run_all_scanners(args, plugins)
 
-    rule_engine: RuleFusionEngine | None = None
+    # Load custom rules if provided
+    rule_engine = None
     if args.rules:
         rule_engine = RuleFusionEngine(rules_dir=args.rules)
         rule_engine.load_all_rules()
         findings.extend(rule_engine.findings)
 
+    # Fail on scanner error if requested
+    if args.fail_on_scanner_error and scan_status.any_failed():
+        logger.error("One or more scanners failed. Failing build as requested.")
+        sys.exit(1)
+
     if not findings:
         logger.info("No findings were discovered or loaded. Exiting gracefully.")
         return
 
+    # Load topology
     topology = {}
     if args.topology:
         topo_path = Path(args.topology)
@@ -393,6 +460,7 @@ async def run_app() -> None:
             except Exception as e:
                 logger.error(f"Failed to parse topology JSON: {e}")
 
+    # Calculate dynamic risk scores
     for finding in findings:
         finding['dynamic_risk_score'] = compute_dynamic_risk_score(finding, topology)
 
@@ -400,43 +468,47 @@ async def run_app() -> None:
     if args.policy:
         if rule_engine is None:
             rule_engine = RuleFusionEngine(rules_dir=".")
-        rule_engine.findings = findings
         if not rule_engine.evaluate_policy(args.policy):
             logger.error("Build failed due to strict policy violations.")
             sys.exit(1)
 
-    # Rego policy placeholder (future full OPA integration)
+    # Rego policy evaluation (now functional)
     if args.rego_policy:
-        logger.warning("OPA Rego policy evaluation is not yet implemented. Ignoring --rego-policy.")
-
-    # Save to file and database
-    try:
-        out_path = Path(args.output).resolve()
-        if not out_path.is_relative_to(Path.cwd()):
-            logger.error("Output file must be inside the current working directory.")
+        if rule_engine is None:
+            rule_engine = RuleFusionEngine(rules_dir=".")
+        if not rule_engine.evaluate_rego_policy(args.rego_policy):
+            logger.error("Build failed due to OPA Rego policy violation.")
             sys.exit(1)
-        with open(out_path, 'w', encoding='utf-8') as fh:
-            json.dump(findings, fh, indent=2)
-        save_scan(findings)
-        logger.success(f"Aggregated {len(findings)} findings into {args.output}")
-    except Exception as e:
-        logger.error(f"Database/File save error: {e}")
 
+    # Save findings atomically with safe path resolution
+    out_path = resolve_safe_path(args.output, Path.cwd())
+    with open(out_path, 'w', encoding='utf-8') as fh:
+        json.dump(findings, fh, indent=2)
+    save_scan(findings)
+    logger.success(f"Aggregated {len(findings)} findings into {args.output}")
+
+    # AI analysis
     ai_summary = await execute_ai_analysis(args, findings, topology)
 
     # Auto-fix / review
     if args.fix and ai_summary:
         if args.review:
-            interactive_remediation(findings, ai_summary)
+            await interactive_remediation(findings, ai_summary)
         else:
             logger.warning("Executing Auto-Fix for ALL AI suggestions without review!")
             modified = auto_fix(findings, ai_summary)
             if modified:
                 generate_pr(modified)
 
-    # Export reports
+    # Reports & exports (compliance support added)
     if args.report:
-        generate_pdf_report(findings, ai_summary, args.report)
+        generate_pdf_report(
+            findings,
+            ai_summary,
+            args.report,
+            framework=args.compliance,        # <-- was missing
+            base_dir=Path.cwd(),
+        )
         logger.success(f"PDF report generated: {args.report}")
 
     if args.export_sarif:

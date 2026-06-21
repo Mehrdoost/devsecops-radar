@@ -1,11 +1,15 @@
+# devsecops_radar/core/database.py
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
 from loguru import logger
+from pydantic import ValidationError
 from sqlalchemy.orm import scoped_session
 
 from devsecops_radar.core.models import (
     Finding,
+    FindingSchema,
     Scan,
     SessionLocal,
 )
@@ -25,6 +29,20 @@ def init_db() -> None:
         models_init_db()
         _tables_initialized = True
     logger.info("Database tables and constraints verified.")
+
+
+@contextmanager
+def get_session():
+    """Context manager that yields a session and removes it on exit."""
+    session = db_session()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        db_session.remove()
 
 
 def _truncate_string(value: str, max_length: int = 2000) -> str:
@@ -67,8 +85,7 @@ def save_scan(
     """Persist a scan and its findings atomically."""
     init_db()
 
-    session = db_session()
-    try:
+    with get_session() as session:
         exec_time = _safe_float(
             ai_summary.get("execution_time") if ai_summary else None
         )
@@ -83,97 +100,98 @@ def save_scan(
         session.flush()
 
         for f in findings:
+            try:
+                valid = FindingSchema(**f)
+            except ValidationError as e:
+                logger.warning(f"Skipping invalid finding: {e}")
+                continue
+
             new_finding = Finding(
                 scan_id=new_scan.id,
-                tool=_truncate_string(f.get("tool", "UNKNOWN")),
-                rule_id=f.get("id", "UNKNOWN"),
-                severity=f.get("severity", "LOW").upper(),
-                target=_truncate_string(f.get("target", "UNKNOWN"), 1000),
-                title=_truncate_string(f.get("title", ""), 500),
-                description=_truncate_string(f.get("description", ""), 2000),
-                line=_safe_int(f.get("line")),
-                dynamic_risk_score=f.get("dynamic_risk_score", 0.0),
+                tool=_truncate_string(valid.tool),
+                rule_id=_truncate_string(valid.rule_id or valid.id, 500),
+                severity=valid.severity,
+                target=_truncate_string(valid.target, 1000),
+                title=_truncate_string(valid.title, 500),
+                description=_truncate_string(valid.description or "", 2000),
+                line=_safe_int(valid.line),
+                dynamic_risk_score=valid.dynamic_risk_score,
             )
             session.add(new_finding)
 
-        session.commit()
         logger.success(f"Scan {new_scan.id} saved with {len(findings)} findings.")
-    except Exception as e:
-        session.rollback()
-        logger.error(f"Failed to save scan: {e}")
-        raise
 
 
 def get_all_scans() -> list[dict[str, Any]]:
-    session = db_session()
-    scans = session.query(Scan).order_by(Scan.timestamp.desc()).all()
-    return [
-        {
-            "scan_id": s.id,
-            "timestamp": s.timestamp.isoformat() if s.timestamp else None,
-            "risk_score": s.risk_score,
-            "hardware_profile": s.hardware_profile,
-        }
-        for s in scans
-    ]
+    with get_session() as session:
+        scans = session.query(Scan).order_by(Scan.timestamp.desc()).all()
+        return [
+            {
+                "scan_id": s.id,
+                "timestamp": s.timestamp.isoformat() if s.timestamp else None,
+                "risk_score": s.risk_score,
+                "hardware_profile": s.hardware_profile,
+            }
+            for s in scans
+        ]
 
 
 def get_scan_by_id(scan_id: int) -> dict[str, Any] | None:
-    session = db_session()
-    scan = session.query(Scan).filter(Scan.id == scan_id).first()
-    if not scan:
-        return None
-    findings_list = [
-        {
-            "finding_db_id": f.id,
-            "tool": f.tool,
-            "id": f.rule_id,
-            "severity": f.severity,
-            "target": f.target,
-            "title": f.title,
-            "description": f.description,
+    with get_session() as session:
+        scan = session.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan:
+            return None
+        findings_list = [
+            {
+                "finding_db_id": f.id,
+                "tool": f.tool,
+                "id": f.rule_id,
+                "severity": f.severity,
+                "target": f.target,
+                "title": f.title,
+                "description": f.description,
+            }
+            for f in scan.findings
+        ]
+        return {
+            "scan_id": scan.id,
+            "timestamp": scan.timestamp.isoformat() if scan.timestamp else None,
+            "risk_score": scan.risk_score,
+            "hardware_profile": scan.hardware_profile,
+            "execution_time": scan.execution_time,
+            "findings": findings_list,
         }
-        for f in scan.findings
-    ]
-    return {
-        "scan_id": scan.id,
-        "timestamp": scan.timestamp.isoformat() if scan.timestamp else None,
-        "risk_score": scan.risk_score,
-        "hardware_profile": scan.hardware_profile,
-        "execution_time": scan.execution_time,
-        "findings": findings_list,
-    }
 
 
 def get_findings_paginated(page: int = 1, per_page: int = 50) -> dict[str, Any]:
     per_page = max(1, min(per_page, 100))
     page = max(1, page)
 
-    session = db_session()
-    total = session.query(Finding).count()
-    findings = (
-        session.query(Finding)
-        .order_by(Finding.id.desc())
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all()
-    )
-    return {
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "data": [
-            {
-                "scan_id": f.scan_id,
-                "tool": f.tool,
-                "id": f.rule_id,
-                "severity": f.severity,
-                "target": f.target,
-                "title": f.title,
-            }
-            for f in findings
-        ],
-    }
+    with get_session() as session:
+        total = session.query(Finding).count()
+        findings = (
+            session.query(Finding)
+            .order_by(Finding.id.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        return {
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "data": [
+                {
+                    "scan_id": f.scan_id,
+                    "tool": f.tool,
+                    "id": f.rule_id,
+                    "severity": f.severity,
+                    "target": f.target,
+                    "title": f.title,
+                }
+                for f in findings
+            ],
+        }
 
 
 def compare_scans(scan_id1: int, scan_id2: int) -> dict[str, Any]:

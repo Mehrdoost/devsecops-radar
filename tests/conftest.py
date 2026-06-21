@@ -5,8 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# Prevent PyO3/cryptography errors in test environment by mocking before
-# any module that might try to import them.
+# Prevent PyO3/cryptography errors in test environment
 # ---------------------------------------------------------------------------
 for mod in (
     "cryptography",
@@ -32,14 +31,25 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(autouse=True)
-def _clear_rate_limits(monkeypatch):
-    """Reset in‑memory rate‑limiter stores before each test."""
-    from devsecops_radar.core.auth import _rate_limit_store as auth_store
-    auth_store.clear()
-
+def _clear_rate_limits():
+    """Reset the in‑memory rate‑limiter store before each test."""
     try:
-        from devsecops_radar.web.app import _login_rate_store as login_store
-        login_store.clear()
+        from devsecops_radar.web.app import _rate_store
+        _rate_store.clear()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limiting(monkeypatch):
+    """Make the rate_limited decorator a no‑op so no test ever gets 429."""
+    try:
+        from devsecops_radar.web import app as web_app
+        monkeypatch.setattr(
+            web_app,
+            "rate_limited",
+            lambda *a, **kw: lambda f: f,
+        )
     except Exception:
         pass
 

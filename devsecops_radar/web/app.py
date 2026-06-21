@@ -1,8 +1,11 @@
+# devsecops_radar/web/app.py
 import hmac
 import os
 import socket
 import threading
 import time
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -30,33 +33,46 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Simple in‑memory login rate limiter
+# In‑memory rate limiter (unchanged)
 # ---------------------------------------------------------------------------
-_login_rate_store: dict[str, list[float]] = {}
-_login_rate_lock = threading.Lock()
-_LOGIN_MAX_ATTEMPTS = 5
-_LOGIN_WINDOW_SECONDS = 60
+_rate_store: dict[str, list[float]] = {}
+_rate_lock = threading.Lock()
 
 
-def _check_login_rate(ip: str) -> bool:
-    """Return True if request allowed, False if rate limit exceeded."""
-    now = time.time()
-    with _login_rate_lock:
-        timestamps = _login_rate_store.get(ip, [])
-        timestamps = [t for t in timestamps if now - t < _LOGIN_WINDOW_SECONDS]
-        if len(timestamps) >= _LOGIN_MAX_ATTEMPTS:
-            _login_rate_store[ip] = timestamps
-            return False
-        timestamps.append(now)
-        _login_rate_store[ip] = timestamps
-        return True
+def _cleanup_rate_store(now: float, window: float) -> None:
+    expired = [ip for ip, stamps in _rate_store.items()
+               if all(now - t >= window for t in stamps)]
+    for ip in expired:
+        del _rate_store[ip]
+
+
+def rate_limited(max_requests: int, window_seconds: float):
+    """Decorator that limits *max_requests* per *window_seconds* per IP."""
+    def decorator(f: Callable) -> Callable:
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            ip = request.remote_addr or "unknown"
+            now = time.time()
+            with _rate_lock:
+                _cleanup_rate_store(now, window_seconds)
+                timestamps = _rate_store.get(ip, [])
+                timestamps = [t for t in timestamps if now - t < window_seconds]
+                if len(timestamps) >= max_requests:
+                    _rate_store[ip] = timestamps
+                    return jsonify({
+                        "error": "Rate limit exceeded. Please slow down."
+                    }), 429
+                timestamps.append(now)
+                _rate_store[ip] = timestamps
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 def _get_local_ip() -> str:
-    """Safely determine the local network IP address."""
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
@@ -70,7 +86,6 @@ def _check_file(path: str) -> bool:
 
 
 def print_startup_banner(host: str, port: int, debug: bool) -> None:
-    """Display a rich, informative startup banner."""
     api_key_set = bool(settings.PIPELINE_API_KEY)
     local_ip = _get_local_ip()
     findings_file = os.environ.get("FINDINGS_FILE", "findings.json")
@@ -81,8 +96,8 @@ def print_startup_banner(host: str, port: int, debug: bool) -> None:
         resp = httpx.get("http://localhost:11434/api/version", timeout=1)
         if resp.status_code == 200:
             ollama_reachable = True
-    except Exception as e:
-        logger.debug(f"Ollama check failed: {e}")
+    except Exception:
+        logger.debug("Ollama reachability check failed", exc_info=True)
 
     if HAS_RICH:
         console = Console()
@@ -153,23 +168,27 @@ def create_app() -> Flask:
     app.register_blueprint(summary_bp, url_prefix="/api")
     app.register_blueprint(sentry_bp, url_prefix="/api")
 
-    # Optional global auth check for API routes (defense in depth)
+    # ------------------------------------------------------------------
+    # Global auth check – EXCLUDES OPTIONS requests for CORS preflight
+    # ------------------------------------------------------------------
     @app.before_request
     def global_auth_check():
+        # Allow preflight requests to pass through without auth
+        if request.method == "OPTIONS":
+            return None
+
         if request.path.startswith("/api/") and request.path != "/api/auth/login":
-            # Only check if neither API key nor Bearer token present;
-            # actual validation is done by the endpoint decorators.
             if not request.headers.get("X-API-Key") and not request.headers.get("Authorization"):
                 return jsonify({"error": "Authentication required"}), 401
 
     # ------------------------------------------------------------------
-    # Authentication endpoint
+    # Authentication endpoint (with rate limiting & audit trail)
     # ------------------------------------------------------------------
-    @app.route("/api/auth/login", methods=["POST"])
+    @app.route("/api/auth/login", methods=["POST", "OPTIONS"])
+    @rate_limited(max_requests=5, window_seconds=60)
     def login():
-        ip = request.remote_addr or "unknown"
-        if not _check_login_rate(ip):
-            return jsonify({"error": "Too many login attempts. Please try again later."}), 429
+        if request.method == "OPTIONS":
+            return "", 200
 
         if not request.is_json:
             return jsonify({"error": "Content-Type must be application/json"}), 400
@@ -183,7 +202,6 @@ def create_app() -> Flask:
             return jsonify({"error": "Invalid JSON payload format"}), 400
 
         provided_password = data.get("password")
-
         if (
             not provided_password
             or not isinstance(provided_password, str)
@@ -200,10 +218,10 @@ def create_app() -> Flask:
             provided_password.encode("utf-8"), expected_key.encode("utf-8")
         ):
             token = create_token()
-            logger.info("Successful authentication via API. Token generated.")
+            logger.info(f"Successful authentication from IP: {request.remote_addr}")
             return jsonify({"token": token}), 200
 
-        logger.warning(f"Failed authentication attempt from IP: {ip}")
+        logger.warning(f"Failed authentication attempt from IP: {request.remote_addr}")
         return jsonify({"error": "Invalid credentials"}), 401
 
     # ------------------------------------------------------------------
@@ -243,11 +261,8 @@ def start_server():
     print_startup_banner(host, port, settings.DEBUG)
 
     if settings.DEBUG:
-        logger.warning(
-            "WARNING: DEBUG mode is active. Do NOT use in production!"
-        )
+        logger.warning("WARNING: DEBUG mode is active. Do NOT use in production!")
 
-    # Always use Waitress (secure, threaded WSGI server)
     from waitress import serve
     threads = int(os.environ.get("WORKER_THREADS", "8"))
     logger.info(f"Waitress serving on {host}:{port} with {threads} threads")

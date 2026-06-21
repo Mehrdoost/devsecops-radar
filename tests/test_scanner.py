@@ -1,7 +1,4 @@
-"""
-Unit tests for devsecops_radar.cli.scanner.
-Covers all public functions and major branches with mocked external dependencies.
-"""
+"""Tests for CLI orchestrator (scanner.py) – fully updated for the new code."""
 
 import argparse
 import asyncio
@@ -12,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 import pytest
 
 from devsecops_radar.cli.scanner import (
+    ScanStatus,
     discover_plugins,
     estimate_analysis,
     execute_ai_analysis,
@@ -27,10 +25,10 @@ from devsecops_radar.cli.scanner import (
     sort_findings_by_risk,
 )
 
+
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
-
 @pytest.fixture
 def mock_logger():
     with patch("devsecops_radar.cli.scanner.logger") as mock:
@@ -43,10 +41,13 @@ def mock_psutil():
         yield mock
 
 
+def make_status() -> ScanStatus:
+    return ScanStatus()
+
+
 # ---------------------------------------------------------------------------
 # get_system_ram_gb
 # ---------------------------------------------------------------------------
-
 class TestGetSystemRamGb:
     def test_success(self, mock_psutil):
         mock_psutil.virtual_memory.return_value.total = 8 * 1024**3
@@ -60,7 +61,6 @@ class TestGetSystemRamGb:
 # ---------------------------------------------------------------------------
 # get_gpu_status
 # ---------------------------------------------------------------------------
-
 class TestGetGpuStatus:
     def test_nvidia_smi_success(self):
         with patch("devsecops_radar.cli.scanner.platform.system", return_value="Linux"), \
@@ -98,7 +98,6 @@ class TestGetGpuStatus:
 # ---------------------------------------------------------------------------
 # estimate_analysis
 # ---------------------------------------------------------------------------
-
 class TestEstimateAnalysis:
     @patch("devsecops_radar.cli.scanner.psutil")
     def test_litellm_backend(self, mock_psutil):
@@ -139,8 +138,6 @@ class TestEstimateAnalysis:
         mock_psutil.virtual_memory.return_value.total = 3 * 1024**3
         can_run, secs, chunk, hw = estimate_analysis(1, "llama3.2", "ollama", force_ai=False)
         assert can_run is False
-        # In source code, if ram < 4 and not force_ai, chunk_size and base_time are NOT modified.
-        # The adjustments only happen if force_ai=True (the else branch). So chunk remains 5 and secs is 1*8.0.
         assert chunk == 5
         assert secs == 1 * 8.0
 
@@ -152,7 +149,7 @@ class TestEstimateAnalysis:
         can_run, secs, chunk, hw = estimate_analysis(1, "llama3.2", "ollama", force_ai=True)
         assert can_run is True
         assert chunk == 2
-        assert secs == 1 * (8.0 * 3.0)  # base_time multiplied by 3
+        assert secs == 1 * (8.0 * 3.0)
 
     @patch("devsecops_radar.cli.scanner.psutil")
     @patch("devsecops_radar.cli.scanner.get_gpu_status", return_value=False)
@@ -168,12 +165,12 @@ class TestEstimateAnalysis:
 # ---------------------------------------------------------------------------
 # discover_plugins
 # ---------------------------------------------------------------------------
-
 class TestDiscoverPlugins:
     @patch("devsecops_radar.cli.scanner.entry_points")
-    def test_success(self, mock_ep):
+    def test_success_internal_scanner(self, mock_ep):
         cls = MagicMock()
         cls.name = "trivy"
+        cls.__module__ = "devsecops_radar.scanners.trivy"
         instance = MagicMock()
         cls.return_value = instance
         ep = MagicMock()
@@ -182,6 +179,19 @@ class TestDiscoverPlugins:
         plugins = discover_plugins()
         assert "trivy" in plugins
         assert plugins["trivy"] is instance
+
+    @patch("devsecops_radar.cli.scanner.entry_points")
+    @patch("devsecops_radar.cli.scanner.logger")
+    def test_block_external_plugin(self, mock_log, mock_ep):
+        cls = MagicMock()
+        cls.name = "external"
+        cls.__module__ = "third_party.scanner"
+        ep = MagicMock()
+        ep.load.return_value = cls
+        mock_ep.return_value = [ep]
+        plugins = discover_plugins()
+        assert plugins == {}                         # external scanner blocked
+        # warning may or may not be called – just verify empty result
 
     @patch("devsecops_radar.cli.scanner.entry_points")
     @patch("devsecops_radar.cli.scanner.logger")
@@ -197,7 +207,6 @@ class TestDiscoverPlugins:
 # ---------------------------------------------------------------------------
 # parse_args
 # ---------------------------------------------------------------------------
-
 class TestParseArgs:
     def test_defaults(self):
         with patch.object(sys, "argv", ["prog"]):
@@ -228,16 +237,15 @@ class TestParseArgs:
 
 
 # ---------------------------------------------------------------------------
-# run_scanner_async
+# run_scanner_async (with status)
 # ---------------------------------------------------------------------------
-
 class TestRunScannerAsync:
     @pytest.mark.asyncio
     async def test_file_target_parses(self):
         adapter = MagicMock()
         adapter.parse = MagicMock(return_value=[MagicMock(model_dump=lambda: {"id": 1})])
         with patch("devsecops_radar.cli.scanner.Path.is_file", return_value=True):
-            result = await run_scanner_async("trivy", "report.json", adapter)
+            result = await run_scanner_async("trivy", "report.json", adapter, make_status())
         assert result == [{"id": 1}]
 
     @pytest.mark.asyncio
@@ -245,7 +253,7 @@ class TestRunScannerAsync:
         adapter = MagicMock()
         adapter.run = MagicMock(return_value=[MagicMock(model_dump=lambda: {"id": 2})])
         with patch("devsecops_radar.cli.scanner.Path.is_file", return_value=False):
-            result = await run_scanner_async("semgrep", ".", adapter)
+            result = await run_scanner_async("semgrep", ".", adapter, make_status())
         assert result == [{"id": 2}]
 
     @pytest.mark.asyncio
@@ -253,15 +261,14 @@ class TestRunScannerAsync:
         adapter = MagicMock()
         adapter.parse = MagicMock(side_effect=RuntimeError("boom"))
         with patch("devsecops_radar.cli.scanner.Path.is_file", return_value=True):
-            result = await run_scanner_async("faulty", "file", adapter)
+            result = await run_scanner_async("faulty", "file", adapter, make_status())
         assert result == []
         mock_logger.error.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# run_all_scanners
+# run_all_scanners (returns tuple with status)
 # ---------------------------------------------------------------------------
-
 class TestRunAllScanners:
     @pytest.mark.asyncio
     async def test_collects_all_findings(self):
@@ -269,10 +276,10 @@ class TestRunAllScanners:
             trivy="image", semgrep=".", poutine=None, zizmor=None, gitleaks=None
         )
         plugins = {"trivy": MagicMock(), "semgrep": MagicMock()}
-        async def fake_run(name, target, adapter):
+        async def fake_run(name, target, adapter, status):
             return [{"tool": name, "target": target}]
         with patch("devsecops_radar.cli.scanner.run_scanner_async", side_effect=fake_run):
-            findings = await run_all_scanners(args, plugins)
+            findings, status = await run_all_scanners(args, plugins)
         assert len(findings) == 2
         assert {"tool": "trivy", "target": "image"} in findings
 
@@ -283,14 +290,22 @@ class TestRunAllScanners:
         )
         plugins = {"trivy": MagicMock()}
         with patch("devsecops_radar.cli.scanner.run_scanner_async", side_effect=RuntimeError("boom")):
-            findings = await run_all_scanners(args, plugins)
+            findings, status = await run_all_scanners(args, plugins)
+        assert findings == []
+
+    @pytest.mark.asyncio
+    async def test_scanner_not_in_plugins_skipped(self):
+        args = argparse.Namespace(
+            trivy="image", semgrep=None, poutine=None, zizmor=None, gitleaks=None
+        )
+        plugins = {}  # trivy not present
+        findings, status = await run_all_scanners(args, plugins)
         assert findings == []
 
 
 # ---------------------------------------------------------------------------
 # sort_findings_by_risk
 # ---------------------------------------------------------------------------
-
 class TestSortFindingsByRisk:
     def test_sorting_order(self):
         findings = [
@@ -308,7 +323,6 @@ class TestSortFindingsByRisk:
 # ---------------------------------------------------------------------------
 # execute_ai_analysis
 # ---------------------------------------------------------------------------
-
 class TestExecuteAiAnalysis:
     @pytest.fixture
     def base_args(self):
@@ -374,21 +388,23 @@ class TestExecuteAiAnalysis:
 
 
 # ---------------------------------------------------------------------------
-# interactive_remediation
+# interactive_remediation (now async)
 # ---------------------------------------------------------------------------
-
 class TestInteractiveRemediation:
-    def test_no_tty(self, mock_logger):
+    @pytest.mark.asyncio
+    async def test_no_tty(self, mock_logger):
         with patch.object(sys.stdin, "isatty", return_value=False):
-            interactive_remediation([], {})
+            await interactive_remediation([], {})
         mock_logger.warning.assert_called_once()
 
-    def test_no_remediations(self, mock_logger):
+    @pytest.mark.asyncio
+    async def test_no_remediations(self, mock_logger):
         with patch.object(sys.stdin, "isatty", return_value=True):
-            interactive_remediation([], {"top_remediations": []})
+            await interactive_remediation([], {"top_remediations": []})
         mock_logger.info.assert_called_with("No AI remediations available to apply.")
 
-    def test_patches_accepted_and_applied(self, mock_logger):
+    @pytest.mark.asyncio
+    async def test_patches_accepted_and_applied(self, mock_logger):
         ai_summary = {
             "top_remediations": [
                 {"finding_id": "F1", "patch_content": "fix F1"},
@@ -397,28 +413,28 @@ class TestInteractiveRemediation:
             ]
         }
         with patch.object(sys.stdin, "isatty", return_value=True), \
-             patch("builtins.input", side_effect=["y", "n", "q"]) as mock_input, \
+             patch("devsecops_radar.cli.scanner.input", side_effect=["y", "n", "q"]) as mock_input, \
              patch("devsecops_radar.cli.scanner.auto_fix") as mock_auto_fix, \
              patch("devsecops_radar.cli.scanner.generate_pr") as mock_gen_pr:
             mock_auto_fix.return_value = ["file1.py"]
-            interactive_remediation([], ai_summary)
-        assert mock_input.call_count == 2  # y then n, then q breaks before third input
+            await interactive_remediation([], ai_summary)
+        assert mock_input.call_count == 2  # y then n, then q stops before third input
         mock_auto_fix.assert_called_once()
         mock_gen_pr.assert_called_once_with(["file1.py"])
 
-    def test_eof_breaks_review(self):
+    @pytest.mark.asyncio
+    async def test_eof_breaks_review(self):
         ai_summary = {"top_remediations": [{"finding_id": "F1", "patch_content": "fix"}]}
         with patch.object(sys.stdin, "isatty", return_value=True), \
-             patch("builtins.input", side_effect=EOFError), \
+             patch("devsecops_radar.cli.scanner.input", side_effect=EOFError), \
              patch("devsecops_radar.cli.scanner.auto_fix") as mock_auto_fix:
-            interactive_remediation([], ai_summary)
+            await interactive_remediation([], ai_summary)
         mock_auto_fix.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
 # safe_wizard
 # ---------------------------------------------------------------------------
-
 class TestSafeWizard:
     def test_ollama_not_installed(self, mock_logger):
         with patch("devsecops_radar.cli.scanner.shutil.which", return_value=None), \
@@ -442,15 +458,14 @@ class TestSafeWizard:
 
 
 # ---------------------------------------------------------------------------
-# run_app (the big async orchestrator) – integration‑style mocks
+# run_app (integration)
 # ---------------------------------------------------------------------------
-
 class TestRunApp:
     @pytest.fixture
     def core_patches(self):
         mocks = {
             "devsecops_radar.cli.scanner.discover_plugins": MagicMock(return_value={}),
-            "devsecops_radar.cli.scanner.run_all_scanners": AsyncMock(return_value=[]),
+            "devsecops_radar.cli.scanner.run_all_scanners": AsyncMock(return_value=([], ScanStatus())),
             "devsecops_radar.cli.scanner.RuleFusionEngine": MagicMock(),
             "devsecops_radar.cli.scanner.compute_dynamic_risk_score": MagicMock(return_value=5.0),
             "devsecops_radar.cli.scanner.save_scan": MagicMock(),
@@ -461,7 +476,7 @@ class TestRunApp:
             "devsecops_radar.core.notifier.notify_asana": AsyncMock(),
             "devsecops_radar.cli.scanner.auto_fix": MagicMock(return_value=[]),
             "devsecops_radar.cli.scanner.generate_pr": MagicMock(),
-            "devsecops_radar.cli.scanner.interactive_remediation": MagicMock(),
+            "devsecops_radar.cli.scanner.interactive_remediation": AsyncMock(),
         }
         with patch.multiple("devsecops_radar.cli.scanner", **{
             k.split(".")[-1]: v for k, v in mocks.items() if k.startswith("devsecops_radar.cli.scanner.")
@@ -488,7 +503,7 @@ class TestRunApp:
 
     def test_no_findings_exits_gracefully(self, core_patches):
         argv = ["prog"]
-        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = []
+        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = ([], ScanStatus())
         with patch.object(sys, "argv", argv), \
              patch("devsecops_radar.cli.scanner.logger") as log:
             asyncio.run(run_app())
@@ -496,7 +511,8 @@ class TestRunApp:
 
     def test_policy_violation_exits(self, core_patches):
         argv = ["prog", "--policy", "pol.json"]
-        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = [{"severity": "HIGH"}]
+        findings = [{"severity": "HIGH"}]
+        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = (findings, ScanStatus())
         with patch.object(sys, "argv", argv), \
              patch("devsecops_radar.cli.scanner.Path.is_file", return_value=False), \
              patch("devsecops_radar.cli.scanner.logger"), \
@@ -507,9 +523,8 @@ class TestRunApp:
         mock_exit.assert_called_with(1)
 
     def test_successful_scan_with_output_and_reports(self, core_patches, tmp_path):
-        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = [
-            {"id": "1", "severity": "HIGH", "dynamic_risk_score": 5.0}
-        ]
+        findings = [{"id": "1", "severity": "HIGH", "dynamic_risk_score": 5.0}]
+        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = (findings, ScanStatus())
 
         out_file = tmp_path / "findings.json"
         argv = [
@@ -523,7 +538,7 @@ class TestRunApp:
         with patch.object(sys, "argv", argv), \
              patch("devsecops_radar.cli.scanner.execute_ai_analysis", AsyncMock(return_value={"summary": 1})), \
              patch.dict(os.environ, {"JIRA_URL": "url", "JIRA_TOKEN": "t", "ASANA_TOKEN": "a", "ASANA_WORKSPACE": "w"}), \
-             patch("devsecops_radar.cli.scanner.Path.cwd", return_value=tmp_path):   # <-- make output relative to tmp_path
+             patch("devsecops_radar.cli.scanner.Path.cwd", return_value=tmp_path):
             with patch("builtins.open", mock_open()):
                 asyncio.run(run_app())
         core_patches["devsecops_radar.cli.scanner.save_scan"].assert_called_once()
@@ -534,10 +549,9 @@ class TestRunApp:
         core_patches["devsecops_radar.core.notifier.notify_asana"].assert_awaited_once()
 
     def test_auto_fix_without_review(self, core_patches):
-        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = [
-            {"id": "2", "severity": "CRITICAL", "dynamic_risk_score": 9.0}
-        ]
-        core_patches["devsecops_radar.cli.scanner.auto_fix"].return_value = ["modified_file.py"]  # non-empty triggers generate_pr
+        findings = [{"id": "2", "severity": "CRITICAL", "dynamic_risk_score": 9.0}]
+        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = (findings, ScanStatus())
+        core_patches["devsecops_radar.cli.scanner.auto_fix"].return_value = ["modified_file.py"]
 
         argv = ["prog", "--fix", "--analyze"]
         with patch.object(sys, "argv", argv), \
@@ -547,22 +561,36 @@ class TestRunApp:
         core_patches["devsecops_radar.cli.scanner.auto_fix"].assert_called_once()
         core_patches["devsecops_radar.cli.scanner.generate_pr"].assert_called_once()
 
-    def test_rego_policy_warning(self, core_patches):
-        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = [
-            {"id": "3", "severity": "LOW", "dynamic_risk_score": 1.0}
-        ]
+    def test_rego_policy_violation_exits(self, core_patches):
+        findings = [{"id": "3", "severity": "LOW", "dynamic_risk_score": 1.0}]
+        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = (findings, ScanStatus())
 
         argv = ["prog", "--rego-policy", "test.rego"]
         with patch.object(sys, "argv", argv), \
-             patch("devsecops_radar.cli.scanner.logger") as log:
+             patch("devsecops_radar.cli.scanner.logger"), \
+             patch("devsecops_radar.cli.scanner.sys.exit") as mock_exit:
+            mock_engine = core_patches["devsecops_radar.cli.scanner.RuleFusionEngine"].return_value
+            mock_engine.evaluate_rego_policy.return_value = False
             asyncio.run(run_app())
-        log.warning.assert_any_call("OPA Rego policy evaluation is not yet implemented. Ignoring --rego-policy.")
+        mock_exit.assert_called_with(1)
+
+    def test_fail_on_scanner_error(self, core_patches):
+        findings = [{"id": "1", "severity": "LOW"}]
+        status = ScanStatus()
+        status.add_failure("trivy", "something went wrong")
+        core_patches["devsecops_radar.cli.scanner.run_all_scanners"].return_value = (findings, status)
+
+        argv = ["prog", "--fail-on-scanner-error"]
+        with patch.object(sys, "argv", argv), \
+             patch("devsecops_radar.cli.scanner.logger"), \
+             patch("devsecops_radar.cli.scanner.sys.exit") as mock_exit:
+            asyncio.run(run_app())
+        mock_exit.assert_called_with(1)
 
 
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-
 class TestMain:
     def test_keyboard_interrupt(self, mock_logger):
         with patch("devsecops_radar.cli.scanner.asyncio.run", side_effect=KeyboardInterrupt), \

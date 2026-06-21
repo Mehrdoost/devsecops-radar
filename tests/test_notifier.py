@@ -91,8 +91,9 @@ class TestValidateJiraUrl:
         assert _validate_jira_url("https://") is None
 
     def test_invalid_characters(self):
+        # Use a URL that contains a space – this triggers the new validation
         with capture_loguru() as msgs:
-            assert _validate_jira_url("https://evil.com/issue?query=1") is None
+            assert _validate_jira_url("https://evil.com/issue query=1") is None
         assert any("invalid characters" in m for m in msgs)
 
     def test_empty_url(self):
@@ -102,7 +103,6 @@ class TestValidateJiraUrl:
         url = "https://mycompany.atlassian.net/"
         result = _validate_jira_url(url)
         assert result == "https://mycompany.atlassian.net"
-
 
 # ============================================================================
 # Tests for _truncate

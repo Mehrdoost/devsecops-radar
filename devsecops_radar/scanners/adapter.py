@@ -1,3 +1,4 @@
+# devsecops_radar/scanners/adapter.py
 import os
 from pathlib import Path
 from typing import Any
@@ -6,24 +7,13 @@ from loguru import logger
 from pydantic import ValidationError
 
 from devsecops_radar.core.models import FindingSchema
-
-
-def _is_safe_path(target: str, base_dir: Path | None = None) -> bool:
-    """Check if the target path is inside the allowed base directory."""
-    if base_dir is None:
-        base_dir = Path.cwd()
-    try:
-        abs_target = Path(target).resolve(strict=False)
-        return abs_target.is_relative_to(base_dir.resolve())
-    except Exception as e:
-        logger.error(f"Path resolution error for {target}: {e}")
-        return False
+from devsecops_radar.core.path_security import safe_read_open
 
 
 class ScannerAdapter:
     """
-    Adapter class to bridge raw scanner outputs with the internal FindingSchema.
-    Ensures that data is validated and sanitized before reaching the core logic.
+    Adapter that bridges raw scanner outputs with the internal FindingSchema.
+    All file accesses use TOCTOU‑safe operations.
     """
 
     def __init__(self, scanner: Any) -> None:
@@ -31,104 +21,69 @@ class ScannerAdapter:
 
     def parse(self, file_path: str) -> list[FindingSchema]:
         """
-        Safely reads and parses a result file.
-        Implements defensive checks, path validation, and partial validation.
+        Safely reads and validates a scanner result file.
         """
-        # 1. Path safety check (use scanner's validator if available, else generic)
-        if hasattr(self.scanner, '_validate_target_path'):
-            safe_path = self.scanner._validate_target_path(file_path)
-            if not safe_path:
-                logger.error(
-                    f"Security block: file path '{file_path}' is outside the "
-                    "allowed directory."
-                )
-                return []
-            file_path = safe_path
-        else:
-            if not _is_safe_path(file_path):
-                logger.error(
-                    f"Security block: file path '{file_path}' is outside the "
-                    "current working directory."
-                )
-                return []
-
-        # 2. File existence and readability
-        if not os.path.exists(file_path):
-            logger.error(
-                f"File validation failed: Path does not exist: {file_path}"
-            )
-            return []
-
-        if not os.access(file_path, os.R_OK):
-            logger.error(
-                f"Permission Error: File is not readable: {file_path}"
-            )
-            return []
-
-        # 3. File size check (prevent memory exhaustion)
         try:
-            file_size = Path(file_path).stat().st_size
-            if file_size > 50 * 1024 * 1024:  # 50 MB limit
-                logger.error(
-                    f"File {file_path} is too large ({file_size} bytes). Skipping."
-                )
-                return []
+            f = safe_read_open(file_path, base_dir=Path.cwd())
+        except ValueError as e:
+            logger.error(f"Security block: {e}")
+            return []
+        except FileNotFoundError:
+            logger.error(f"File not found or not accessible: {file_path}")
+            return []
+        except PermissionError:
+            logger.error(f"Permission denied: {file_path}")
+            return []
         except OSError as e:
-            logger.error(f"Cannot stat file {file_path}: {e}")
+            logger.error(f"Cannot open file {file_path}: {e}")
             return []
 
-        # 4. Delegate to the scanner and map to schema
-        try:
-            raw_data = self.scanner.parse(file_path)
-            return self._safe_map_to_schema(raw_data)
-        except Exception as e:
-            logger.error(
-                f"Scanner '{self.scanner.__class__.__name__}' failed to parse "
-                f"file: {e}"
-            )
-            return []
+        with f:
+            try:
+                stat = os.fstat(f.fileno())
+                if stat.st_size > 50 * 1024 * 1024:
+                    logger.error(f"File {file_path} is too large ({stat.st_size} bytes). Skipping.")
+                    return []
+            except OSError as e:
+                logger.error(f"Cannot stat file {file_path}: {e}")
+                return []
+
+            try:
+                raw_data = self.scanner.parse(file_path)
+                # If scanner supports built-in validation, use it; otherwise fall back
+                if hasattr(self.scanner, '_validate_findings'):
+                    raw_data = self.scanner._validate_findings(raw_data)
+                return self._safe_map_to_schema(raw_data)
+            except Exception as e:
+                logger.error(f"Scanner '{self.scanner.__class__.__name__}' failed to parse file: {e}")
+                return []
 
     def run(self, target: str) -> list[FindingSchema]:
         """
-        Executes a scan and converts results to the standardized schema.
-        Partial failures in findings won't drop the entire scan result.
+        Executes a scan and converts results to standardized schema.
         """
         try:
             raw_data = self.scanner.run(target)
+            if hasattr(self.scanner, '_validate_findings'):
+                raw_data = self.scanner._validate_findings(raw_data)
             return self._safe_map_to_schema(raw_data)
         except Exception as e:
-            logger.error(
-                f"Scanner '{self.scanner.__class__.__name__}' execution failed: {e}"
-            )
+            logger.error(f"Scanner '{self.scanner.__class__.__name__}' execution failed: {e}")
             return []
 
-    def _safe_map_to_schema(
-        self, raw_findings: list[dict[str, Any]]
-    ) -> list[FindingSchema]:
-        """
-        Processes a list of raw findings one by one.
-        Invalid findings are logged and skipped instead of crashing the whole process.
-        """
+    def _safe_map_to_schema(self, raw_findings: list[dict[str, Any]]) -> list[FindingSchema]:
         if not isinstance(raw_findings, list):
-            logger.warning(
-                f"Scanner {self.scanner.__class__.__name__} returned non-list data."
-            )
+            logger.warning(f"Scanner {self.scanner.__class__.__name__} returned non‑list data.")
             return []
 
         valid_findings = []
         invalid_count = 0
-
         for f in raw_findings:
             try:
                 valid_findings.append(FindingSchema(**f))
             except ValidationError as e:
-                error_msg = (
-                    e.errors()[0]['msg'] if e.errors() else "Unknown Schema Error"
-                )
-                logger.debug(
-                    f"Skipping malformed finding from "
-                    f"{self.scanner.__class__.__name__}: {error_msg}"
-                )
+                error_msg = e.errors()[0]['msg'] if e.errors() else "Unknown Schema Error"
+                logger.debug(f"Skipping malformed finding from {self.scanner.__class__.__name__}: {error_msg}")
                 invalid_count += 1
             except Exception as e:
                 logger.error(f"Unexpected error validating finding: {e}")
@@ -137,8 +92,6 @@ class ScannerAdapter:
         if invalid_count > 0:
             logger.warning(
                 f"Scanner {self.scanner.__class__.__name__}: "
-                f"Successfully validated {len(valid_findings)} findings. "
-                f"Discarded {invalid_count} malformed items."
+                f"{len(valid_findings)} valid, {invalid_count} malformed items discarded."
             )
-
         return valid_findings

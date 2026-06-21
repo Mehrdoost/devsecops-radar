@@ -10,10 +10,10 @@ RUN groupadd -r pipeline && useradd -r -g pipeline -m -u 1000 pipeline
 
 WORKDIR /app
 
-# Copy everything needed for the build and install the package
+# Copy everything needed for the build and install the package (NON-editable)
 COPY pyproject.toml .
 COPY devsecops_radar devsecops_radar
-RUN pip install --no-cache-dir -e . && \
+RUN pip install --no-cache-dir . && \
     chown -R pipeline:pipeline /app
 
 USER pipeline

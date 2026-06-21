@@ -1,3 +1,4 @@
+# devsecops_radar/core/models.py
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -21,7 +22,7 @@ Base = declarative_base()
 
 
 class FindingSchema(BaseModel):
-    """Schema for input validation (used by adapter.py)."""
+    """Schema for input validation (used by adapter.py and database.py)."""
     tool: str
     id: str
     severity: str
@@ -29,12 +30,17 @@ class FindingSchema(BaseModel):
     title: str
     description: str | None = ""
     line: int | None = None
-    dynamic_risk_score: float = 0.0
+    dynamic_risk_score: float = -1.0        # -1.0 means "not yet computed"
+    rule_id: str | None = None               # populated by adapter / database layer
 
     @field_validator("severity")
     @classmethod
     def severity_upper(cls, v: str) -> str:
-        return v.upper()
+        allowed = {"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}
+        upper = v.upper()
+        if upper not in allowed:
+            raise ValueError(f"Severity must be one of {allowed}")
+        return upper
 
     @field_validator("tool", "id", "target", "title")
     @classmethod
@@ -43,8 +49,35 @@ class FindingSchema(BaseModel):
             raise ValueError("Field cannot be empty")
         return v.strip()
 
+    @field_validator("target")
+    @classmethod
+    def no_path_traversal(cls, v: str) -> str:
+        # Block path traversal and suspicious characters
+        # Decode URL-encoded sequences first, then check
+        import re
+        decoded = v
+        # Repeatedly decode %XX until stable (handles double-encoding)
+        for _ in range(3):
+            try:
+                new_decoded = __import__('urllib.parse', fromlist=['unquote']).unquote(decoded)
+                if new_decoded == decoded:
+                    break
+                decoded = new_decoded
+            except Exception:
+                break
+        # Block obvious traversals
+        if ".." in decoded or decoded.startswith("~"):
+            raise ValueError("Target contains unsafe path characters")
+        # Block null bytes and control characters
+        if re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', decoded):
+            raise ValueError("Target contains control characters")
+        # Block multiple consecutive slashes (often used to bypass filters)
+        if "//" in decoded or "\\\\" in decoded:
+            raise ValueError("Target contains suspicious path separators")
+        return v  # Return original, not decoded – let downstream handle encoding
 
-class Scan(Base):                          # type: ignore[valid-type, misc]
+
+class Scan(Base):           # type: ignore[valid-type, misc]
     __tablename__ = "scans"
     __table_args__ = (
         CheckConstraint(
@@ -63,7 +96,7 @@ class Scan(Base):                          # type: ignore[valid-type, misc]
     )
 
 
-class Finding(Base):                       # type: ignore[valid-type, misc]
+class Finding(Base):            # type: ignore[valid-type, misc]
     __tablename__ = "findings"
     __table_args__ = (
         CheckConstraint(
@@ -75,13 +108,13 @@ class Finding(Base):                       # type: ignore[valid-type, misc]
     id = Column(Integer, primary_key=True)
     scan_id = Column(Integer, ForeignKey("scans.id"), index=True)
     tool = Column(String, nullable=False)
-    rule_id = Column(String, index=True, nullable=False)
+    rule_id = Column(String, index=True, nullable=False, default="UNKNOWN")
     severity = Column(String, index=True, nullable=False)
     target = Column(String, nullable=False)
     title = Column(String, nullable=False)
     description = Column(String, default="")
     line = Column(Integer, nullable=True)
-    dynamic_risk_score = Column(Float, nullable=True, default=0.0)
+    dynamic_risk_score = Column(Float, nullable=True, default=-1.0)
     scan = relationship("Scan", back_populates="findings")
 
 

@@ -1,4 +1,4 @@
-"""Tests for the abstract base scanner class – updated."""
+"""Tests for the abstract base scanner class – updated (aligned with safe_subprocess_run)."""
 
 import subprocess
 from contextlib import contextmanager
@@ -64,7 +64,8 @@ class TestValidateTargetPath:
         outside.touch()
         with capture_loguru() as msgs:
             assert scanner._validate_target_path(str(outside)) is None
-        assert any("outside the allowed directory" in m for m in msgs)
+        # Updated log message: "Security Violation: … outside …"
+        assert any("Security Violation" in m for m in msgs)
 
 
 class TestSafeRunCommand:
@@ -73,9 +74,11 @@ class TestSafeRunCommand:
              patch("shutil.which", return_value="/fake/path/dummy"):
             mock_run.return_value = MagicMock(returncode=0)
             scanner._safe_run_command(["dummy", "scan", "."])
+        # safe_subprocess_run now always adds shell=False
         mock_run.assert_called_once_with(
             ["/fake/path/dummy", "scan", "."],
             capture_output=True, text=True, timeout=300, check=False,
+            shell=False,
         )
 
     def test_timeout(self, scanner):

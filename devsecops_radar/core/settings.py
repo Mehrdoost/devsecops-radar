@@ -1,3 +1,4 @@
+# devsecops_radar/core/settings.py
 import os
 import re
 import sys
@@ -27,9 +28,9 @@ class Settings:
         self.JWT_SECRET: str = self._validate_jwt_secret()
         self.PIPELINE_API_KEY: str = self._validate_api_key()
 
-        # Optional external service settings
-        self.JIRA_URL: str | None = self._validate_optional_url(
-            os.environ.get("JIRA_URL"), "JIRA_URL"
+        # External service settings – now aligned with notifier expectations
+        self.JIRA_URL: str | None = self._validate_jira_url(
+            os.environ.get("JIRA_URL")
         )
         self.JIRA_TOKEN: str | None = os.environ.get("JIRA_TOKEN") or None
         self.JIRA_PROJECT_KEY: str = os.environ.get("JIRA_PROJECT_KEY", "SEC")
@@ -40,14 +41,17 @@ class Settings:
             os.environ.get("ASANA_WORKSPACE")
         )
 
-        self.COMMUNITY_RULES_REPO: str | None = self._validate_optional_url(
-            os.environ.get("COMMUNITY_RULES_REPO"), "COMMUNITY_RULES_REPO"
+        self.COMMUNITY_RULES_REPO: str | None = self._validate_community_repo(
+            os.environ.get("COMMUNITY_RULES_REPO")
         )
 
-        self.OLLAMA_API_BASE: str = os.environ.get(
-            "OLLAMA_API_BASE", "http://localhost:11434/api/generate"
+        self.OLLAMA_API_BASE: str = self._validate_ollama_base(
+            os.environ.get("OLLAMA_API_BASE", "http://localhost:11434")
         )
 
+    # ------------------------------------------------------------------
+    # Parsing helpers (unchanged)
+    # ------------------------------------------------------------------
     @staticmethod
     def _parse_bool(value: str) -> bool:
         truthy: set[str] = {"true", "1", "t", "yes", "y", "on"}
@@ -67,6 +71,9 @@ class Settings:
             )
             raise ValueError(f"Invalid PORT: {value}") from None
 
+    # ------------------------------------------------------------------
+    # Security‑critical validators (JWT, API key)
+    # ------------------------------------------------------------------
     @staticmethod
     def _validate_jwt_secret() -> str:
         secret = os.environ.get("JWT_SECRET")
@@ -81,9 +88,10 @@ class Settings:
                 "Minimum 32 characters required."
             )
             raise ValueError("JWT_SECRET must be at least 32 characters long.")
-        if len(set(secret)) < 4:
+        if len(set(secret)) < 6:
             logger.warning(
-                "JWT_SECRET has very low entropy. Consider using a stronger secret."
+                "JWT_SECRET has very low entropy. Consider using a cryptographically "
+                "random string (e.g. openssl rand -hex 32)."
             )
         return secret
 
@@ -102,12 +110,68 @@ class Settings:
             raise ValueError("PIPELINE_API_KEY value 'disabled' is strictly prohibited.")
         return api_key
 
+    # ------------------------------------------------------------------
+    # URL validators (now consistent with downstream consumers)
+    # ------------------------------------------------------------------
     @staticmethod
-    def _validate_optional_url(value: str | None, name: str) -> str | None:
+    def _validate_jira_url(value: str | None) -> str | None:
+        """Jira URL must be HTTPS – enforced identically in notifier.py."""
         if not value:
             return None
         try:
-            parsed = urlparse(value)
+            parsed = urlparse(value.strip())
+            if parsed.scheme != "https":
+                logger.error("JIRA_URL must use HTTPS. Value ignored.")
+                return None
+            if not parsed.netloc:
+                logger.error("JIRA_URL has no hostname. Value ignored.")
+                return None
+            return value.strip().rstrip("/")
+        except Exception:
+            logger.warning("Invalid JIRA_URL, ignoring.")
+            return None
+
+    @staticmethod
+    def _validate_community_repo(value: str | None) -> str | None:
+        """Community rules repo – only https://github.com is allowed."""
+        if not value:
+            return None
+        try:
+            parsed = urlparse(value.strip())
+            if parsed.scheme != "https" or parsed.netloc != "github.com":
+                logger.error(
+                    "COMMUNITY_RULES_REPO must be a https://github.com URL. "
+                    "Value ignored."
+                )
+                return None
+            if not value.strip().endswith(".git") or ";" in value or " " in value:
+                logger.error("COMMUNITY_RULES_REPO contains invalid characters.")
+                return None
+            return value.strip().rstrip("/")
+        except Exception:
+            logger.warning("Invalid COMMUNITY_RULES_REPO, ignoring.")
+            return None
+
+    @staticmethod
+    def _validate_ollama_base(raw: str) -> str:
+        """Ensure OLLAMA_API_BASE ends with /api/generate."""
+        raw = raw.strip().rstrip("/")
+        parsed = urlparse(raw)
+        if parsed.scheme not in ("http", "https"):
+            logger.warning("Invalid OLLAMA_API_BASE scheme. Falling back to localhost.")
+            return "http://localhost:11434/api/generate"
+        # Append the API path if the user only gave a base URL
+        if not raw.endswith("/api/generate"):
+            return f"{raw}/api/generate"
+        return raw
+
+    @staticmethod
+    def _validate_optional_url(value: str | None, name: str) -> str | None:
+        """Generic optional URL validator – allows http/https."""
+        if not value:
+            return None
+        try:
+            parsed = urlparse(value.strip())
             if parsed.scheme not in ("https", "http"):
                 logger.warning(f"{name} has invalid scheme, ignoring.")
                 return None
@@ -129,6 +193,9 @@ class Settings:
         return value.strip()
 
 
+# ------------------------------------------------------------------
+# Fail‑fast instantiation
+# ------------------------------------------------------------------
 try:
     settings = Settings()
 except ValueError as e:

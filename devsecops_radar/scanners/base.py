@@ -1,3 +1,4 @@
+# devsecops_radar/scanners/base.py
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
@@ -5,7 +6,10 @@ from pathlib import Path
 from typing import TypedDict
 
 from loguru import logger
+from pydantic import ValidationError
 
+from devsecops_radar.core.models import FindingSchema
+from devsecops_radar.core.path_security import resolve_safe_path
 from devsecops_radar.core.utils import safe_subprocess_run
 
 
@@ -48,17 +52,12 @@ class BaseScanner(ABC):
         pass
 
     def _validate_target_path(self, target: str) -> str | None:
+        """Validate that *target* is inside the allowed base directory (TOCTOU‑safe)."""
         try:
-            target_path = Path(target).resolve(strict=False)
-            if not target_path.is_relative_to(self.allowed_base_dir):
-                logger.error(
-                    f"Security Violation: Target path '{target}' is outside "
-                    "the allowed directory."
-                )
-                return None
-            return str(target_path)
-        except Exception as e:
-            logger.error(f"Path validation failed for '{target}': {e}")
+            safe = resolve_safe_path(target, self.allowed_base_dir)
+            return str(safe)
+        except ValueError as e:
+            logger.error(f"Security Violation: {e}")
             return None
 
     def _safe_run_command(
@@ -73,13 +72,13 @@ class BaseScanner(ABC):
                 f"Required executable not found: {cmd_args[0]}"
             )
 
-        cmd_args[0] = executable
+        resolved_cmd = [executable] + cmd_args[1:]
 
-        logger.debug(f"Executing {cmd_args[0]} securely.")
+        logger.debug(f"Executing {executable} securely.")
 
         try:
             result = safe_subprocess_run(
-                cmd_args,
+                resolved_cmd,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
@@ -94,20 +93,33 @@ class BaseScanner(ABC):
             logger.error(f"Executable not found in PATH: {cmd_args[0]}")
             raise
 
-        # Truncate output if it exceeds memory limit
+        # Check output size – reject entirely if too large (do NOT truncate JSON)
         max_bytes = max_output_mb * 1024 * 1024
         stdout = result.stdout or ""
         stderr = result.stderr or ""
-        if len(stdout.encode()) + len(stderr.encode()) > max_bytes:
-            logger.warning(
+        total_size = len(stdout.encode()) + len(stderr.encode())
+
+        if total_size > max_bytes:
+            logger.error(
                 f"Output of {cmd_args[0]} exceeds {max_output_mb}MB limit. "
-                "Truncating to prevent memory exhaustion."
+                "Output discarded to prevent memory exhaustion."
             )
-            # Keep first half MB of each, roughly
-            half = max_bytes // 2
-            result.stdout = stdout[:half]
-            result.stderr = stderr[:half]
+            result.stdout = ""
+            result.stderr = f"Output exceeded {max_output_mb}MB limit."
+            result.returncode = 1
+
         return result
+
+    def _validate_findings(self, raw_findings: list[dict]) -> list[dict]:
+        """Validate raw scanner output against FindingSchema, discarding invalid entries."""
+        validated: list[dict] = []
+        for item in raw_findings:
+            try:
+                FindingSchema(**item)
+                validated.append(item)
+            except ValidationError as e:
+                logger.debug(f"Discarded invalid scanner finding: {e.errors()[0]['msg']}")
+        return validated
 
     @abstractmethod
     def run(self, target: str) -> list[ScannerFinding]:
