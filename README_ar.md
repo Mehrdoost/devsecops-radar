@@ -246,10 +246,31 @@ flowchart LR
 ```bash
 # 1. التثبيت من مستودعات PyPI
 pip install devsecops-radar
+```
 
+### 🔐 تشفير قاعدة البيانات الاختياري
+
+بشكل افتراضي، يستخدم Pipeline Sentinel قاعدة بيانات SQLite قياسية.  
+للبيئات المعزولة أو شديدة الحساسية، يمكنك تمكين
+**التشفير الشفاف AES‑256** عبر `sqlcipher3`:
+
+1. ثبّت التبعية الإضافية:  
+   `pip install devsecops-radar[encryption]`
+2. اضبط مفتاح التشفير في ملف `.env`:  
+   `DB_ENCRYPTION_KEY=مفتاحك-العشوائي-القوي`
+3. شغّل التطبيق بشكل طبيعي – سيتم تشفير قاعدة البيانات
+   على القرص وفك تشفيرها بشكل فوري.
+
+إذا لم يتم تثبيت حزمة `encryption` الإضافية أو لم يتم تعيين
+`DB_ENCRYPTION_KEY`، فسيعمل Pipeline Sentinel مع قاعدة بيانات
+غير مشفرة عادية (وهو أمر مقبول تمامًا للتطوير المحلي و CI).
+
+```bash
 # 2. تمرير بيانات الفحص (تتوفر عينات بيانات داخل المستودع)
 devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json
+```
 
+```bash
 # 3. تشغيل لوحة التحكم عبر الويب
 devsecops-radar-web
 ```

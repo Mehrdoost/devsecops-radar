@@ -247,10 +247,30 @@ Get up and running in 3 simple steps:
 ```bash
 # 1. Install from PyPI
 pip install devsecops-radar
+```
+### 🔐 Optional Database Encryption
 
+By default Pipeline Sentinel uses a standard SQLite database.  
+For air‑gapped or highly sensitive environments you can enable
+**transparent AES‑256 encryption** via `sqlcipher3`:
+
+1. Install the extra dependency:  
+   `pip install devsecops-radar[encryption]`
+2. Set the encryption key in your `.env` file:  
+   `DB_ENCRYPTION_KEY=your‑strong‑random‑key`
+3. Run the application normally – the database will be encrypted
+   on disk and decrypted on the fly.
+
+If the `encryption` extra is not installed or `DB_ENCRYPTION_KEY`
+is not set, Pipeline Sentinel works with a regular unencrypted
+database (which is perfectly fine for local development and CI).
+
+```bash
 # 2. Feed scanner data (sample data is included in the repo)
 devsecops-radar --trivy sample_trivy.json --semgrep sample_semgrep.json
+```
 
+```bash
 # 3. Launch the dashboard
 devsecops-radar-web
 ```

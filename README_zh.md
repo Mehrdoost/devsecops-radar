@@ -275,6 +275,22 @@ devsecops-radar-web
 pip install devsecops-radar
 ```
 
+### 🔐 可选的数据库加密
+
+默认情况下，Pipeline Sentinel 使用标准的 SQLite 数据库。  
+对于气隙或高度敏感的环境，您可以通过 `sqlcipher3` 启用
+**透明的 AES‑256 加密**：
+
+1. 安装额外依赖：  
+   `pip install devsecops-radar[encryption]`
+2. 在 `.env` 文件中设置加密密钥：  
+   `DB_ENCRYPTION_KEY=您的高强度随机密钥`
+3. 正常启动应用程序 – 数据库将在磁盘上加密并即时解密。
+
+如果未安装 `encryption` 扩展或未设置 `DB_ENCRYPTION_KEY`，
+Pipeline Sentinel 将使用普通的未加密数据库
+（这对于本地开发和 CI 来说完全没问题）。
+
 ### 选项 2 — 源码编译
 ```bash
 git clone https://github.com/Mehrdoost/devsecops-radar.git
