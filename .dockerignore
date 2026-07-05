@@ -27,6 +27,7 @@ Thumbs.db
 *.db
 *.sqlite3
 pipeline_sentinel.db
+.sentinel/pipeline_sentinel.db
 
 # Pipeline Sentinel runtime artifacts
 findings.json
