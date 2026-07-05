@@ -8,7 +8,11 @@ import pytest
 
 import devsecops_radar.core.database as db_mod
 from devsecops_radar.core.database import init_db, save_scan
-from devsecops_radar.core.rag import index_findings, rag_search
+from devsecops_radar.core.rag import _has_fts5, index_findings, rag_search
+
+# اگر FTS5 در دسترس نباشد، تمام تست‌های این ماژول skip می‌شوند.
+# تست‌های خاصی که به FTS5 وابسته نیستند، می‌توانند با نشانه‌گذاری جداگانه اجرا شوند.
+pytestmark = pytest.mark.skipif(not _has_fts5(), reason="FTS5 is not available in this SQLite build")
 
 
 @pytest.fixture(autouse=True)
