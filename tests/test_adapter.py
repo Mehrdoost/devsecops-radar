@@ -1,164 +1,195 @@
-"""Tests for the ScannerAdapter class – final version (fixed hasattr issue)."""
+# tests/test_adapter.py (mypy‑clean)
+"""Comprehensive tests for the ScannerAdapter bridge.
 
-import os
+Covers path‑confined parsing, direct execution, fallback behaviour when
+run() returns None, file‑size limits, and error propagation.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-os.environ["JWT_SECRET"] = "a" * 32
-os.environ["PIPELINE_API_KEY"] = "valid-api-key"
-
-from devsecops_radar.core.models import FindingSchema
 from devsecops_radar.scanners.adapter import ScannerAdapter
 
 
+class FakeScanner:
+    """A minimal scanner that records calls and returns synthetic data."""
+
+    def __init__(self) -> None:
+        self.parse_calls: list[str] = []
+        self.run_calls: list[str] = []
+        self._return_run: list[dict[str, Any]] | None = None
+        self._return_parse: list[dict[str, Any]] = [
+            {"tool": "fake", "target": "/app", "id": "F1", "severity": "LOW", "title": "T", "description": ""}
+        ]
+        self._validate_findings_called: bool = False
+        self._validate_findings_ret: list[dict[str, Any]] = []
+        # Simulate the optional attribute
+        self._has_validate_findings: bool = False
+
+    def parse(self, file_path: str) -> list[dict[str, Any]]:
+        self.parse_calls.append(file_path)
+        return self._return_parse
+
+    def run(self, target: str) -> list[dict[str, Any]] | None:
+        self.run_calls.append(target)
+        return self._return_run
+
+    @property
+    def allowed_base_dir(self) -> Path:
+        return Path.cwd()
+
+    @allowed_base_dir.setter
+    def allowed_base_dir(self, value: Path) -> None:
+        pass  # just accept it
+
+    def _validate_findings(self, raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        self._validate_findings_called = True
+        return self._validate_findings_ret or raw
+
+
 @pytest.fixture
-def mock_scanner():
-    scanner = MagicMock()
-    scanner.__class__.__name__ = "MockScanner"
-    scanner._validate_target_path = lambda p: p
-    # By default, _validate_findings should pass through findings unchanged,
-    # otherwise MagicMock's auto‑created attribute returns a MagicMock object.
-    scanner._validate_findings = lambda x: x
-    return scanner
+def base(tmp_path: Path) -> Path:
+    d = tmp_path / "base"
+    d.mkdir()
+    return d
 
 
 @pytest.fixture
-def adapter(mock_scanner):
-    return ScannerAdapter(mock_scanner)
+def scanner() -> FakeScanner:
+    return FakeScanner()
 
 
-# ---------------------------------------------------------------------------
-# _safe_map_to_schema
-# ---------------------------------------------------------------------------
-class TestSafeMapToSchema:
-    def test_non_list_returns_empty(self, adapter):
-        assert adapter._safe_map_to_schema({"not": "list"}) == []
-        assert adapter._safe_map_to_schema("string") == []
-        assert adapter._safe_map_to_schema(None) == []
+@pytest.fixture
+def adapter(scanner: FakeScanner, base: Path) -> ScannerAdapter:
+    return ScannerAdapter(scanner, base_dir=base)
 
-    def test_empty_list(self, adapter):
-        assert adapter._safe_map_to_schema([]) == []
 
-    def test_all_valid(self, adapter):
-        raw = [
-            {"tool": "semgrep", "id": "r1", "severity": "HIGH", "target": "a.py", "title": "SQLi"},
-            {"tool": "trivy", "id": "CVE-123", "severity": "CRITICAL", "target": "lib.so", "title": "Overflow"},
+class TestAdapterParse:
+    def test_valid_file_inside_base(
+        self, adapter: ScannerAdapter, scanner: FakeScanner, base: Path
+    ) -> None:
+        f = base / "report.json"
+        f.write_text(json.dumps([{"id": "X", "severity": "HIGH"}]))
+        scanner._return_parse = [
+            {"tool": "fake", "target": str(f), "id": "X", "severity": "HIGH", "title": "T", "description": ""}
         ]
-        result = adapter._safe_map_to_schema(raw)
-        assert len(result) == 2
-        assert isinstance(result[0], FindingSchema)
-        assert result[1].severity == "CRITICAL"
+        findings = adapter.parse(str(f))
+        assert len(findings) == 1
+        assert findings[0].id == "X"
 
-    def test_mixed_valid_invalid(self, adapter):
-        raw = [
-            {"tool": "t", "id": "ok", "severity": "LOW", "target": "t", "title": "t"},
-            {"tool": "", "id": "bad", "severity": "LOW", "target": "t", "title": "t"},
-            {"tool": "t", "severity": "LOW", "target": "t", "title": "t"},
+    def test_file_outside_base_returns_empty(
+        self, adapter: ScannerAdapter, base: Path, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "outside.json"
+        outside.write_text("[]")
+        findings = adapter.parse(str(outside))
+        assert findings == []
+
+    def test_missing_file_returns_empty(self, adapter: ScannerAdapter, base: Path) -> None:
+        findings = adapter.parse(str(base / "ghost.json"))
+        assert findings == []
+
+    def test_file_too_large_is_skipped(
+        self, adapter: ScannerAdapter, scanner: FakeScanner, base: Path
+    ) -> None:
+        big = base / "big.json"
+        big.write_text("x" * 100)
+        with patch("os.fstat") as mock_fstat:
+            mock_fstat.return_value.st_size = 60 * 1024 * 1024
+            findings = adapter.parse(str(big))
+        assert findings == []
+
+    def test_os_error_on_fstat_returns_empty(
+        self, adapter: ScannerAdapter, base: Path
+    ) -> None:
+        f = base / "err.json"
+        f.write_text("[]")
+        with patch("os.fstat", side_effect=OSError("bad fd")):
+            findings = adapter.parse(str(f))
+        assert findings == []
+
+    def test_scanner_parse_exception_is_swallowed(
+        self, adapter: ScannerAdapter, scanner: FakeScanner, base: Path
+    ) -> None:
+        f = base / "crash.json"
+        f.write_text("{}")
+        original_parse = scanner.parse
+        scanner.parse = MagicMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+        try:
+            findings = adapter.parse(str(f))
+            assert findings == []
+        finally:
+            scanner.parse = original_parse  # type: ignore[method-assign]
+
+    def test_validate_findings_called_when_present(
+        self, adapter: ScannerAdapter, scanner: FakeScanner, base: Path
+    ) -> None:
+        f = base / "v.json"
+        f.write_text("[]")
+        scanner._validate_findings_ret = [
+            {"tool": "fake", "target": str(f), "id": "V", "severity": "MEDIUM", "title": "X", "description": ""}
         ]
-        result = adapter._safe_map_to_schema(raw)
-        assert len(result) == 1
-        assert result[0].id == "ok"
-
-    def test_all_invalid(self, adapter):
-        raw = [{"tool": ""}, {"id": "x"}]
-        assert adapter._safe_map_to_schema(raw) == []
-
-    def test_unexpected_exception(self, adapter):
-        raw = [{"tool": "t", "id": "x", "severity": "LOW", "target": "t", "title": "t"}]
-        with patch("devsecops_radar.scanners.adapter.FindingSchema", side_effect=RuntimeError("oops")):
-            assert adapter._safe_map_to_schema(raw) == []
+        scanner._has_validate_findings = True
+        findings = adapter.parse(str(f))
+        assert scanner._validate_findings_called
+        assert findings[0].id == "V"
 
 
-# ---------------------------------------------------------------------------
-# parse
-# ---------------------------------------------------------------------------
-class TestParse:
-    def test_scanner_path_validation_rejects(self, adapter, mock_scanner):
-        mock_scanner._validate_target_path.return_value = None
-        assert adapter.parse("/bad") == []
-
-    def test_scanner_path_validation_accepts(self, adapter, mock_scanner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        f = tmp_path / "results.json"
-        f.write_text("{}")
-        mock_scanner._validate_target_path.return_value = str(f)
-        raw = [{"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"}]
-        # Replace parse with a dedicated mock that returns a list
-        mock_scanner.parse = MagicMock(return_value=raw)
-        result = adapter.parse(str(f))
-        assert len(result) == 1
-        assert isinstance(result[0], FindingSchema)
-
-    def test_file_not_found(self, adapter, mock_scanner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        missing = tmp_path / "missing.json"
-        assert adapter.parse(str(missing)) == []
-
-    def test_file_not_readable(self, adapter, mock_scanner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        f = tmp_path / "unreadable.json"
-        f.write_text("{}")
-        with patch("devsecops_radar.scanners.adapter.safe_read_open", side_effect=PermissionError):
-            assert adapter.parse(str(f)) == []
-
-    def test_file_too_large(self, adapter, mock_scanner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        f = tmp_path / "large.json"
-        f.write_bytes(b"x" * (51 * 1024 * 1024))
-        assert adapter.parse(str(f)) == []
-
-    def test_cannot_stat(self, adapter, mock_scanner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        f = tmp_path / "nostat.json"
-        f.write_text("{}")
-        with patch("os.fstat", side_effect=OSError("nope")):
-            assert adapter.parse(str(f)) == []
-
-    def test_scanner_parse_exception(self, adapter, mock_scanner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        f = tmp_path / "ok.json"
-        f.write_text("{}")
-        mock_scanner.parse.side_effect = RuntimeError("parse failed")
-        assert adapter.parse(str(f)) == []
-
-    def test_scanner_with_validate_findings(self, adapter, mock_scanner, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        f = tmp_path / "results.json"
-        f.write_text("{}")
-        mock_scanner._validate_target_path.return_value = str(f)
-        raw = [
-            {"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"},
-            {"tool": ""},
+class TestAdapterRun:
+    def test_run_successful(
+        self, adapter: ScannerAdapter, scanner: FakeScanner, base: Path
+    ) -> None:
+        target = base / "code"
+        target.mkdir()
+        scanner._return_run = [
+            {"tool": "fake", "target": str(target), "id": "R1", "severity": "HIGH", "title": "X", "description": ""}
         ]
-        # Override _validate_findings to filter out invalid entries
-        mock_scanner._validate_findings = lambda data: [d for d in data if d.get("tool")]
-        mock_scanner.parse = MagicMock(return_value=raw)
-        result = adapter.parse(str(f))
-        assert len(result) == 1
+        findings = adapter.run(str(target))
+        assert len(findings) == 1
+        assert findings[0].id == "R1"
 
+    def test_run_returns_none_falls_back_to_parse(
+        self, adapter: ScannerAdapter, scanner: FakeScanner, base: Path
+    ) -> None:
+        f = base / "fallback.json"
+        f.write_text("[]")
+        scanner._return_run = None
+        findings = adapter.run(str(f))
+        assert len(findings) >= 1
 
-# ---------------------------------------------------------------------------
-# run
-# ---------------------------------------------------------------------------
-class TestRun:
-    def test_success(self, adapter, mock_scanner):
-        raw = [{"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"}]
-        mock_scanner.run = MagicMock(return_value=raw)
-        result = adapter.run("target")
-        assert len(result) == 1
-        assert isinstance(result[0], FindingSchema)
+    def test_run_returns_none_non_file_target_returns_empty(
+        self, adapter: ScannerAdapter, scanner: FakeScanner
+    ) -> None:
+        scanner._return_run = None
+        findings = adapter.run("some-image:latest")
+        assert findings == []
 
-    def test_exception(self, adapter, mock_scanner):
-        mock_scanner.run.side_effect = RuntimeError("fail")
-        assert adapter.run("target") == []
+    def test_run_outside_path_rejected(
+        self, adapter: ScannerAdapter, base: Path, tmp_path: Path
+    ) -> None:
+        outside = tmp_path / "../secret"
+        findings = adapter.run(str(outside))
+        assert findings == []
 
-    def test_with_validate_findings(self, adapter, mock_scanner):
-        raw = [
-            {"tool": "t", "id": "r", "severity": "LOW", "target": "t", "title": "t"},
-            {"tool": ""},
-        ]
-        mock_scanner._validate_findings = lambda data: [d for d in data if d.get("tool")]
-        mock_scanner.run = MagicMock(return_value=raw)
-        result = adapter.run("target")
-        assert len(result) == 1
+    def test_run_empty_target_returns_empty(self, adapter: ScannerAdapter) -> None:
+        findings = adapter.run("")
+        assert findings == []
+
+    def test_run_exception_is_caught(
+        self, adapter: ScannerAdapter, scanner: FakeScanner, base: Path
+    ) -> None:
+        target = base / "boom"
+        target.mkdir()
+        original_run = scanner.run
+        scanner.run = MagicMock(side_effect=RuntimeError("fail"))  # type: ignore[method-assign]
+        try:
+            findings = adapter.run(str(target))
+            assert findings == []
+        finally:
+            scanner.run = original_run  # type: ignore[method-assign]

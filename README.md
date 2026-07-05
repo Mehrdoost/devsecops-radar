@@ -41,7 +41,7 @@
 11. [Core Capabilities](#-core-capabilities)
 12. [Community Rules & Online Updates](#-community-rules--online-updates)
 13. [Attack Simulation & What‑If Analysis](#-attack-simulation--what‑if-analysis)
-14. [Security Improvements in v0.4.6](#-security-improvements-in-v046)
+14. [Security Improvements in v1.0.0](#-security-improvements-in-v100)
 15. [Architecture](#-architecture)
 16. [Roadmap](#-roadmap)
 17. [Testing & CI](#-testing--ci)
@@ -290,7 +290,8 @@ docker run -p 8080:8080 ghcr.io/mehrdoost/devsecops-radar:latest
 ```
 **Mount your own findings file:**
 ```bash
-docker run -p 8080:8080 -v $(pwd)/findings.json:/data/findings.json ghcr.io/mehrdoost/devsecops-radar:latest
+docker pull mehrdoost/devsecops-radar:latest
+docker run -p 8080:8080 mehrdoost/devsecops-radar:latest
 ```
 **Or use Docker Compose:**
 ```bash
@@ -573,21 +574,36 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## ✨ What's New in v0.4.6
+## 🛡️ What's New in v1.0.0
 
-- **Live Sentry Feed** – real‑time CI/CD findings appear automatically  
-- **Scanner Status** – see which tools are installed and ready  
-- **AI Remediation Plan** – step‑by‑step fix instructions right in the dashboard  
-- **Policy Status** – live violation indicator from `policy.json`  
-- **Topology Graph** – interactive map of your infrastructure assets  
-- **Advanced Filters** – filter by tool, severity, target, or description  
-- **One‑click Jira & Asana** – send findings directly from the report modal  
-- **Auto theme** – follows your OS light/dark preference  
-- **All CLI flags now live** – `--export-sarif`, `--export-cyclonedx`, `--compliance`, `--notify-jira`, `--notify-asana`, `--update-rules`, `--rego-policy`  
-- **Token‑aware AI chunking** – prevents context overflow for local models  
-- **Weighted risk scoring** – merged results reflect actual finding density  
-- **Blueprints reorganised** – no more duplicate routes, cleaner architecture  
-- **Strict linting & type checks** – zero Ruff/mypy errors
+Pipeline Sentinel v1.0.0 is a **complete security and architecture overhaul**
+after six months of intensive hardening.  Every module has been audited,
+rewritten, and fortified for production DevSecOps workflows.
+
+**🔒 Security‑First**
+Fully redesigned path confinement, symlink protection, directory‑based
+executable whitelisting, GPG signature verification for community rules,
+encrypted database support, and automatic redaction of secrets in every
+report.
+
+**🧠 Real RAG & AI Attack Chains**
+Semantic search across all historical findings via ChromaDB + Ollama.
+AI analysis now injects similar past findings into the prompt so the model
+can recognise multi‑step attack chains — exactly what the README promises.
+
+**🕸️ Immersive 3D Command Center**
+New cyber‑punk dashboard with 3D attack graphs, trend mountains, topology
+cities, GSAP animations, procedural audio, and a **brand‑new idle mini‑game**
+(Sentry Glider) that launches after two minutes of inactivity.
+
+**⚙️ Rock‑Solid Scanners & CLI**
+All scanners rewritten with mandatory path validation and streaming output.
+`--fix` and `--review` apply AI patches safely with evidence checks and
+`patch --dry-run`.  Windows, macOS, and Linux are fully supported.
+
+**🗃️ Consistent Data Layer**
+Everything lives in a single SQLite database — no more JSON file drift.
+Scans, AI summaries, topology, and history are always in sync.
 
 ---
 
@@ -660,6 +676,7 @@ Pipeline Sentinel is researched and developed independently. If you are an indiv
 Your support directly funds late-night development, local AI testing hardware, and ongoing community updates. 
 
 *(Note: Corporate entities deploying this tool in production environments must acquire a Commercial License above, rather than using donations).*
+
 **[🔗 Donate USDC (Polygon)](https://polygonscan.com/address/0x6b7c1c572D45575Fa5409CB52F25B750B3097c8b)** <sub>`0x1234...5678`</sub> · <sub><img src="docs/donate-qr.png" width="90" alt="QR" valign="middle" /></sub>
 
 ---

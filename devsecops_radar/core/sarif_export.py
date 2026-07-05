@@ -1,4 +1,11 @@
 # devsecops_radar/core/sarif_export.py
+"""
+SARIF and CycloneDX export with full sensitive data redaction,
+atomic writes, and unique rule identifiers.
+"""
+
+from __future__ import annotations
+
 import json
 import urllib.parse
 from datetime import UTC, datetime
@@ -18,31 +25,52 @@ def _safe_int(val: Any, default: int = 1) -> int:
         return default
 
 
+def _best_id(finding: dict[str, Any], fallback_index: int = 0) -> str:
+    """Return the best available ID for a finding, ensuring uniqueness."""
+    rid = finding.get("rule_id")
+    if isinstance(rid, str) and rid.strip():
+        return rid.strip()
+    fid = finding.get("id")
+    if isinstance(fid, str) and fid.strip():
+        return fid.strip()
+    # Generate a unique fallback
+    return f"UNKNOWN-{fallback_index}"
+
+
 def export_sarif(
     findings: list[dict[str, Any]], output_file: str = "report.sarif"
 ) -> None:
     try:
         safe_path = resolve_safe_path(output_file)
+        # Ensure parent directory exists
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
 
         rules: dict[str, Any] = {}
         results: list[dict[str, Any]] = []
+        unknown_counter = 0
 
-        for f in findings:
-            rule_id = str(f.get("id", "UNKNOWN"))
+        for _idx, f in enumerate(findings):
+            rule_id = _best_id(f, unknown_counter)
+            if rule_id.startswith("UNKNOWN-"):
+                unknown_counter += 1
+
             if rule_id not in rules:
+                title = redact_sensitive(str(f.get("title", "No Title")))
+                description = redact_sensitive(str(f.get("description", "No Description")))
                 rules[rule_id] = {
                     "id": rule_id,
-                    "shortDescription": {"text": str(f.get("title", "No Title"))},
-                    "fullDescription": {"text": str(f.get("description", "No Description"))},
+                    "shortDescription": {"text": title},
+                    "fullDescription": {"text": description},
                 }
 
-            raw_target = str(f.get("target", "unknown"))
+            raw_target = redact_sensitive(str(f.get("target", "unknown")))
             safe_uri = urllib.parse.quote(raw_target, safe="/:")
             safe_line = _safe_int(f.get("line", 1))
+            message = redact_sensitive(str(f.get("title", "No Title")))
 
             results.append({
                 "ruleId": rule_id,
-                "message": {"text": str(f.get("title", "No Title"))},
+                "message": {"text": message},
                 "locations": [{
                     "physicalLocation": {
                         "artifactLocation": {"uri": safe_uri},
@@ -68,6 +96,7 @@ def export_sarif(
             }],
         }
 
+        # atomic_write preserves permissions if the destination exists
         with atomic_write(safe_path) as sarif_file:
             json.dump(sarif_data, sarif_file, indent=2)
 
@@ -81,8 +110,8 @@ def export_cyclonedx(
 ) -> None:
     try:
         safe_path = resolve_safe_path(output_file)
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Correct CycloneDX severity format (lowercase)
         severity_map = {
             "CRITICAL": "critical",
             "HIGH": "high",
@@ -93,28 +122,33 @@ def export_cyclonedx(
 
         components_dict: dict[str, Any] = {}
         vulnerabilities: list[dict[str, Any]] = []
+        unknown_counter = 0
 
-        for f in findings:
-            raw_target = str(f.get("target", "unknown"))
-            safe_target = urllib.parse.quote(raw_target, safe="/:")
-            comp_ref = f"pkg:file/{safe_target}"
+        for _idx, f in enumerate(findings):
+            raw_target = redact_sensitive(str(f.get("target", "unknown")))
+            target_name = raw_target.split("/")[-1] if "/" in raw_target else raw_target
+            safe_target = urllib.parse.quote(raw_target, safe="")
+            comp_ref = f"pkg:generic/{urllib.parse.quote(target_name, safe='')}?filepath={safe_target}"
 
             if comp_ref not in components_dict:
                 components_dict[comp_ref] = {
                     "type": "file",
                     "bom-ref": comp_ref,
-                    "name": raw_target,
+                    "name": target_name,
                 }
 
             raw_sev = str(f.get("severity", "UNKNOWN")).upper()
             mapped_sev = severity_map.get(raw_sev, "info")
 
-            # Redact sensitive data from descriptions
             raw_description = str(f.get("description", ""))
             clean_description = redact_sensitive(raw_description)
 
+            vuln_id = _best_id(f, unknown_counter)
+            if vuln_id.startswith("UNKNOWN-"):
+                unknown_counter += 1
+
             vulnerabilities.append({
-                "id": str(f.get("id", "UNKNOWN")),
+                "id": vuln_id,
                 "description": clean_description,
                 "ratings": [
                     {

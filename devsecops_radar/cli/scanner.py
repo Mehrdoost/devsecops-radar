@@ -1,10 +1,14 @@
+# devsecops_radar/cli/scanner.py
+"""Pipeline Sentinel – Unified CLI entry point (v1.0.0‑final)."""
+
+from __future__ import annotations
+
 import argparse
 import asyncio
-import concurrent.futures
 import json
 import os
 import platform
-import shutil
+import re
 import sys
 import time
 from importlib.metadata import entry_points
@@ -15,7 +19,7 @@ import psutil
 from loguru import logger
 
 from devsecops_radar.core.analyzer import get_analyzer
-from devsecops_radar.core.database import save_scan
+from devsecops_radar.core.database import save_scan, update_scan_ai_summary
 from devsecops_radar.core.path_security import resolve_safe_path
 from devsecops_radar.core.remediation import auto_fix, generate_pr, generate_remediation_guide
 from devsecops_radar.core.reporting import generate_pdf_report
@@ -25,58 +29,57 @@ from devsecops_radar.core.valuation import compute_dynamic_risk_score
 from devsecops_radar.scanners.adapter import ScannerAdapter
 
 
-# --------------------------------------------------------------------------
+# ════════════════════════════════════════════════════════════════════════
 # System profiling helpers
-# --------------------------------------------------------------------------
-def get_system_ram_gb() -> float:
+# ════════════════════════════════════════════════════════════════════════
+def _get_system_ram_gb() -> float:
     try:
         return round(psutil.virtual_memory().total / (1024 ** 3), 1)
     except Exception:
         return 4.0
 
 
-def get_gpu_status() -> bool:
+def _get_gpu_status() -> bool:
     try:
         sys_os = platform.system()
         if sys_os in ["Windows", "Linux"]:
-            result = safe_subprocess_run(['nvidia-smi'], capture_output=True, text=True, check=False)
+            result = safe_subprocess_run(["nvidia-smi"], capture_output=True, text=True, check=False)
             return result.returncode == 0
-        elif sys_os == "Darwin":
+        if sys_os == "Darwin":
             result = safe_subprocess_run(
-                ['sysctl', '-n', 'machdep.cpu.brand_string'],
-                capture_output=True, text=True, check=False
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True, text=True, check=False,
             )
-            return 'apple' in result.stdout.lower()
+            return "apple" in result.stdout.lower()
     except Exception:
         logger.debug("GPU check failed", exc_info=True)
     return False
 
 
 def estimate_analysis(
-    findings_count: int, model: str, backend: str, force_ai: bool = False
+    findings_count: int, model: str, backend: str, force_ai: bool = False,
 ) -> tuple[bool, float, int, str]:
-    ram = get_system_ram_gb()
-    has_gpu = get_gpu_status()
+    """Return (can_run, est_seconds, chunk_size, hardware_type)."""
+    ram = _get_system_ram_gb()
+    has_gpu = _get_gpu_status()
     cores = psutil.cpu_count(logical=False) or 4
 
     can_run = True
-    warnings = []
+    warnings: list[str] = []
     chunk_size = 5
 
-    if backend == 'litellm':
+    if backend == "litellm":
         total_seconds = 5.0 + (findings_count * 0.5)
         hardware_type = "Cloud Engine"
         chunk_size = 10
     else:
         hardware_type = "Local GPU (Accelerated)" if has_gpu else "Local CPU (Standard)"
         base_time = 2.0 if has_gpu else 8.0
-
         if not has_gpu:
             warnings.append(
                 "WARNING: No GPU detected. Local AI analysis will be slow. "
                 "Consider using --llm-backend litellm."
             )
-
         if ram < 4.0:
             if not force_ai:
                 warnings.append(
@@ -91,41 +94,39 @@ def estimate_analysis(
         elif ram < 8.0:
             chunk_size = 3
             base_time *= 1.5
-
         total_seconds = findings_count * base_time
 
-    dashboard = f"""
-    ╭────────────────────────────────────────────────────────────╮
-    │ 🧠 PIPELINE SENTINEL: AI HARDWARE PROFILER                 │
-    ├────────────────────────────────────────────────────────────┤
-    │  Target Model     : {model} ({backend.upper()})
-    │  Execution Engine : {hardware_type}
-    │  System Resources : {ram} GB RAM | {cores} Physical Cores
-    │  Input Load       : {findings_count} Security Findings
-    │  Chunking Strategy: {chunk_size} items per batch
-    ╰────────────────────────────────────────────────────────────╯
-    """
-    logger.info(dashboard)
-
+    # Detailed hardware profile logged at debug level to avoid info leakage
+    logger.debug(
+        f"AI profiler: {ram}GB RAM, {cores} cores, GPU={'yes' if has_gpu else 'no'} → "
+        f"{hardware_type}, est. {total_seconds:.0f}s, chunk_size={chunk_size}"
+    )
     for w in warnings:
         if "FATAL" in w:
             logger.error(w)
         else:
             logger.warning(w)
-
     return can_run, total_seconds, chunk_size, hardware_type
 
 
-# --------------------------------------------------------------------------
-# Plugin discovery – restricted to internal scanners only
-# --------------------------------------------------------------------------
+# ════════════════════════════════════════════════════════════════════════
+# Plugin discovery (internal scanners only, with explicit whitelist)
+# ════════════════════════════════════════════════════════════════════════
+_ALLOWED_SCANNER_MODULES = frozenset({
+    "devsecops_radar.scanners.trivy",
+    "devsecops_radar.scanners.semgrep",
+    "devsecops_radar.scanners.poutine",
+    "devsecops_radar.scanners.zizmor",
+    "devsecops_radar.scanners.gitleaks",
+})
+
+
 def discover_plugins() -> dict[str, Any]:
-    plugins = {}
+    plugins: dict[str, Any] = {}
     try:
-        for ep in entry_points(group='devsecops_radar.plugins'):
+        for ep in entry_points(group="devsecops_radar.plugins"):
             cls = ep.load()
-            # Security: only load scanners that belong to the devsecops_radar package
-            if cls.__module__.startswith("devsecops_radar.scanners."):
+            if cls.__module__ in _ALLOWED_SCANNER_MODULES:
                 plugins[cls.name] = cls()
             else:
                 logger.warning(
@@ -137,90 +138,103 @@ def discover_plugins() -> dict[str, Any]:
     return plugins
 
 
-# --------------------------------------------------------------------------
+# ════════════════════════════════════════════════════════════════════════
 # CLI argument parsing
-# --------------------------------------------------------------------------
+# ════════════════════════════════════════════════════════════════════════
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='Pipeline Sentinel - Unified CI/CD Security Dashboard'
+        description="Pipeline Sentinel - Unified CI/CD Security Dashboard"
     )
     # Scanners
-    parser.add_argument('--trivy', type=str)
-    parser.add_argument('--semgrep', type=str)
-    parser.add_argument('--poutine', type=str)
-    parser.add_argument('--zizmor', type=str)
-    parser.add_argument('--gitleaks', type=str)
-    parser.add_argument('--rules', type=str, help='Path to custom JSON rules directory')
-    parser.add_argument('--topology', type=str, help='Path to infrastructure topology JSON')
+    parser.add_argument("--trivy", type=str)
+    parser.add_argument("--semgrep", type=str)
+    parser.add_argument("--poutine", type=str)
+    parser.add_argument("--zizmor", type=str)
+    parser.add_argument("--gitleaks", type=str)
+    parser.add_argument("--rules", type=str, help="Path to custom JSON rules directory")
+    parser.add_argument("--topology", type=str, help="Path to infrastructure topology JSON")
 
     # Output
-    parser.add_argument('--output', type=str, default='findings.json')
-    parser.add_argument('--analyze', action='store_true', help='Run AI analysis on findings')
-    parser.add_argument('--force-ai', action='store_true', help='Force AI execution bypassing limits')
-    parser.add_argument('--llm-backend', type=str, default='ollama', choices=['ollama', 'litellm'])
-    parser.add_argument('--llm-model', type=str, default='llama3.2')
+    parser.add_argument("--output", type=str, default="findings.json")
+    parser.add_argument("--analyze", action="store_true", help="Run AI analysis on findings")
+    parser.add_argument("--force-ai", action="store_true", help="Force AI execution bypassing limits")
+    parser.add_argument("--llm-backend", type=str, default="ollama", choices=["ollama", "litellm"])
+    parser.add_argument("--llm-model", type=str, default="llama3.2")
 
     # Policy and fix
-    parser.add_argument('--policy', type=str, help='Path to strict JSON policy limits')
-    parser.add_argument('--fix', action='store_true', help='Auto-apply AI suggested patches')
-    parser.add_argument('--review', action='store_true', help='Interactively review each patch before applying')
-    parser.add_argument('--report', type=str, help='Generate PDF report to specified path')
-    parser.add_argument('--wizard', action='store_true', help='Safe interactive first-time setup')
+    parser.add_argument("--policy", type=str, help="Path to strict JSON policy limits")
+    parser.add_argument("--fix", action="store_true", help="Auto-apply AI suggested patches")
+    parser.add_argument("--review", action="store_true", help="Interactively review each patch before applying")
+    parser.add_argument("--report", type=str, help="Generate PDF report to specified path")
+    parser.add_argument("--wizard", action="store_true", help="Safe interactive first-time setup")
 
     # Exports
-    parser.add_argument('--export-sarif', type=str, help='Export findings as SARIF')
-    parser.add_argument('--export-cyclonedx', type=str, help='Export findings as CycloneDX')
-    parser.add_argument('--compliance', type=str, choices=['CIS', 'PCI-DSS', 'ISO27001'],
-                        help='Compliance framework for reporting')
-    parser.add_argument('--notify-jira', action='store_true')
-    parser.add_argument('--notify-asana', action='store_true')
-    parser.add_argument('--update-rules', action='store_true')
-    parser.add_argument('--rego-policy', type=str)
+    parser.add_argument("--export-sarif", type=str, help="Export findings as SARIF")
+    parser.add_argument("--export-cyclonedx", type=str, help="Export findings as CycloneDX")
+    parser.add_argument("--compliance", type=str, choices=["CIS", "PCI-DSS", "ISO27001"],
+                        help="Compliance framework for reporting")
+    parser.add_argument("--notify-jira", action="store_true")
+    parser.add_argument("--notify-asana", action="store_true")
+    parser.add_argument("--update-rules", action="store_true")
+    parser.add_argument("--rego-policy", type=str)
 
-    # New flag: fail on scanner errors
-    parser.add_argument('--fail-on-scanner-error', action='store_true',
-                        help='Exit with error if any scanner fails')
-
+    parser.add_argument("--fail-on-scanner-error", action="store_true",
+                        help="Exit with error if any scanner fails")
     return parser.parse_args()
 
 
-# --------------------------------------------------------------------------
-# Scanner execution with status tracking
-# --------------------------------------------------------------------------
+# ════════════════════════════════════════════════════════════════════════
+# Scanner execution
+# ════════════════════════════════════════════════════════════════════════
 class ScanStatus:
-    """Track success/failure per scanner."""
-    def __init__(self):
-        self.success = []
-        self.failed = []
+    def __init__(self) -> None:
+        self.success: list[str] = []
+        self.failed: list[tuple[str, str]] = []
 
-    def add_success(self, name: str):
+    def add_success(self, name: str) -> None:
         self.success.append(name)
 
-    def add_failure(self, name: str, reason: str):
+    def add_failure(self, name: str, reason: str) -> None:
         self.failed.append((name, reason))
-        logger.error(f"Scanner {name} failed: {reason}")
 
     def any_failed(self) -> bool:
         return len(self.failed) > 0
 
-    def report(self):
-        if self.failed:
-            logger.warning("Some scanners failed:")
-            for name, reason in self.failed:
-                logger.warning(f"  - {name}: {reason}")
+
+# Valid pattern for non‑path targets (image names, URLs, etc.)
+_SAFE_NONPATH_RE = re.compile(r"^[a-zA-Z0-9_.:/@\-]+$")
 
 
 async def run_scanner_async(
-    name: str, target: str, adapter: ScannerAdapter, status: ScanStatus
+    name: str,
+    target: str,
+    adapter: ScannerAdapter,
+    status: ScanStatus,
+    base_dir: Path,
 ) -> list[dict[str, Any]]:
+    """Run a scanner (parse or execute) and return normalized findings."""
     try:
-        if Path(target).is_file():
-            logger.info(f"Parsing {name} report: {target}")
-            validated = await asyncio.to_thread(adapter.parse, target)
+        target_path = Path(target)
+        if target_path.is_file():
+            safe_target = resolve_safe_path(target, base_dir)
+            logger.info(f"Parsing {name} report: {safe_target}")
+            validated = await asyncio.to_thread(adapter.parse, str(safe_target))
         else:
+            # Target is not a file – must be a valid non‑path token (image, URL, directory...)
+            if not _SAFE_NONPATH_RE.match(target):
+                logger.error(
+    f"Invalid target for {name}: '{target}'. "
+    "Only alphanumerics, colons, slashes, dots, hyphens allowed."
+)
+                status.add_failure(name, f"Invalid target: {target}")
+                return []
             logger.info(f"Running {name} scan on: {target}")
             validated = await asyncio.to_thread(adapter.run, target)
-        findings = [v.model_dump() if hasattr(v, 'model_dump') else v.dict() for v in validated]
+
+        findings = [
+            v.model_dump() if hasattr(v, "model_dump") else v.dict()
+            for v in validated
+        ]
         status.add_success(name)
         return findings
     except Exception as e:
@@ -229,87 +243,81 @@ async def run_scanner_async(
 
 
 async def run_all_scanners(
-    args: argparse.Namespace, plugins: dict[str, Any]
+    args: argparse.Namespace, plugins: dict[str, Any], base_dir: Path,
 ) -> tuple[list[dict[str, Any]], ScanStatus]:
     scanner_targets = {
-        'trivy': args.trivy,
-        'semgrep': args.semgrep,
-        'poutine': args.poutine,
-        'zizmor': args.zizmor,
-        'gitleaks': args.gitleaks,
+        "trivy": args.trivy,
+        "semgrep": args.semgrep,
+        "poutine": args.poutine,
+        "zizmor": args.zizmor,
+        "gitleaks": args.gitleaks,
     }
     status = ScanStatus()
-    tasks = []
-    # Create tasks in the same order as scanner_targets
+    tasks: dict[str, asyncio.Task] = {}
+
     for name, target in scanner_targets.items():
         if target and name in plugins:
-            adapter = ScannerAdapter(plugins[name])
-            tasks.append(run_scanner_async(name, target, adapter, status))
+            adapter = ScannerAdapter(plugins[name], base_dir=base_dir)
+            tasks[name] = asyncio.create_task(
+                run_scanner_async(name, target, adapter, status, base_dir)
+            )
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    all_findings = []
-    # Pair results with the original task order (only for tasks that were launched)
-    task_index = 0
-    for name, target in scanner_targets.items():
-        if not target or name not in plugins:
-            continue
-        res = results[task_index]
-        if isinstance(res, Exception):
-            logger.error(f"Scanner task crashed: {res}")
-            status.add_failure(name, str(res))
-        elif isinstance(res, list):
-            all_findings.extend(res)
-        task_index += 1
-
+    all_findings: list[dict[str, Any]] = []
+    for name, task in tasks.items():
+        try:
+            findings = await task
+            all_findings.extend(findings)
+        except Exception as e:
+            logger.error(f"Scanner task for {name} crashed: {e}")
+            status.add_failure(name, str(e))
     return all_findings, status
 
 
-# --------------------------------------------------------------------------
-# Risk sorting & AI analysis
-# --------------------------------------------------------------------------
-def sort_findings_by_risk(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+# ════════════════════════════════════════════════════════════════════════
+# AI analysis helpers
+# ════════════════════════════════════════════════════════════════════════
+def _sort_findings_by_risk(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     severity_rank = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0}
     return sorted(
         findings,
         key=lambda x: (
             severity_rank.get(str(x.get("severity")).upper(), 0),
-            x.get("dynamic_risk_score", 0.0)
+            x.get("dynamic_risk_score", 0.0),
         ),
-        reverse=True
+        reverse=True,
     )
 
 
-async def execute_ai_analysis(
-    args: argparse.Namespace, findings: list[dict[str, Any]], topology: dict[str, Any]
+async def _execute_ai_analysis(
+    args: argparse.Namespace,
+    findings: list[dict[str, Any]],
+    topology: dict[str, Any],
 ) -> dict[str, Any]:
     if not args.analyze or not findings:
         return {}
 
-    sorted_findings = sort_findings_by_risk(findings)
-    base_max = int(os.environ.get("ANALYZER_MAX_FINDINGS", "100"))
+    sorted_findings = _sort_findings_by_risk(findings)
+    base_max = min(int(os.environ.get("ANALYZER_MAX_FINDINGS", "100")), 10000)
     selected_findings = sorted_findings[:base_max]
 
     can_run, est_seconds, chunk_size, hw_type = estimate_analysis(
-        len(selected_findings), args.llm_model, args.llm_backend, args.force_ai
+        len(selected_findings), args.llm_model, args.llm_backend, args.force_ai,
     )
 
-    out_path = Path(args.output)
+    out_path = resolve_safe_path(args.output, Path.cwd())
     summary_file = out_path.parent / f"{out_path.stem}_ai_summary.json"
 
     if not can_run:
         fallback = {
             "executive_summary": "Analysis aborted due to low system resources. Use --force-ai to bypass.",
             "risk_score": 0.0,
-            "hardware_profile": hw_type
+            "hardware_profile": hw_type,
         }
-        with open(summary_file, 'w', encoding='utf-8') as fh:
-            json.dump(fallback, fh, indent=2)
+        summary_file.write_text(json.dumps(fallback, indent=2), encoding="utf-8")
         return fallback
 
-    logger.info("Initializing AI Security Engine...")
+    logger.info(f"Starting AI analysis ({hw_type}, est. {est_seconds:.0f}s)...")
     start_time = time.time()
-
     try:
         analyzer = get_analyzer(backend=args.llm_backend, model=args.llm_model)
         analysis = await analyzer.run(selected_findings, topology, chunk_size=chunk_size)
@@ -321,62 +329,56 @@ async def execute_ai_analysis(
     analysis["execution_time"] = elapsed
     analysis["hardware_profile"] = hw_type
 
-    with open(summary_file, 'w', encoding='utf-8') as fh:
-        json.dump(analysis, fh, indent=2)
-
+    summary_file.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
     logger.success(f"✅ AI analysis completed in {elapsed}s and saved to {summary_file}")
     return analysis
 
 
-# --------------------------------------------------------------------------
-# Interactive remediation (non‑blocking)
-# --------------------------------------------------------------------------
-async def interactive_remediation(
-    findings: list[dict[str, Any]], ai_summary: dict[str, Any]
+# ════════════════════════════════════════════════════════════════════════
+# Interactive remediation
+# ════════════════════════════════════════════════════════════════════════
+async def _interactive_remediation(
+    findings: list[dict[str, Any]], ai_summary: dict[str, Any],
 ) -> None:
     if not sys.stdin.isatty():
         logger.warning("No TTY detected; interactive review disabled. Use --fix without --review.")
         return
 
-    remediations = ai_summary.get('top_remediations', [])
+    remediations = ai_summary.get("top_remediations", [])
     if not remediations:
         logger.info("No AI remediations available to apply.")
         return
 
     logger.info("\n" + generate_remediation_guide(remediations))
 
-    approved_fixes = []
-    loop = asyncio.get_running_loop()
-    with concurrent.futures.ThreadPoolExecutor() as pool:
-        for rem in remediations:
-            fid = rem.get('finding_id', 'UNKNOWN')
-            patch = rem.get('patch_content')
-            if not patch:
-                logger.info(f"Skipping {fid}: Only manual steps provided.")
-                continue
+    approved_fixes: list[dict[str, Any]] = []
+    for rem in remediations:
+        fid = rem.get("finding_id", "UNKNOWN")
+        patch = rem.get("patch_content")
+        if not patch:
+            logger.info(f"Skipping {fid}: Only manual steps provided.")
+            continue
 
-            logger.info(f"\n--- Proposed Patch for {fid} ---")
-            logger.info(patch)
+        logger.info(f"\n--- Proposed Patch for {fid} ---")
+        logger.info(patch)
 
-            try:
-                choice = await loop.run_in_executor(
-                    pool,
-                    input,
-                    "Apply this patch securely? [y/N/q(uit)]: "
-                )
-                choice = choice.strip().lower()
-            except EOFError:
-                logger.warning("Input stream closed; aborting interactive review.")
-                break
+        try:
+            choice = await asyncio.to_thread(
+                input, "Apply this patch securely? [y/N/q(uit)]: "
+            )
+            choice = choice.strip().lower()
+        except EOFError:
+            logger.warning("Input stream closed; aborting interactive review.")
+            break
 
-            if choice == 'q':
-                logger.warning("Aborting interactive review.")
-                break
-            elif choice == 'y':
-                approved_fixes.append(rem)
-                logger.success(f"Patch {fid} queued.")
-            else:
-                logger.info(f"Patch {fid} rejected.")
+        if choice == "q":
+            logger.warning("Aborting interactive review.")
+            break
+        if choice == "y":
+            approved_fixes.append(rem)
+            logger.success(f"Patch {fid} queued.")
+        else:
+            logger.info(f"Patch {fid} rejected.")
 
     if approved_fixes:
         tailored_summary = {"top_remediations": approved_fixes}
@@ -385,13 +387,15 @@ async def interactive_remediation(
             generate_pr(modified_files)
 
 
-# --------------------------------------------------------------------------
-# Wizard
-# --------------------------------------------------------------------------
-def safe_wizard() -> None:
+# ════════════════════════════════════════════════════════════════════════
+# Wizard – secure Ollama detection via safe_subprocess_run
+# ════════════════════════════════════════════════════════════════════════
+def _safe_wizard() -> None:
     logger.info("Welcome to Pipeline Sentinel Setup")
-    if not shutil.which("ollama"):
-        logger.warning("Ollama is not installed.")
+    try:
+        safe_subprocess_run(["ollama", "--version"], capture_output=True, check=False, timeout=5)
+    except (FileNotFoundError, ValueError):
+        logger.warning("Ollama is not installed or not whitelisted.")
         sys_os = platform.system()
         if sys_os == "Darwin":
             logger.info("Please install via Homebrew: brew install ollama")
@@ -403,25 +407,26 @@ def safe_wizard() -> None:
 
     logger.info("Ollama is installed. Verifying core AI model...")
     try:
-        safe_subprocess_run(['ollama', 'pull', 'llama3.2:latest'], check=True)
+        safe_subprocess_run(["ollama", "pull", "llama3.2:latest"], check=True)
         logger.success("Setup complete! You are ready to scan.")
     except Exception as e:
         logger.error(f"Failed to pull AI model: {e}")
 
 
-# --------------------------------------------------------------------------
-# Main application orchestrator (refactored)
-# --------------------------------------------------------------------------
+# ════════════════════════════════════════════════════════════════════════
+# Main orchestrator
+# ════════════════════════════════════════════════════════════════════════
 async def run_app() -> None:
     args = parse_args()
 
     if args.wizard:
-        safe_wizard()
+        _safe_wizard()
         return
 
     logger.remove()
     logger.add(sys.stderr, format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | {message}")
 
+    base_dir = Path.cwd().resolve()
     plugins = discover_plugins()
 
     # Update community rules
@@ -430,17 +435,17 @@ async def run_app() -> None:
         logger.success("Community rules updated.")
         return
 
-    # Execute scanners
-    findings, scan_status = await run_all_scanners(args, plugins)
+    # ── Execute scanners ─────────────────────────────────────────────
+    findings, scan_status = await run_all_scanners(args, plugins, base_dir)
 
-    # Load custom rules if provided
-    rule_engine = None
+    # ── Load custom rules if provided ────────────────────────────────
+    rule_engine: RuleFusionEngine | None = None
     if args.rules:
-        rule_engine = RuleFusionEngine(rules_dir=args.rules)
+        safe_rules_dir = resolve_safe_path(args.rules, base_dir)
+        rule_engine = RuleFusionEngine(rules_dir=str(safe_rules_dir))
         rule_engine.load_all_rules()
         findings.extend(rule_engine.findings)
 
-    # Fail on scanner error if requested
     if args.fail_on_scanner_error and scan_status.any_failed():
         logger.error("One or more scanners failed. Failing build as requested.")
         sys.exit(1)
@@ -449,65 +454,73 @@ async def run_app() -> None:
         logger.info("No findings were discovered or loaded. Exiting gracefully.")
         return
 
-    # Load topology
-    topology = {}
+    # ── Load topology ────────────────────────────────────────────────
+    topology: dict[str, Any] = {}
     if args.topology:
-        topo_path = Path(args.topology)
-        if topo_path.exists() and topo_path.is_file():
+        safe_topo = resolve_safe_path(args.topology, base_dir)
+        if safe_topo.is_file():
             try:
-                with open(topo_path, encoding='utf-8') as fh:
-                    topology = json.load(fh)
+                topology = json.loads(safe_topo.read_text(encoding="utf-8"))
             except Exception as e:
                 logger.error(f"Failed to parse topology JSON: {e}")
 
-    # Calculate dynamic risk scores
+    # ── Compute dynamic risk scores ──────────────────────────────────
     for finding in findings:
-        finding['dynamic_risk_score'] = compute_dynamic_risk_score(finding, topology)
+        finding["dynamic_risk_score"] = compute_dynamic_risk_score(finding, topology)
 
-    # Policy evaluation (JSON)
+    # ── Policy evaluation (on all findings) ──────────────────────────
+    policy_passed = True
     if args.policy:
         if rule_engine is None:
             rule_engine = RuleFusionEngine(rules_dir=".")
+        rule_engine.findings = findings
         if not rule_engine.evaluate_policy(args.policy):
-            logger.error("Build failed due to strict policy violations.")
-            sys.exit(1)
-
-    # Rego policy evaluation (now functional)
+            policy_passed = False
     if args.rego_policy:
         if rule_engine is None:
             rule_engine = RuleFusionEngine(rules_dir=".")
+        rule_engine.findings = findings
         if not rule_engine.evaluate_rego_policy(args.rego_policy):
-            logger.error("Build failed due to OPA Rego policy violation.")
-            sys.exit(1)
+            policy_passed = False
 
-    # Save findings atomically with safe path resolution
-    out_path = resolve_safe_path(args.output, Path.cwd())
-    with open(out_path, 'w', encoding='utf-8') as fh:
-        json.dump(findings, fh, indent=2)
-    save_scan(findings)
-    logger.success(f"Aggregated {len(findings)} findings into {args.output}")
+    if not policy_passed:
+        logger.error("Build failed due to strict policy violations.")
+        sys.exit(1)
 
-    # AI analysis
-    ai_summary = await execute_ai_analysis(args, findings, topology)
+    # ── Save findings to JSON (always) ───────────────────────────────
+    out_path = resolve_safe_path(args.output, base_dir)
+    out_path.write_text(json.dumps(findings, indent=2), encoding="utf-8")
 
-    # Auto-fix / review
+    # Persist to database – if this fails we continue but warn the user
+    scan_id = save_scan(findings)
+    if scan_id is None:
+        logger.error("Database write failed – findings were saved to JSON but NOT persisted to DB.")
+    else:
+        logger.success(f"Aggregated {len(findings)} findings into {args.output}")
+
+    # ── AI analysis ─────────────────────────────────────────────────
+    ai_summary = await _execute_ai_analysis(args, findings, topology)
+
+    # Update the scan record with AI results (if DB save succeeded)
+    if ai_summary and scan_id:
+        update_scan_ai_summary(scan_id, ai_summary)
+        logger.success("AI analysis results saved to database.")
+
+    # ── Auto‑fix / review ──────────────────────────────────────────
     if args.fix and ai_summary:
         if args.review:
-            await interactive_remediation(findings, ai_summary)
+            await _interactive_remediation(findings, ai_summary)
         else:
             logger.warning("Executing Auto-Fix for ALL AI suggestions without review!")
             modified = auto_fix(findings, ai_summary)
             if modified:
                 generate_pr(modified)
 
-    # Reports & exports (compliance support added)
+    # ── Reports & exports ──────────────────────────────────────────
     if args.report:
         generate_pdf_report(
-            findings,
-            ai_summary,
-            args.report,
-            framework=args.compliance,        # <-- was missing
-            base_dir=Path.cwd(),
+            findings, ai_summary, args.report,
+            framework=args.compliance, base_dir=base_dir,
         )
         logger.success(f"PDF report generated: {args.report}")
 
@@ -521,7 +534,7 @@ async def run_app() -> None:
         export_cyclonedx(findings, args.export_cyclonedx)
         logger.success(f"CycloneDX report exported to {args.export_cyclonedx}")
 
-    # Notifications
+    # ── Notifications ──────────────────────────────────────────────
     if args.notify_jira:
         jira_url = os.environ.get("JIRA_URL")
         jira_token = os.environ.get("JIRA_TOKEN")
@@ -549,5 +562,5 @@ def main() -> None:
         sys.exit(130)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

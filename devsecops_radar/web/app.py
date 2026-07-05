@@ -1,26 +1,41 @@
 # devsecops_radar/web/app.py
-import hmac
+"""
+Pipeline Sentinel – Web Dashboard Factory.
+Provides the Flask application with secure authentication,
+CORS, rate limiting, CSP, and blueprint registration.
+"""
+
+from __future__ import annotations
+
 import os
 import socket
-import threading
-import time
-from collections.abc import Callable
-from functools import wraps
 from pathlib import Path
 
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from loguru import logger
-from werkzeug.exceptions import BadRequest
+# بارگذاری .env از دایرکتوری کاری کاربر (نه مسیر نصب پکیج)
+from dotenv import load_dotenv
 
-from devsecops_radar.core.auth import create_token
-from devsecops_radar.core.database import db_session
-from devsecops_radar.core.settings import settings
-from devsecops_radar.web.attack_paths.routes import attack_paths_bp
-from devsecops_radar.web.dashboard.routes import dashboard_bp
-from devsecops_radar.web.sentry.routes import sentry_bp
-from devsecops_radar.web.summary.routes import summary_bp
-from devsecops_radar.web.topology.routes import topology_bp
+_DOTENV_PATH = Path.cwd() / ".env"
+if _DOTENV_PATH.exists():
+    load_dotenv(_DOTENV_PATH)
+
+from flask import Flask, jsonify, request  # noqa: E402
+from flask_cors import CORS  # noqa: E402
+from loguru import logger  # noqa: E402
+from werkzeug.middleware.proxy_fix import ProxyFix  # noqa: E402
+
+from devsecops_radar.core.auth import (  # noqa: E402
+    _check_rate_limit,
+    _get_remote_ip,
+    create_token,
+    start_cleanup_thread,
+)
+from devsecops_radar.core.database import db_session  # noqa: E402
+from devsecops_radar.core.settings import settings  # noqa: E402
+from devsecops_radar.web.attack_paths.routes import attack_paths_bp  # noqa: E402
+from devsecops_radar.web.dashboard.routes import dashboard_bp  # noqa: E402
+from devsecops_radar.web.sentry.routes import sentry_bp  # noqa: E402
+from devsecops_radar.web.summary.routes import summary_bp  # noqa: E402
+from devsecops_radar.web.topology.routes import topology_bp  # noqa: E402
 
 try:
     from rich.console import Console
@@ -30,43 +45,6 @@ try:
     HAS_RICH = True
 except ImportError:
     HAS_RICH = False
-
-
-# ---------------------------------------------------------------------------
-# In‑memory rate limiter (unchanged)
-# ---------------------------------------------------------------------------
-_rate_store: dict[str, list[float]] = {}
-_rate_lock = threading.Lock()
-
-
-def _cleanup_rate_store(now: float, window: float) -> None:
-    expired = [ip for ip, stamps in _rate_store.items()
-               if all(now - t >= window for t in stamps)]
-    for ip in expired:
-        del _rate_store[ip]
-
-
-def rate_limited(max_requests: int, window_seconds: float):
-    """Decorator that limits *max_requests* per *window_seconds* per IP."""
-    def decorator(f: Callable) -> Callable:
-        @wraps(f)
-        def wrapper(*args, **kwargs):
-            ip = request.remote_addr or "unknown"
-            now = time.time()
-            with _rate_lock:
-                _cleanup_rate_store(now, window_seconds)
-                timestamps = _rate_store.get(ip, [])
-                timestamps = [t for t in timestamps if now - t < window_seconds]
-                if len(timestamps) >= max_requests:
-                    _rate_store[ip] = timestamps
-                    return jsonify({
-                        "error": "Rate limit exceeded. Please slow down."
-                    }), 429
-                timestamps.append(now)
-                _rate_store[ip] = timestamps
-            return f(*args, **kwargs)
-        return wrapper
-    return decorator
 
 
 # ---------------------------------------------------------------------------
@@ -81,15 +59,8 @@ def _get_local_ip() -> str:
         return "127.0.0.1"
 
 
-def _check_file(path: str) -> bool:
-    return Path(path).is_file()
-
-
-def print_startup_banner(host: str, port: int, debug: bool) -> None:
-    api_key_set = bool(settings.PIPELINE_API_KEY)
+def print_startup_banner(host: str, port: int, debug: bool, api_key_set: bool) -> None:
     local_ip = _get_local_ip()
-    findings_file = os.environ.get("FINDINGS_FILE", "findings.json")
-    findings_exist = _check_file(findings_file)
     ollama_reachable = False
     try:
         import httpx
@@ -117,15 +88,15 @@ def print_startup_banner(host: str, port: int, debug: bool) -> None:
 
         urls_str = "  •  ".join(urls)
         table.add_row("🌐 Dashboard:", urls_str)
-        table.add_row("🔒 API Key Auth:",
-                      "Enabled" if api_key_set else "DISABLED – Set PIPELINE_API_KEY")
-        table.add_row("📡 Mode:",
-                      "DEBUG (Insecure)" if debug else "PRODUCTION (Waitress)")
-        table.add_row("📁 Findings File:",
-                      "Loaded" if findings_exist else "Not Found (use CLI first)")
-        table.add_row("🧠 Ollama:",
-                      "Available" if ollama_reachable else "Offline (AI analysis disabled)")
-        table.add_row("⏱️  Worker Threads:", "8")
+        table.add_row("🔒 API Key Auth:", "Enabled" if api_key_set else "DISABLED")
+        table.add_row("📡 Mode:", "DEBUG (Insecure)" if debug else "PRODUCTION (Waitress)")
+        table.add_row("💾 Data Source:", "Database (scans & findings)")
+        table.add_row("🔐 TLS:", "Not enabled – use a reverse proxy for HTTPS")
+
+        if debug:
+            table.add_row("🧠 Ollama:", "Available" if ollama_reachable else "Offline")
+            table.add_row("⏱️  Worker Threads:", os.environ.get("WORKER_THREADS", "8"))
+
         table.add_row("🛑 Stop Server:", "Press CTRL+C")
 
         panel = Panel(
@@ -151,17 +122,52 @@ def print_startup_banner(host: str, port: int, debug: bool) -> None:
 def create_app() -> Flask:
     app = Flask(__name__)
 
-    # 1. Security: Restrict maximum payload size to 1MB to prevent memory DoS
+    # 1. Secret key – required for session cookies and JWT
+    try:
+        app.secret_key = settings.JWT_SECRET
+        _jwt_available = True
+    except ValueError:
+        # JWT_SECRET not set – JWT auth will be disabled
+        import secrets
+        app.secret_key = secrets.token_hex(32)
+        _jwt_available = False
+        logger.warning(
+            "JWT_SECRET not set. JWT authentication is DISABLED. "
+            "Only API key authentication will work."
+        )
+
+    # 2. Security: Restrict maximum payload size to 1MB
     app.config["MAX_CONTENT_LENGTH"] = 1 * 1024 * 1024
 
-    # 2. Security: Configure CORS using environment variable
+    # 3. Trust reverse proxies (X-Forwarded-For, X-Forwarded-Proto)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # type: ignore[assignment]
+
+    # 4. Configure CORS
     allowed_origins = os.environ.get(
         "CORS_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"
     )
     origins_list = [o.strip() for o in allowed_origins.split(",") if o.strip()]
     CORS(app, resources={r"/api/*": {"origins": origins_list}})
 
-    # 3. Architecture: Register Blueprints
+    # 5. Content Security Policy header
+    @app.after_request
+    def add_security_headers(response):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "img-src 'self' data:; "
+            "connect-src 'self' http://localhost:* https://localhost:*; "
+            "font-src 'self' https://cdn.jsdelivr.net; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self';"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
+
+    # 6. Register Blueprints
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(attack_paths_bp, url_prefix="/api")
     app.register_blueprint(topology_bp, url_prefix="/api")
@@ -169,33 +175,25 @@ def create_app() -> Flask:
     app.register_blueprint(sentry_bp, url_prefix="/api")
 
     # ------------------------------------------------------------------
-    # Global auth check – EXCLUDES OPTIONS requests for CORS preflight
-    # ------------------------------------------------------------------
-    @app.before_request
-    def global_auth_check():
-        # Allow preflight requests to pass through without auth
-        if request.method == "OPTIONS":
-            return None
-
-        if request.path.startswith("/api/") and request.path != "/api/auth/login":
-            if not request.headers.get("X-API-Key") and not request.headers.get("Authorization"):
-                return jsonify({"error": "Authentication required"}), 401
-
-    # ------------------------------------------------------------------
-    # Authentication endpoint (with rate limiting & audit trail)
+    # Authentication endpoint (NOW WITH RATE LIMITING)
     # ------------------------------------------------------------------
     @app.route("/api/auth/login", methods=["POST", "OPTIONS"])
-    @rate_limited(max_requests=5, window_seconds=60)
     def login():
         if request.method == "OPTIONS":
             return "", 200
+
+        # Rate limiting using the same function from auth.py
+        ip = _get_remote_ip()
+        if not _check_rate_limit(ip):
+            logger.warning(f"Rate limit exceeded for {ip} on login endpoint.")
+            return jsonify({"error": "Too many login attempts. Please slow down."}), 429
 
         if not request.is_json:
             return jsonify({"error": "Content-Type must be application/json"}), 400
 
         try:
             data = request.get_json(force=False, silent=False)
-        except BadRequest:
+        except Exception:
             return jsonify({"error": "Malformed JSON"}), 400
 
         if not data or not isinstance(data, dict):
@@ -214,6 +212,7 @@ def create_app() -> Flask:
             logger.error("System configuration error: PIPELINE_API_KEY is not set.")
             return jsonify({"error": "Internal server configuration error"}), 500
 
+        import hmac
         if hmac.compare_digest(
             provided_password.encode("utf-8"), expected_key.encode("utf-8")
         ):
@@ -258,10 +257,15 @@ def start_server():
     host = settings.HOST or "0.0.0.0"
     port = int(settings.PORT) if settings.PORT else 8080
 
-    print_startup_banner(host, port, settings.DEBUG)
+    api_key_set = bool(settings.PIPELINE_API_KEY)
+
+    print_startup_banner(host, port, settings.DEBUG, api_key_set)
 
     if settings.DEBUG:
         logger.warning("WARNING: DEBUG mode is active. Do NOT use in production!")
+
+    # Start rate-limiter cleanup thread
+    start_cleanup_thread()
 
     from waitress import serve
     threads = int(os.environ.get("WORKER_THREADS", "8"))

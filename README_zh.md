@@ -41,7 +41,7 @@
 11. [核心能力](#-核心能力)
 12. [社区规则与在线更新](#-社区规则与在线更新)
 13. [攻击模拟与 “如果...怎么办” 分析](#-攻击模拟与-如果怎么办-分析)
-14. [v0.4.6 版本安全提升](#-v046-版本安全提升)
+14. [v1.0.0 版本安全提升](#-v100-版本安全提升)
 15. [项目架构](#-项目架构)
 16. [发展路线图](#-发展路线图)
 17. [测试与 CI](#-测试与-ci)
@@ -289,7 +289,8 @@ docker run -p 8080:8080 ghcr.io/mehrdoost/devsecops-radar:latest
 ```
 **挂载您自己的 findings 报告：**
 ```bash
-docker run -p 8080:8080 -v $(pwd)/findings.json:/data/findings.json ghcr.io/mehrdoost/devsecops-radar:latest
+docker pull mehrdoost/devsecops-radar:latest
+docker run -p 8080:8080 mehrdoost/devsecops-radar:latest
 ```
 **或者使用 Docker Compose：**
 ```bash
@@ -573,21 +574,33 @@ devsecops-radar --trivy scan.json --rules ~/.devsecops-radar/community-rules/
 
 ---
 
-## ✨ v0.4.6 更新内容
+## 🛡️ v1.0.0 更新内容
 
-- **实时 Sentry 推送** – CI/CD 发现结果自动实时显示  
-- **扫描器状态** – 查看哪些工具已安装并就绪  
-- **AI 修复计划** – 控制台中直接提供分步修复说明  
-- **策略状态** – 来自 `policy.json` 的实时违规指示  
-- **拓扑图** – 基础设施资产的可交互地图  
-- **高级过滤器** – 按工具、严重性、目标或描述进行筛选  
-- **一键 Jira 和 Asana** – 直接从报告弹窗发送发现结果  
-- **自动主题** – 跟随操作系统的浅色/深色偏好  
-- **所有 CLI 标志现已生效** – `--export-sarif`、`--export-cyclonedx`、`--compliance`、`--notify-jira`、`--notify-asana`、`--update-rules`、`--rego-policy`  
-- **考虑 Token 的 AI 分块** – 防止本地模型上下文溢出  
-- **加权风险评分** – 合并结果反映真实的发现密度  
-- **蓝图重组** – 消除重复路由，架构更清晰  
-- **严格的 lint 和类型检查** – 零 Ruff/mypy 错误
+Pipeline Sentinel v1.0.0 是在经过六个月高强度加固之后的 **一次全面的安全和架构
+重构**。每个模块都经过了审计、重写和强化，适用于生产级 DevSecOps 工作流。
+
+**🔒 安全优先**
+完全重新设计的路径隔离、符号链接保护、基于目录的可执行文件白名单、社区规则
+的 GPG 签名验证、加密数据库支持，以及所有报告中自动的密钥脱敏。
+
+**🧠 真正的 RAG 与 AI 攻击链**
+通过 ChromaDB + Ollama 对所有历史发现进行语义搜索。
+AI 分析现在会将相似的历史发现注入提示词中，使模型能够识别多步攻击链——
+这正是 README 所承诺的。
+
+**🕸️ 沉浸式 3D 指挥中心**
+全新的赛博朋克风格仪表板，包含 3D 攻击图、趋势山脉、拓扑城市、GSAP 动画、
+程序化音效，以及一个 **全新的闲置小游戏**（Sentry Glider），
+在两分钟无操作后自动启动。
+
+**⚙️ 坚如磐石的扫描器与命令行**
+所有扫描器均重写，并强制进行路径验证和流式输出。
+`--fix` 和 `--review` 使用证据检查和 `patch --dry-run` 安全地应用 AI 补丁。
+全面支持 Windows、macOS 和 Linux。
+
+**🗃️ 一致的数据层**
+一切数据都存储在一个单独的 SQLite 数据库中——不再有 JSON 文件漂移。
+扫描、AI 摘要、拓扑和历史记录始终保持同步。
 
 ---
 

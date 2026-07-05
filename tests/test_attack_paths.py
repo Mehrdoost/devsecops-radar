@@ -1,15 +1,12 @@
-"""Tests for attack_paths routes – final version."""
+"""Tests for attack_paths routes – updated to match database‑driven implementation."""
 
 import json
-from io import StringIO
+from unittest.mock import MagicMock, patch
 
 import pytest
 from flask import Flask
 
-from devsecops_radar.web.attack_paths.routes import (
-    _load_findings,
-    attack_paths_bp,
-)
+from devsecops_radar.web.attack_paths.routes import attack_paths_bp
 
 
 @pytest.fixture
@@ -27,69 +24,55 @@ def client(app, monkeypatch):
         yield client
 
 
-class TestLoadFindings:
-    def test_file_exists(self, monkeypatch):
-        data = [{"id": "1", "severity": "HIGH"}]
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.safe_read_open",
-            lambda path, base_dir=None: StringIO(json.dumps(data)),
-        )
-        result = _load_findings()
-        assert result == data
-
-    def test_file_missing(self, monkeypatch):
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.safe_read_open",
-            lambda path, base_dir=None: (_ for _ in ()).throw(FileNotFoundError),
-        )
-        assert _load_findings() == []
-
-
 class TestApiAttackPaths:
-    def test_no_findings_returns_empty_graph(self, client, monkeypatch):
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.safe_read_open",
-            lambda path, base_dir=None: (_ for _ in ()).throw(FileNotFoundError),
-        )
-        resp = client.get("/attack-paths")
-        assert resp.status_code == 200
-        data = resp.json
-        assert data["attack_paths"] == []
-        assert data["nodes"] == []
-        assert data["links"] == []
+    def test_no_findings_returns_empty_graph(self, client):
+        """When the database has no AI analysis and no findings, return empty graph."""
+        with patch(
+            "devsecops_radar.web.attack_paths.routes.SessionLocal"
+        ) as mock_session_local:
+            mock_session = MagicMock()
+            mock_session_local.return_value = mock_session
 
-    def test_no_ai_summary_returns_empty_graph(self, client, monkeypatch):
-        findings = [
-            {"id": "CVE-1", "severity": "HIGH", "title": "First"},
-            {"id": "CVE-2", "severity": "MEDIUM", "title": "Second"},
-        ]
-        findings_io = StringIO(json.dumps(findings))
-        def mock_open(path, base_dir=None):
-            if path == "findings.json":
-                return findings_io
-            raise FileNotFoundError
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.safe_read_open", mock_open
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.FINDINGS_FILE", "findings.json"
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.AI_SUMMARY_FILE", "nonexistent.json"
-        )
-        resp = client.get("/attack-paths")
-        assert resp.status_code == 200
-        data = resp.json
-        assert data["attack_paths"] == []
-        assert data["nodes"] == []
-        assert data["links"] == []
+            # First call: get latest AI analysis (returns None)
+            mock_scan_query = mock_session.query.return_value.order_by.return_value
+            mock_scan_query.first.return_value = None
 
-    def test_ai_attack_paths_are_used(self, client, monkeypatch):
-        findings = [
-            {"id": "CVE-1", "severity": "HIGH", "title": "First"},
-            {"id": "CVE-2", "severity": "MEDIUM", "title": "Second"},
-        ]
-        ai_summary = {
+            resp = client.get("/attack-paths")
+            assert resp.status_code == 200
+            data = resp.json
+            assert data["attack_paths"] == []
+            assert data["nodes"] == []
+            assert data["links"] == []
+
+    def test_no_ai_summary_returns_empty_graph(self, client):
+        """When no AI analysis exists, fallback graph is built from findings."""
+        with patch(
+            "devsecops_radar.web.attack_paths.routes.SessionLocal"
+        ) as mock_session_local:
+            mock_session = MagicMock()
+            mock_session_local.return_value = mock_session
+
+            # First call: get latest AI analysis (returns None)
+            mock_scan_query = mock_session.query.return_value.order_by.return_value
+            mock_scan_query.first.return_value = None
+
+            # Second call: get findings for fallback graph
+            mock_finding_query = mock_session.query.return_value
+            mock_finding_query.limit.return_value.all.return_value = [
+                MagicMock(rule_id="CVE-1", tool="trivy", severity="HIGH", target="/app", title="First"),
+                MagicMock(rule_id="CVE-2", tool="trivy", severity="MEDIUM", target="/app", title="Second"),
+            ]
+
+            resp = client.get("/attack-paths")
+            assert resp.status_code == 200
+            data = resp.json
+            # With two findings on the same target, one edge should be created
+            assert len(data["nodes"]) == 2
+            assert len(data["links"]) == 1  # one edge connecting the two nodes
+
+    def test_ai_attack_paths_are_used(self, client):
+        """When AI analysis exists, its attack paths are used."""
+        ai_summary_data = {
             "attack_paths": [
                 {
                     "description": "Custom chain",
@@ -97,49 +80,54 @@ class TestApiAttackPaths:
                 }
             ]
         }
-        def mock_open(path, base_dir=None):
-            if path == "findings.json":
-                return StringIO(json.dumps(findings))
-            elif path == "findings_ai_summary.json":
-                return StringIO(json.dumps(ai_summary))
-            raise FileNotFoundError
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.safe_read_open", mock_open
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.FINDINGS_FILE", "findings.json"
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.AI_SUMMARY_FILE", "findings_ai_summary.json"
-        )
-        resp = client.get("/attack-paths")
-        assert resp.status_code == 200
-        data = resp.json
-        assert len(data["nodes"]) == 1
-        assert data["nodes"][0]["id"] == "CVE-1"
-        assert len(data["links"]) == 0  # single node, no link
 
-    def test_ai_summary_without_attack_paths(self, client, monkeypatch):
-        findings = [{"id": "CVE-1", "severity": "LOW", "title": "One"}]
-        ai_summary = {"executive_summary": "All good"}
-        def mock_open(path, base_dir=None):
-            if path == "findings.json":
-                return StringIO(json.dumps(findings))
-            elif path == "findings_ai_summary.json":
-                return StringIO(json.dumps(ai_summary))
-            raise FileNotFoundError
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.safe_read_open", mock_open
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.FINDINGS_FILE", "findings.json"
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.attack_paths.routes.AI_SUMMARY_FILE", "findings_ai_summary.json"
-        )
-        resp = client.get("/attack-paths")
-        assert resp.status_code == 200
-        data = resp.json
-        assert data["attack_paths"] == []
-        assert data["nodes"] == []
-        assert data["links"] == []
+        with patch(
+            "devsecops_radar.web.attack_paths.routes.SessionLocal"
+        ) as mock_session_local:
+            mock_session = MagicMock()
+            mock_session_local.return_value = mock_session
+
+            # First call: get latest AI analysis
+            mock_scan = MagicMock()
+            mock_scan.ai_summary_json = json.dumps(ai_summary_data)
+            mock_scan_query = mock_session.query.return_value.order_by.return_value
+            mock_scan_query.first.return_value = mock_scan
+
+            # Second call: get findings matching involved IDs
+            mock_finding = MagicMock()
+            mock_finding.rule_id = "CVE-1"
+            mock_finding.severity = "HIGH"
+            mock_finding.title = "First"
+            mock_session.query.return_value.filter.return_value.limit.return_value.all.return_value = [
+                mock_finding
+            ]
+
+            resp = client.get("/attack-paths")
+            assert resp.status_code == 200
+            data = resp.json
+            assert len(data["nodes"]) == 1
+            assert data["nodes"][0]["id"] == "CVE-1"
+            assert len(data["links"]) == 0  # single node, no link
+
+    def test_ai_summary_without_attack_paths(self, client):
+        """When AI summary has no attack_paths, returns empty graph."""
+        ai_summary_data = {"executive_summary": "All good"}
+
+        with patch(
+            "devsecops_radar.web.attack_paths.routes.SessionLocal"
+        ) as mock_session_local:
+            mock_session = MagicMock()
+            mock_session_local.return_value = mock_session
+
+            # First call: get latest AI analysis
+            mock_scan = MagicMock()
+            mock_scan.ai_summary_json = json.dumps(ai_summary_data)
+            mock_scan_query = mock_session.query.return_value.order_by.return_value
+            mock_scan_query.first.return_value = mock_scan
+
+            resp = client.get("/attack-paths")
+            assert resp.status_code == 200
+            data = resp.json
+            assert data["attack_paths"] == []
+            assert data["nodes"] == []
+            assert data["links"] == []

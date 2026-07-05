@@ -1,4 +1,11 @@
 # devsecops_radar/core/analyzer.py
+"""
+AI Security Analysis Engines (Ollama & LiteLLM) with token‑aware chunking,
+full sanitization, and semantic RAG integration.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import json
 import os
@@ -6,7 +13,6 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, cast
-from urllib.parse import urlparse
 
 import httpx
 from loguru import logger
@@ -22,7 +28,7 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models (updated)
+# Pydantic models (unchanged)
 # ---------------------------------------------------------------------------
 class AttackPath(BaseModel):
     title: str = Field(..., description="Short title of the attack path")
@@ -33,16 +39,14 @@ class AttackPath(BaseModel):
         default="Impact assessment was not provided by the AI model.",
         description="Potential business or technical impact",
     )
-    involved_findings: list[str] = Field(          # <-- NEW
+    involved_findings: list[str] = Field(
         default_factory=list,
         description="List of finding IDs that form this attack path",
     )
 
 
 class Remediation(BaseModel):
-    finding_id: str = Field(
-        ..., description="The ID of the finding this relates to"
-    )
+    finding_id: str = Field(..., description="The ID of the finding this relates to")
     title: str = Field(..., description="Short title for the fix")
     remediation_steps: list[str] = Field(
         ..., description="Step-by-step human-readable instructions to fix the issue"
@@ -58,14 +62,15 @@ class AIAnalysisResponse(BaseModel):
         ..., description="High-level summary of the security posture"
     )
     risk_score: float = Field(
-        ..., ge=-1, le=100, description="Overall risk score between -1 and 100. -1 means analysis failed."
+        ..., ge=-1, le=100,
+        description="Overall risk score between -1 and 100. -1 means analysis failed."
     )
     attack_paths: list[AttackPath] = Field(default_factory=list)
     top_remediations: list[Remediation] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# Helper functions
+# Helper functions (sanitization, token counting, truncation)
 # ---------------------------------------------------------------------------
 def _count_tokens(text: str) -> int:
     if TOKENIZER:
@@ -77,13 +82,17 @@ def _count_tokens(text: str) -> int:
 
 
 def _sanitize_for_prompt(text: str) -> str:
-    """Remove control characters and null bytes to prevent prompt injection."""
+    """
+    Remove control characters, null bytes, and HTML‑like tag delimiters
+    to prevent prompt injection via closing tags.
+    """
     if not isinstance(text, str):
         return ""
-    # Remove null bytes
     text = text.replace("\x00", "")
-    # Remove ASCII control characters except tab, newline, carriage return
+    # Remove ASCII control characters except newline, tab
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    # Remove < and > to prevent breaking out of XML‑style prompt boundaries
+    text = text.replace("<", "").replace(">", "")
     return text
 
 
@@ -104,6 +113,25 @@ def _sanitize_finding(finding: dict[str, Any]) -> dict[str, Any]:
         else:
             sanitized[key] = value
     return sanitized
+
+
+def _truncate_finding(finding: dict[str, Any], max_len: int = 2000) -> dict[str, Any]:
+    """Truncate all string values in a finding to *max_len* characters."""
+    truncated: dict[str, Any] = {}
+    for key, value in finding.items():
+        if isinstance(value, str):
+            truncated[key] = value[:max_len] if len(value) > max_len else value
+        elif isinstance(value, dict):
+            truncated[key] = _truncate_finding(value, max_len)
+        elif isinstance(value, list):
+            truncated[key] = [
+                _truncate_finding(item, max_len) if isinstance(item, dict)
+                else (item[:max_len] if isinstance(item, str) and len(item) > max_len else item)
+                for item in value
+            ]
+        else:
+            truncated[key] = value
+    return truncated
 
 
 # ---------------------------------------------------------------------------
@@ -136,16 +164,35 @@ class AIAnalyzer(ABC):
         start_tag = f"<FINDINGS_DATA_{boundary}>"
         end_tag = f"</FINDINGS_DATA_{boundary}>"
 
-        # Sanitize all findings before putting them in the prompt
-        [_sanitize_finding(f) for f in findings]
+        # Sanitize and truncate all findings before serialisation
+        safe_findings = [_truncate_finding(_sanitize_finding(f)) for f in findings]
 
         topology_text = ""
         if include_topology and topology:
             topo_str = json.dumps(topology)
-            topology_text = (
-                f"\nAsset Topology:\n{topo_str[:2000]}"
-                + ("... [TRUNCATED]" if len(topo_str) > 2000 else "")
+            topo_str = topo_str[:2000] + ("... [TRUNCATED]" if len(topo_str) > 2000 else "")
+            topo_str = _sanitize_for_prompt(topo_str)
+            topology_text = f"\nAsset Topology:\n{topo_str}"
+
+        # ── RAG context injection ──────────────────────────────────────
+        rag_context = ""
+        try:
+            from devsecops_radar.core.rag import rag_search
+            # Build a query from the first few findings
+            sample_text = " ".join(
+                f.get("title", "") + " " + f.get("description", "")
+                for f in findings[:3]
             )
+            if sample_text.strip():
+                rag_results = rag_search(sample_text, limit=5)
+                if rag_results:
+                    rag_context = (
+                        "\nHistorically similar findings (for context):\n"
+                        + json.dumps(rag_results, indent=2)
+                        + "\n"
+                    )
+        except Exception as e:
+            logger.warning(f"RAG search failed, proceeding without context: {e}")
 
         prompt = f"""Analyze the following security findings.
 
@@ -161,8 +208,9 @@ IMPORTANT: Your response must be a single JSON object with exactly these fields:
 Make sure every object in "attack_paths" includes all four fields.
 Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
 
+{rag_context}
 {start_tag}
-{json.dumps(findings, indent=2)}
+{json.dumps(safe_findings, indent=2)}
 {topology_text}
 {end_tag}
 """
@@ -188,10 +236,7 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
             ).model_dump()
 
         if "$defs" in extracted or "properties" in extracted:
-            logger.error(
-                "LLM returned the JSON schema instead of analysis. "
-                "Using safe fallback."
-            )
+            logger.error("LLM returned the JSON schema instead of analysis. Using safe fallback.")
             return AIAnalysisResponse(
                 executive_summary="AI analysis failed due to invalid model output. Please retry.",
                 risk_score=-1.0,
@@ -256,6 +301,35 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
             "top_remediations": merged_remediations,
         }
 
+    def _chunk_by_tokens(
+        self, findings: list[dict[str, Any]], max_tokens_per_chunk: int = 2500
+    ) -> list[list[dict[str, Any]]]:
+        if not TOKENIZER:
+            chunk_size = getattr(self, 'default_chunk_size', 5)
+            return [findings[i:i + chunk_size] for i in range(0, len(findings), chunk_size)]
+
+        chunks: list[list[dict[str, Any]]] = []
+        current_chunk: list[dict[str, Any]] = []
+        current_tokens = 0
+        base_overhead = 300
+
+        for f in findings:
+            finding_json = json.dumps(f)
+            finding_tokens = len(TOKENIZER.encode(finding_json)) + 2
+            if current_tokens + finding_tokens > (max_tokens_per_chunk - base_overhead) and current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = [f]
+                current_tokens = finding_tokens
+            else:
+                current_chunk.append(f)
+                current_tokens += finding_tokens
+
+        if current_chunk:
+            chunks.append(current_chunk)
+
+        logger.debug(f"Token‑aware chunking: {len(findings)} findings → {len(chunks)} chunks")
+        return chunks
+
     @abstractmethod
     async def _analyze_chunk(self, prompt: str) -> dict[str, Any]:
         pass
@@ -266,13 +340,15 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         topology: dict[str, Any] | None = None,
         chunk_size: int = 5,
     ) -> dict[str, Any]:
-        # Use chunk_size to split findings into smaller batches
-        chunks = [findings[i:i + chunk_size] for i in range(0, len(findings), chunk_size)]
+        if TOKENIZER:
+            chunks = self._chunk_by_tokens(findings)
+        else:
+            chunks = [findings[i:i + chunk_size] for i in range(0, len(findings), chunk_size)]
 
         if len(chunks) > 10:
             logger.warning(
                 f"High load: Processing {len(chunks)} chunks. "
-                "Consider increasing 'chunk_size' to reduce overhead."
+                "Consider increasing model context or reducing findings."
             )
 
         sem = asyncio.Semaphore(5)
@@ -283,7 +359,20 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
                 return await self._analyze_chunk(prompt)
 
         tasks = [_sem_task(chunks[i], i == 0) for i in range(len(chunks))]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Wrap gather with an overall timeout (at most 5 minutes or self.timeout * chunks)
+        overall_timeout = max(self.timeout, self.timeout * len(chunks))
+        try:
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=overall_timeout
+            )
+        except TimeoutError:
+            logger.error("AI analysis timed out overall.")
+            return AIAnalysisResponse(
+                executive_summary="Analysis timed out.",
+                risk_score=-1.0,
+            ).model_dump()
 
         valid_results: list[dict[str, Any]] = []
         valid_chunk_sizes: list[int] = []
@@ -294,10 +383,7 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
 
         merged = self.merge_analyses(valid_results, valid_chunk_sizes)
 
-        # ------------------------------------------------------------------
-        # Deterministic sanity check – uses dynamic_risk_score to set a floor.
-        # ------------------------------------------------------------------
-        # Compute average dynamic_risk_score as a floor
+        # Deterministic sanity check
         dynamic_scores = [
             f.get("dynamic_risk_score", 0.0)
             for f in findings
@@ -305,14 +391,13 @@ Do NOT include any other text or the JSON schema. Output ONLY the JSON object.
         ]
         if dynamic_scores:
             avg_dynamic = sum(dynamic_scores) / len(dynamic_scores)
-            # Scale from 0-10 to 0-100
             deterministic_floor = min(100.0, avg_dynamic * 10.0)
         else:
             deterministic_floor = 0.0
 
         if merged["risk_score"] < 0:
-            pass  # already marked as failure
-        elif merged["risk_score"] < deterministic_floor * 0.6:
+            pass
+        elif merged["risk_score"] < deterministic_floor:
             logger.warning(
                 f"LLM reported risk {merged['risk_score']}, but deterministic "
                 f"floor is {deterministic_floor:.1f}. Overriding to deterministic floor."
@@ -330,22 +415,17 @@ class OllamaAnalyzer(AIAnalyzer):
         self, model_name: str = "llama3.2:latest", timeout: int = 300
     ) -> None:
         super().__init__(model_name, timeout)
-        raw_url = os.environ.get(
-            "OLLAMA_API_BASE", "http://localhost:11434/api/generate"
-        )
-        parsed = urlparse(raw_url)
-        if parsed.scheme not in ["http", "https"]:
-            logger.warning(
-                "Invalid OLLAMA_API_BASE scheme. Falling back to localhost."
-            )
+        raw_url = os.environ.get("OLLAMA_API_BASE", "http://localhost:11434/api/generate")
+        parsed = httpx.URL(raw_url)
+        if parsed.scheme not in ("http", "https"):
+            logger.warning("Invalid OLLAMA_API_BASE scheme. Falling back to localhost.")
             raw_url = "http://localhost:11434/api/generate"
-        elif parsed.hostname not in ["localhost", "127.0.0.1", "[::1]", None]:
+        elif parsed.host not in ("localhost", "127.0.0.1", "::1", None):
             logger.error(
-                f"OLLAMA_API_BASE is not a local address ({parsed.hostname}). "
+                f"OLLAMA_API_BASE is not a local address ({parsed.host}). "
                 "Blocked for security. Use only localhost."
             )
             raw_url = "http://localhost:11434/api/generate"
-
         self.endpoint = raw_url
 
     @retry(
@@ -395,12 +475,10 @@ class LiteLLMAnalyzer(AIAnalyzer):
             self.litellm.set_verbose = False
         except ImportError as err:
             logger.error(
-                "LiteLLM is not installed. To use cloud models, run: "
-                "pip install litellm"
+                "LiteLLM is not installed. To use cloud models, run: pip install litellm"
             )
             raise ImportError(
-                "Missing litellm package. Alternatively, use the default "
-                "Ollama backend."
+                "Missing litellm package. Alternatively, use the default Ollama backend."
             ) from err
 
     @retry(
@@ -434,15 +512,11 @@ class LiteLLMAnalyzer(AIAnalyzer):
 # ---------------------------------------------------------------------------
 # Factory function
 # ---------------------------------------------------------------------------
-def get_analyzer(
-    backend: str = "ollama", model: str | None = None
-) -> AIAnalyzer:
+def get_analyzer(backend: str = "ollama", model: str | None = None) -> AIAnalyzer:
     if backend.lower() == "litellm":
         return LiteLLMAnalyzer(model_name=model or "gpt-4")
     elif backend.lower() == "ollama":
         return OllamaAnalyzer(model_name=model or "llama3.2:latest")
     else:
-        logger.warning(
-            f"Unknown backend '{backend}'. Falling back to Ollama."
-        )
+        logger.warning(f"Unknown backend '{backend}'. Falling back to Ollama.")
         return OllamaAnalyzer(model_name=model or "llama3.2:latest")

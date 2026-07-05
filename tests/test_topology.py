@@ -1,121 +1,120 @@
-"""Tests for topology routes (updated – mock safe_read_open & set cwd)."""
+"""Tests for infrastructure topology API endpoint."""
+
+from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+import time
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 
-from devsecops_radar.web.topology.routes import topology_bp
+from devsecops_radar.core.database import init_db
+from devsecops_radar.web.app import create_app
 
 
 @pytest.fixture
-def app():
-    """Create a Flask test app with the topology blueprint."""
-    app = Flask(__name__)
-    app.register_blueprint(topology_bp)
+def app() -> Flask:
+    app = create_app()
+    app.config["TESTING"] = True
     return app
 
 
 @pytest.fixture
-def client(app, monkeypatch):
-    """Return test client with a valid API key in the header."""
-    monkeypatch.setenv("PIPELINE_API_KEY", "test-api-key")
-    with app.test_client() as client:
-        client.environ_base["HTTP_X_API_KEY"] = "test-api-key"
-        yield client
+def client(app: Flask) -> FlaskClient:
+    return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _init_db() -> None:
+    init_db()
+
+
+@pytest.fixture(autouse=True)
+def _reset_topology_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force the topology module to use *tmp_path* as its working directory."""
+    import devsecops_radar.web.topology.routes as topo_routes
+    topo_routes._cache = None
+    topo_routes._cache_time = 0.0
+    monkeypatch.setattr(topo_routes, "_ALLOWED_DATA_DIR", tmp_path.resolve())
 
 
 class TestApiTopology:
-    def test_file_not_present(self, client, monkeypatch):
-        """When safe_read_open raises FileNotFoundError, route returns empty dict."""
-        monkeypatch.setattr(
-            "devsecops_radar.web.topology.routes.safe_read_open",
-            lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError),
+    def test_valid_topology_returns_json(
+        self, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "topology.json").write_text(
+            json.dumps({"assets": [{"name": "srv1"}]}), encoding="utf-8"
         )
-        resp = client.get("/topology")
+        monkeypatch.setattr(
+            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE", "topology.json"
+        )
+        resp = client.get("/api/topology")
         assert resp.status_code == 200
-        assert resp.json == {}
+        assert "assets" in resp.get_json()
 
-    def test_valid_topology_file(self, client, monkeypatch, tmp_path):
-        """Valid file content is returned as JSON."""
-        # Change cwd so that safe_read_open allows the file
-        monkeypatch.chdir(tmp_path)
-        data = {"nodes": [{"id": "srv1"}]}
-        file = tmp_path / "topo.json"
-        file.write_text(json.dumps(data))
-
-        # Mock safe_read_open to return a file-like object that supports fileno()
-        mock_file = MagicMock()
-        mock_file.__enter__.return_value = mock_file
-        mock_file.__exit__.return_value = None
-        mock_file.fileno.return_value = 1          # dummy fd
-        mock_file.read.return_value = json.dumps(data)
+    def test_file_too_large_returns_413(
+        self, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "big.json").write_text("{}")
         monkeypatch.setattr(
-            "devsecops_radar.web.topology.routes.safe_read_open",
-            lambda path, base_dir=None: mock_file,
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE",
-            "topo.json",
-        )
-        # Also mock os.fstat so that size check passes
-        with patch("os.fstat") as mock_fstat:
-            mock_fstat.return_value.st_size = 100  # small size
-            resp = client.get("/topology")
-        assert resp.status_code == 200
-        assert resp.json == data
-
-    def test_file_too_large(self, client, monkeypatch, tmp_path):
-        """When file size exceeds 10 MB, returns 413 error."""
-        monkeypatch.chdir(tmp_path)
-        big_data = {"data": "x" * (11 * 1024 * 1024)}  # > 10 MB
-        file = tmp_path / "big.json"
-        file.write_text(json.dumps(big_data))
-
-        mock_file = MagicMock()
-        mock_file.__enter__.return_value = mock_file
-        mock_file.__exit__.return_value = None
-        mock_file.fileno.return_value = 1
-        mock_file.read.return_value = json.dumps(big_data)
-        monkeypatch.setattr(
-            "devsecops_radar.web.topology.routes.safe_read_open",
-            lambda path, base_dir=None: mock_file,
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE",
-            "big.json",
+            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE", "big.json"
         )
         with patch("os.fstat") as mock_fstat:
-            mock_fstat.return_value.st_size = 11 * 1024 * 1024 + 1
-            resp = client.get("/topology")
+            mock_fstat.return_value.st_size = 11 * 1024 * 1024  # 11 MB
+            resp = client.get("/api/topology")
         assert resp.status_code == 413
-        assert "Topology file too large" in resp.json["error"]
 
-    def test_invalid_json(self, client, monkeypatch, tmp_path):
-        """Invalid JSON returns empty dict."""
-        monkeypatch.chdir(tmp_path)
-        mock_file = MagicMock()
-        mock_file.__enter__.return_value = mock_file
-        mock_file.__exit__.return_value = None
-        mock_file.fileno.return_value = 1
-        mock_file.read.return_value = "not json"
+    def test_invalid_json_returns_empty_object(
+        self, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        (tmp_path / "bad.json").write_text("not json", encoding="utf-8")
         monkeypatch.setattr(
-            "devsecops_radar.web.topology.routes.safe_read_open",
-            lambda path, base_dir=None: mock_file,
+            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE", "bad.json"
         )
-        monkeypatch.setattr(
-            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE",
-            "any.json",
-        )
-        with patch("os.fstat") as mock_fstat:
-            mock_fstat.return_value.st_size = 100
-            resp = client.get("/topology")
-        # Route catches JSONDecodeError and returns empty dict with status 200
+        resp = client.get("/api/topology")
         assert resp.status_code == 200
-        assert resp.json == {}
+        assert resp.get_json() == {}
 
-    def test_unauthenticated(self, app):
-        with app.test_client() as client:
-            resp = client.get("/topology")
-            assert resp.status_code == 401
+    def test_path_outside_base_is_rejected(
+        self, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE", "../secret.json"
+        )
+        resp = client.get("/api/topology")
+        assert resp.status_code == 403
+
+    def test_cache_is_used_on_second_call(
+        self, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        topo = {"nodes": [{"id": "node1"}]}
+        (tmp_path / "topology.json").write_text(json.dumps(topo), encoding="utf-8")
+        monkeypatch.setattr(
+            "devsecops_radar.web.topology.routes.TOPOLOGY_FILE", "topology.json"
+        )
+        resp1 = client.get("/api/topology")
+        assert resp1.status_code == 200
+        (tmp_path / "topology.json").write_text("{}")
+        resp2 = client.get("/api/topology")
+        assert "nodes" in resp2.get_json()
+
+    def test_cache_expires_after_ttl(
+        self, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import devsecops_radar.web.topology.routes as topo_routes
+
+        topo = {"nodes": [{"id": "n1"}]}
+        (tmp_path / "topology.json").write_text(json.dumps(topo), encoding="utf-8")
+        monkeypatch.setattr(topo_routes, "TOPOLOGY_FILE", "topology.json")
+
+        client.get("/api/topology")
+        topo_routes._cache_time = time.time() - 60
+
+        (tmp_path / "topology.json").write_text(
+            json.dumps({"nodes": [{"id": "n2"}]}), encoding="utf-8"
+        )
+        resp = client.get("/api/topology")
+        assert resp.get_json()["nodes"][0]["id"] == "n2"

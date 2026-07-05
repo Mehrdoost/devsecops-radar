@@ -1,34 +1,30 @@
 # devsecops_radar/scanners/base.py
-import shutil
+"""
+Abstract base class for all security scanners.
+
+Provides:
+- Mandatory path validation via template method pattern
+- Streaming output capture with size limit
+- Finding validation against FindingSchema
+"""
+
+from __future__ import annotations
+
 import subprocess
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TypedDict
+from typing import Any
 
 from loguru import logger
 from pydantic import ValidationError
 
 from devsecops_radar.core.models import FindingSchema
 from devsecops_radar.core.path_security import resolve_safe_path
-from devsecops_radar.core.utils import safe_subprocess_run
-
-
-class ScannerFinding(TypedDict, total=False):
-    id: str
-    tool: str
-    target: str
-    severity: str
-    title: str
-    description: str
-    line: int | None
 
 
 class BaseScanner(ABC):
-    """
-    Abstract Base Class for all security scanners.
-    Enforces security contracts (Path Traversal protection, Command execution safety)
-    and output standardization.
-    """
+    """Abstract base class for all security scanners."""
 
     def __init__(
         self,
@@ -41,18 +37,71 @@ class BaseScanner(ABC):
         self.allowed_base_dir = (
             allowed_base_dir.resolve() if allowed_base_dir else Path.cwd()
         )
-        if not shutil.which(self.binary_path):
+        if not _binary_exists(self.binary_path):
             logger.warning(
                 f"Scanner binary '{self.binary_path}' not found in PATH. "
                 "Ensure it is installed before running scans."
             )
 
+    # ------------------------------------------------------------------
+    # Subclasses must implement these two
+    # ------------------------------------------------------------------
     @abstractmethod
     def _default_binary_name(self) -> str:
-        pass
+        """Return the scanner's binary name (e.g., 'trivy')."""
+        ...
 
+    @abstractmethod
+    def _run_internal(self, safe_target: str) -> list[dict[str, Any]]:
+        """
+        Execute the scan on an already‑validated target and return raw findings.
+        """
+        ...
+
+    @abstractmethod
+    def parse(self, file_path: str) -> list[dict[str, Any]]:
+        """
+        Parse an existing scanner result file and return raw findings.
+        """
+        ...
+
+    # ------------------------------------------------------------------
+    # Template method – enforces path validation for all scans
+    # ------------------------------------------------------------------
+    def run(self, target: str) -> list[dict[str, Any]]:
+        """
+        Validate the target path and execute the scan.
+
+        If *target* is a file/directory path, it must reside inside
+        ``allowed_base_dir``.  Other targets (e.g. Docker images) are
+        forwarded unchanged to ``_run_internal``.
+        """
+        if not target:
+            logger.error("Empty target is not allowed.")
+            return []
+
+        # Resolve and validate if the target looks like a path.
+        # For image names (e.g. "nginx:latest"), skip validation.
+        if _looks_like_path(target):
+            safe_target = self._validate_target_path(target)
+            if safe_target is None:
+                return []
+        else:
+            safe_target = target
+
+        return self._run_internal(safe_target)
+
+    # ------------------------------------------------------------------
+    # Security helpers
+    # ------------------------------------------------------------------
     def _validate_target_path(self, target: str) -> str | None:
-        """Validate that *target* is inside the allowed base directory (TOCTOU‑safe)."""
+        """
+        Return the absolute, symlink‑free path if *target* is inside the
+        allowed base directory, otherwise ``None``.
+
+        Because ``resolve_safe_path`` follows symlinks, the returned path
+        is immune to subsequent symlink‑swap attacks.
+        """
         try:
             safe = resolve_safe_path(target, self.allowed_base_dir)
             return str(safe)
@@ -63,68 +112,108 @@ class BaseScanner(ABC):
     def _safe_run_command(
         self, cmd_args: list[str], max_output_mb: int = 50
     ) -> subprocess.CompletedProcess:
+        """
+        Execute a whitelisted command and guard against excessive output.
+
+        Output is read in chunks; if the total size exceeds the limit,
+        the process is killed and an empty result with an error message
+        is returned.
+        """
         if not cmd_args:
             raise ValueError("Command arguments cannot be empty.")
 
-        executable = shutil.which(cmd_args[0])
-        if executable is None:
-            raise FileNotFoundError(
-                f"Required executable not found: {cmd_args[0]}"
-            )
-
-        resolved_cmd = [executable] + cmd_args[1:]
-
-        logger.debug(f"Executing {executable} securely.")
-
-        try:
-            result = safe_subprocess_run(
-                resolved_cmd,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            logger.error(
-                f"Scanner '{cmd_args[0]}' timed out after {self.timeout} seconds."
-            )
-            raise
-        except FileNotFoundError:
-            logger.error(f"Executable not found in PATH: {cmd_args[0]}")
-            raise
-
-        # Check output size – reject entirely if too large (do NOT truncate JSON)
+        # Use Popen for streaming capture
         max_bytes = max_output_mb * 1024 * 1024
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-        total_size = len(stdout.encode()) + len(stderr.encode())
-
-        if total_size > max_bytes:
-            logger.error(
-                f"Output of {cmd_args[0]} exceeds {max_output_mb}MB limit. "
-                "Output discarded to prevent memory exhaustion."
+        try:
+            proc = subprocess.Popen(    # noqa: S603
+                cmd_args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
-            result.stdout = ""
-            result.stderr = f"Output exceeded {max_output_mb}MB limit."
-            result.returncode = 1
+        except FileNotFoundError:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to start process: {e}")
+            raise
 
-        return result
+        # Read stdout and stderr concurrently with a size limit
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        total = 0
+        killed = False
 
-    def _validate_findings(self, raw_findings: list[dict]) -> list[dict]:
-        """Validate raw scanner output against FindingSchema, discarding invalid entries."""
-        validated: list[dict] = []
+        def _read_stream(stream, chunks):
+            nonlocal total, killed
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    killed = True
+                    proc.kill()
+                    break
+                chunks.append(chunk)
+
+        t1 = threading.Thread(target=_read_stream, args=(proc.stdout, stdout_chunks))
+        t2 = threading.Thread(target=_read_stream, args=(proc.stderr, stderr_chunks))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        returncode = proc.wait()
+
+        stdout = "".join(stdout_chunks) if not killed else ""
+        stderr = "".join(stderr_chunks) if not killed else ""
+        if killed:
+            logger.error(
+                f"Output of {cmd_args[0]} exceeded {max_output_mb}MB limit. "
+                "Process killed and output discarded."
+            )
+            returncode = 1
+            stderr = f"Output exceeded {max_output_mb}MB limit."
+
+        return subprocess.CompletedProcess(
+            args=cmd_args,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    def _validate_findings(self, raw_findings: list[dict]) -> list[dict[str, Any]]:
+        """
+        Validate each raw finding against FindingSchema and return
+        cleaned dicts that include all default values.
+        """
+        validated: list[dict[str, Any]] = []
         for item in raw_findings:
             try:
-                FindingSchema(**item)
-                validated.append(item)
+                valid = FindingSchema(**item)
+                validated.append(valid.model_dump())
             except ValidationError as e:
                 logger.debug(f"Discarded invalid scanner finding: {e.errors()[0]['msg']}")
         return validated
 
-    @abstractmethod
-    def run(self, target: str) -> list[ScannerFinding]:
-        pass
 
-    @abstractmethod
-    def parse(self, file_path: str) -> list[ScannerFinding]:
-        pass
+# --------------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------------
+def _binary_exists(name: str) -> bool:
+    import shutil
+    return shutil.which(name) is not None
+
+
+def _looks_like_path(target: str) -> bool:
+    """
+    Return True if *target* appears to be a file path.
+    Simple heuristic: contains a slash/backslash, or is a simple filename
+    that might exist.
+    """
+    if "/" in target or "\\" in target:
+        return True
+    # Docker image names usually contain ':' and no slashes
+    if ":" in target and "/" not in target:
+        return False
+    return True

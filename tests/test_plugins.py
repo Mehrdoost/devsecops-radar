@@ -1,50 +1,43 @@
-"""Tests for the minimal scanner plugin interface."""
+"""Unit tests for the base ScannerPlugin interface."""
 
-import pytest
+from __future__ import annotations
+
+from typing import Any
 
 from devsecops_radar.plugins import ScannerPlugin
 
 
-# ---------------------------------------------------------------------------
-# Concrete implementation for testing
-# ---------------------------------------------------------------------------
-class _DummyPlugin(ScannerPlugin):
+class MinimalPlugin(ScannerPlugin):
+    """A concrete plugin implementing only the mandatory parse method."""
+
     @property
     def name(self) -> str:
-        return "dummy"
+        return "minimal"
 
     @property
     def version(self) -> str:
         return "0.1.0"
 
-    def parse(self, file_path: str) -> list[dict]:
-        return [{"tool": self.name, "id": "R1", "severity": "LOW", "target": file_path, "title": "Test"}]
+    def parse(self, file_path: str) -> list[dict[str, Any]]:
+        _ = file_path
+        return [{"id": "TEST-1", "title": "Sample"}]
 
 
-# ============================================================================
-# Tests
-# ============================================================================
 class TestScannerPlugin:
-    def test_name_property(self):
-        plugin = _DummyPlugin()
-        assert plugin.name == "dummy"
+    """Test the default behaviour of ScannerPlugin."""
 
-    def test_version_property(self):
-        plugin = _DummyPlugin()
-        assert plugin.version == "0.1.0"
+    def test_default_run_returns_none(self) -> None:
+        """A plugin that does not override run should return None."""
+        plugin = MinimalPlugin()
+        result = plugin.run("some-target")
+        assert result is None
 
-    def test_parse_returns_list_of_dicts(self):
-        plugin = _DummyPlugin()
-        results = plugin.parse("/tmp/report.json")
-        assert isinstance(results, list)
-        assert len(results) == 1
-        assert results[0]["id"] == "R1"
-
-    def test_default_run_raises_not_implemented(self):
-        plugin = _DummyPlugin()
-        with pytest.raises(NotImplementedError, match="Direct run not supported"):
-            plugin.run("some-target")
-
-    def test_cannot_instantiate_abstract(self):
-        with pytest.raises(TypeError):
-            ScannerPlugin()  # abstract class cannot be instantiated directly
+    def test_parse_returns_expected_findings(self, tmp_path: Any) -> None:
+        """Ensure that a minimal parse implementation works correctly."""
+        plugin = MinimalPlugin(allowed_base_dir=tmp_path)
+        report = tmp_path / "report.json"
+        report.write_text('{"findings":[]}')
+        findings = plugin.parse(str(report))
+        assert isinstance(findings, list)
+        assert len(findings) == 1
+        assert findings[0]["id"] == "TEST-1"

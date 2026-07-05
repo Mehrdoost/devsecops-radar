@@ -1,4 +1,4 @@
-"""Tests for authentication and authorisation module (updated – no internal rate limiting)."""
+"""Tests for authentication and authorisation module (updated – direct attribute injection)."""
 
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -46,9 +46,18 @@ def app():
 
 @pytest.fixture
 def mock_settings():
-    with patch("devsecops_radar.core.auth.settings.JWT_SECRET", "test-secret"), \
-         patch("devsecops_radar.core.auth.settings.PIPELINE_API_KEY", "test-api-key"):
-        yield
+    """
+    Inject valid test values directly into the settings object's private fields.
+    This bypasses the property validation that requires long keys.
+    """
+    from devsecops_radar.core.settings import settings
+    orig_api = settings._pipeline_api_key
+    orig_jwt = settings._jwt_secret
+    settings._pipeline_api_key = "test-api-key-20-chars"
+    settings._jwt_secret = "a" * 64
+    yield
+    settings._pipeline_api_key = orig_api
+    settings._jwt_secret = orig_jwt
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +164,7 @@ class TestRequireApiKey:
         return test_view
 
     def test_success_valid_key(self, app, mock_settings, decorated_function):
-        with app.test_request_context(headers={"X-API-Key": "test-api-key"}):
+        with app.test_request_context(headers={"X-API-Key": "test-api-key-20-chars"}):
             resp, code = decorated_function()
             assert code == 200
             assert resp.json["status"] == "ok"
@@ -170,7 +179,7 @@ class TestRequireApiKey:
         with capture_loguru() as msgs:
             with app.test_request_context(
                 environ_base={"REMOTE_ADDR": "192.168.1.1"},
-                headers={"X-API-Key": "wrong-key"},
+                headers={"X-API-Key": "wrong-key-long-enough"},
             ):
                 resp, code = decorated_function()
         assert code == 401
@@ -178,7 +187,7 @@ class TestRequireApiKey:
         assert any("Invalid API key attempt" in m for m in msgs)
 
     def test_key_with_whitespace_stripped(self, app, mock_settings, decorated_function):
-        with app.test_request_context(headers={"X-API-Key": "  test-api-key  "}):
+        with app.test_request_context(headers={"X-API-Key": "  test-api-key-20-chars  "}):
             resp, code = decorated_function()
             assert code == 200
 
@@ -195,7 +204,7 @@ class TestRequireAnyAuth:
         return test_view
 
     def test_success_api_key(self, app, mock_settings, decorated_function):
-        with app.test_request_context(headers={"X-API-Key": "test-api-key"}):
+        with app.test_request_context(headers={"X-API-Key": "test-api-key-20-chars"}):
             resp, code = decorated_function()
             assert code == 200
             assert resp.json["status"] == "ok"
@@ -212,20 +221,20 @@ class TestRequireAnyAuth:
         with app.test_request_context():
             resp, code = decorated_function()
             assert code == 401
-            assert "Missing authentication" in resp.json["error"]
+            assert "Authentication required" in resp.json["error"]
 
     def test_invalid_api_key_returns_401(self, app, mock_settings, decorated_function):
-        with app.test_request_context(headers={"X-API-Key": "wrong"}):
+        with app.test_request_context(headers={"X-API-Key": "wrong-key-long-enough"}):
             resp, code = decorated_function()
             assert code == 401
-            assert "Invalid API key" in resp.json["error"]
+            assert "Authentication required" in resp.json["error"]
 
     def test_invalid_jwt_returns_401(self, app, mock_settings, decorated_function):
         with patch("devsecops_radar.core.auth.jwt.decode", side_effect=jwt.InvalidTokenError):
             with app.test_request_context(headers={"Authorization": "Bearer bad"}):
                 resp, code = decorated_function()
                 assert code == 401
-                assert "Invalid token" in resp.json["error"]
+                assert "Authentication required" in resp.json["error"]
 
 
 # ---------------------------------------------------------------------------
@@ -233,11 +242,11 @@ class TestRequireAnyAuth:
 # ---------------------------------------------------------------------------
 class TestVerifyApiKey:
     def test_correct_key_returns_true(self, mock_settings):
-        assert verify_api_key("test-api-key") is True
+        assert verify_api_key("test-api-key-20-chars") is True
 
     def test_wrong_key_returns_false(self, mock_settings):
         with capture_loguru() as msgs:
-            result = verify_api_key("wrong")
+            result = verify_api_key("wrong-key-long-enough")
         assert result is False
         assert any("Invalid API key" in m for m in msgs)
 
@@ -248,4 +257,4 @@ class TestVerifyApiKey:
         assert verify_api_key(None) is False
 
     def test_strips_whitespace(self, mock_settings):
-        assert verify_api_key("  test-api-key  ") is True
+        assert verify_api_key("  test-api-key-20-chars  ") is True

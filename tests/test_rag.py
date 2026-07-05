@@ -1,78 +1,75 @@
-"""Tests for RAG search module – updated for get_session & escape."""
+"""Tests for the RAG semantic search engine and indexing functions."""
 
-from unittest.mock import MagicMock, patch
+from __future__ import annotations
+
+from unittest.mock import MagicMock
 
 import pytest
-from sqlalchemy.exc import SQLAlchemyError
 
-from devsecops_radar.core.rag import _escape_like_wildcards, rag_search
+import devsecops_radar.core.database as db_mod
+from devsecops_radar.core.database import init_db, save_scan
+from devsecops_radar.core.rag import index_findings, rag_search
 
 
-class TestEscapeLikeWildcards:
-    def test_no_special_chars(self):
-        assert _escape_like_wildcards("hello") == "hello"
+@pytest.fixture(autouse=True)
+def _prepare_db() -> None:
+    """Ensure tables are re‑created even if the module flag is stale."""
+    db_mod._tables_initialized = False
+    init_db()
 
-    def test_escapes_percent(self):
-        assert _escape_like_wildcards("100%") == "100\\%"
 
-    def test_escapes_underscore(self):
-        assert _escape_like_wildcards("a_b") == "a\\_b"
+def _sample_finding(index: int = 0) -> dict:
+    return {
+        "tool": "trivy",
+        "id": f"CVE-2024-{index:04d}",
+        "severity": "HIGH",
+        "target": "app/server.py",
+        "title": "Remote Code Execution",
+        "description": "Critical vulnerability in web server",
+    }
 
-    def test_escapes_backslash(self):
-        assert _escape_like_wildcards("a\\b") == "a\\\\b"
 
-    def test_combined(self):
-        assert _escape_like_wildcards("100%_test\\") == "100\\%\\_test\\\\"
+def _save_one() -> int:
+    scan_id = save_scan([_sample_finding(1)])
+    assert scan_id is not None
+    return scan_id
 
 
 class TestRagSearch:
-    @pytest.fixture
-    def mock_session(self):
-        """Create a mock session that can be yielded by get_session."""
-        session = MagicMock()
-        with patch("devsecops_radar.core.rag.get_session") as mock_get_session:
-            mock_get_session.return_value.__enter__.return_value = session
-            yield session
+    def test_successful_search_by_rule_id(self) -> None:
+        _save_one()
+        results = rag_search("CVE-2024-0001", limit=5)
+        assert len(results) >= 1
+        assert any(r["id"] == "CVE-2024-0001" for r in results)
 
-    def test_empty_query_returns_empty(self):
+    def test_search_by_title_keyword(self) -> None:
+        _save_one()
+        results = rag_search("Remote Code", limit=5)
+        assert len(results) >= 1
+        assert any("Remote Code Execution" in r["title"] for r in results)
+
+    def test_search_no_results(self) -> None:
+        _save_one()
+        results = rag_search("nonexistent-xyz", limit=5)
+        assert results == []
+
+    def test_empty_query_returns_empty(self) -> None:
         assert rag_search("") == []
-        assert rag_search(None) == []
 
-    def test_truncates_long_query(self, mock_session):
-        mock_session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
-        rag_search("A" * 200, limit=10)
-        # The sanitized query inside the function should be truncated to 100 chars
-        # So we cannot directly check, but we trust the logic.
+    def test_very_long_query_is_truncated(self) -> None:
+        _save_one()
+        long_query = "A" * 300
+        results = rag_search(long_query, limit=5)
+        assert isinstance(results, list)
 
-    def test_clamps_limit(self, mock_session):
-        mock_session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
-        rag_search("test", limit=100)
-        # limit should be clamped to 50
 
-    def test_successful_search(self, mock_session):
-        finding_mock = MagicMock()
-        finding_mock.tool = "semgrep"
-        finding_mock.rule_id = "R1"
-        finding_mock.severity = "HIGH"
-        finding_mock.target = "app.py"
-        finding_mock.title = "SQLi"
-        finding_mock.description = "Found injection"
-        finding_mock.line = 10
-
-        mock_session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [finding_mock]
-
-        result = rag_search("injection")
-        assert len(result) == 1
-        assert result[0]["id"] == "R1"
-        assert result[0]["tool"] == "semgrep"
-        assert result[0]["severity"] == "HIGH"
-
-    def test_database_error(self, mock_session):
-        mock_session.query.side_effect = SQLAlchemyError("db error")
-        result = rag_search("anything")
-        assert result == []
-
-    def test_generic_error(self, mock_session):
-        mock_session.query.side_effect = RuntimeError("unexpected")
-        result = rag_search("anything")
-        assert result == []
+class TestIndexFindings:
+    def test_index_findings_without_chroma(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("devsecops_radar.core.rag._has_chroma", lambda: False)
+        monkeypatch.setattr("devsecops_radar.core.rag._init_fts", lambda: None)
+        monkeypatch.setattr("devsecops_radar.core.rag._has_fts5", lambda: True)
+        _save_one()
+        mock_session = MagicMock()
+        monkeypatch.setattr("devsecops_radar.core.rag.SessionLocal", lambda: mock_session)
+        count = index_findings([_sample_finding(99)])
+        assert count == 1

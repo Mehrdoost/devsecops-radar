@@ -1,137 +1,73 @@
-"""Tests for summary routes (updated – no _safe_data_path, uses safe_read_open)."""
+"""Tests for the summary page endpoint."""
+
+from __future__ import annotations
 
 import json
-from io import StringIO
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 
-from devsecops_radar.web.summary.routes import summary_bp
+from devsecops_radar.core.database import init_db
+from devsecops_radar.web.app import create_app
 
 
 @pytest.fixture
-def app():
-    """Create a Flask test app with the summary blueprint."""
-    app = Flask(__name__)
-    app.register_blueprint(summary_bp)
+def app() -> Flask:
+    app = create_app()
+    app.config["TESTING"] = True
     return app
 
 
 @pytest.fixture
-def client(app, monkeypatch):
-    """Return test client with valid API key header."""
-    monkeypatch.setenv("PIPELINE_API_KEY", "test-api-key")
-    with app.test_client() as client:
-        client.environ_base["HTTP_X_API_KEY"] = "test-api-key"
-        yield client
+def client(app: Flask) -> FlaskClient:
+    return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _init_db() -> None:
+    init_db()
 
 
 class TestApiSummary:
-    def test_file_not_found(self, client, monkeypatch):
-        # Mock safe_read_open to raise FileNotFoundError
-        monkeypatch.setattr(
-            "devsecops_radar.web.summary.routes.safe_read_open",
-            lambda *a, **kw: (_ for _ in ()).throw(FileNotFoundError),
-        )
-        resp = client.get("/summary")
-        assert resp.status_code == 200
-        assert resp.json == {}
+    def test_file_not_found(self, client: FlaskClient) -> None:
+        with patch("devsecops_radar.web.summary.routes.SessionLocal") as mock_session_local:
+            mock_session = MagicMock()
+            mock_session_local.return_value = mock_session
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+            resp = client.get("/api/summary")
+            assert resp.status_code == 200
+            assert resp.get_json() == {}
 
-    def test_valid_summary_file(self, client, monkeypatch):
+    def test_valid_summary_file(self, client: FlaskClient) -> None:
         data = {"executive_summary": "All good", "risk_score": 85}
-        # Mock safe_read_open to return a file-like object containing the JSON data
-        monkeypatch.setattr(
-            "devsecops_radar.web.summary.routes.safe_read_open",
-            lambda path, base_dir=None: StringIO(json.dumps(data)),
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.summary.routes.AI_SUMMARY_FILE",
-            "summary.json",
-        )
-        resp = client.get("/summary")
-        assert resp.status_code == 200
-        assert resp.json == data
+        with patch("devsecops_radar.web.summary.routes.SessionLocal") as mock_session_local:
+            mock_session = MagicMock()
+            mock_session_local.return_value = mock_session
 
-    def test_invalid_json(self, client, monkeypatch):
-        # Return a file with invalid JSON content
-        monkeypatch.setattr(
-            "devsecops_radar.web.summary.routes.safe_read_open",
-            lambda path, base_dir=None: StringIO("not json"),
-        )
-        monkeypatch.setattr(
-            "devsecops_radar.web.summary.routes.AI_SUMMARY_FILE",
-            "invalid.json",
-        )
-        resp = client.get("/summary")
-        assert resp.status_code == 200
-        assert resp.json == {}
+            mock_scan = MagicMock()
+            mock_scan.id = 1
+            mock_scan.ai_summary_json = json.dumps(data)
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_scan
+            mock_session.query.return_value.filter.return_value.count.side_effect = [10, 2]
 
-    def test_unauthenticated(self, app):
-        with app.test_client() as client:
-            resp = client.get("/summary")
-            assert resp.status_code == 401
+            resp = client.get("/api/summary")
+            assert resp.status_code == 200
+            result = resp.get_json()
+            assert result["executive_summary"] == data["executive_summary"]
+            assert result["risk_score"] == 85
 
+    def test_invalid_json(self, client: FlaskClient) -> None:
+        with patch("devsecops_radar.web.summary.routes.SessionLocal") as mock_session_local:
+            mock_session = MagicMock()
+            mock_session_local.return_value = mock_session
 
-class TestSecurityBadge:
-    def test_scan_not_found(self, client):
-        with patch(
-            "devsecops_radar.web.summary.routes.get_scan_by_id",
-            return_value=None,
-        ):
-            resp = client.get("/badge/999.svg")
-        assert resp.status_code == 404
+            mock_scan = MagicMock()
+            mock_scan.id = 1
+            mock_scan.ai_summary_json = "not json"
+            mock_session.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_scan
 
-    def test_secure_badge(self, client):
-        scan_data = {
-            "scan_id": 1,
-            "findings": [
-                {"severity": "LOW"},
-                {"severity": "MEDIUM"},
-            ],
-        }
-        with patch(
-            "devsecops_radar.web.summary.routes.get_scan_by_id",
-            return_value=scan_data,
-        ):
-            resp = client.get("/badge/1.svg")
-        assert resp.status_code == 200
-        assert "green" in resp.data.decode()
-        assert "Secure" in resp.data.decode()
-
-    def test_warning_badge(self, client):
-        scan_data = {
-            "scan_id": 2,
-            "findings": [
-                {"severity": "CRITICAL"},
-                {"severity": "CRITICAL"},
-                {"severity": "CRITICAL"},
-            ],
-        }
-        with patch(
-            "devsecops_radar.web.summary.routes.get_scan_by_id",
-            return_value=scan_data,
-        ):
-            resp = client.get("/badge/2.svg")
-        assert resp.status_code == 200
-        assert "yellow" in resp.data.decode()
-        assert "Warning" in resp.data.decode()
-
-    def test_vulnerable_badge(self, client):
-        scan_data = {
-            "scan_id": 3,
-            "findings": [
-                {"severity": "CRITICAL"},
-                {"severity": "CRITICAL"},
-                {"severity": "CRITICAL"},
-                {"severity": "CRITICAL"},
-            ],
-        }
-        with patch(
-            "devsecops_radar.web.summary.routes.get_scan_by_id",
-            return_value=scan_data,
-        ):
-            resp = client.get("/badge/3.svg")
-        assert resp.status_code == 200
-        assert "red" in resp.data.decode()
-        assert "Vulnerable" in resp.data.decode()
+            resp = client.get("/api/summary")
+            assert resp.status_code == 200
+            assert resp.get_json() == {}

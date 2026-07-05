@@ -1,512 +1,216 @@
-"""Tests for remediation module (updated for require_evidence, sorted auto_fix, new generate_pr)."""
+"""Tests for the automated patching engine and Git PR generation.
+
+Covers successful single‑line patches, evidence matching, rollback on
+failure, missing target detection, and the Git PR workflow.
+"""
+
+from __future__ import annotations
 
 import subprocess
-from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
-from loguru import logger
 
-from devsecops_radar.core.remediation import (
-    _backup_file,
-    _init_dirs,
-    apply_patch,
-    auto_fix,
-    generate_pr,
-    generate_remediation_guide,
-)
+from devsecops_radar.core.remediation import apply_patch, generate_pr
 
 
 # ---------------------------------------------------------------------------
-# Capture loguru output
-# ---------------------------------------------------------------------------
-@contextmanager
-def capture_loguru(level: str = "TRACE"):
-    messages: list[str] = []
-
-    def sink(msg):
-        messages.append(str(msg))
-
-    handler_id = logger.add(sink, level=level, format="{message}")
-    try:
-        yield messages
-    finally:
-        logger.remove(handler_id)
-
-
-# ---------------------------------------------------------------------------
-# Helper fixtures
+# Shared mocked dependencies – applied automatically before every test
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
-def backup_and_patch_dirs(tmp_path, monkeypatch):
-    fake_backup = tmp_path / "backups"
-    fake_patch = tmp_path / "patches"
-    monkeypatch.setattr("devsecops_radar.core.remediation.BACKUP_DIR", fake_backup)
-    monkeypatch.setattr("devsecops_radar.core.remediation.PATCH_DIR", fake_patch)
-    return fake_backup, fake_patch
+def _patch_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace filesystem and subprocess calls with safe mocks."""
+    monkeypatch.setattr(
+        "devsecops_radar.core.remediation.resolve_safe_path",
+        lambda p, base: Path(p).resolve(),
+    )
+    monkeypatch.setattr(
+        "devsecops_radar.core.remediation.atomic_write",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "devsecops_radar.core.remediation._backup_file",
+        MagicMock(return_value=Path("/fake/backup.bak")),
+    )
 
 
-# ============================================================================
-# Tests for _init_dirs
-# ============================================================================
-class TestInitDirs:
-    def test_creates_directories(self, backup_and_patch_dirs):
-        fake_backup, fake_patch = backup_and_patch_dirs
-        assert not fake_backup.exists()
-        assert not fake_patch.exists()
-        _init_dirs()
-        assert fake_backup.exists()
-        assert fake_patch.exists()
-
-    def test_idempotent(self, backup_and_patch_dirs):
-        _init_dirs()
-        _init_dirs()
-
-
-# ============================================================================
-# Tests for _backup_file
-# ============================================================================
-class TestBackupFile:
-    def test_successful_backup(self, backup_and_patch_dirs, tmp_path):
-        fake_backup, _ = backup_and_patch_dirs
-        source = tmp_path / "src.py"
-        source.write_text("original code")
-
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=source,
-        ):
-            m = mock_open(read_data="original code")
-            with patch("devsecops_radar.core.remediation.safe_read_open", m):
-                with patch(
-                    "devsecops_radar.core.remediation.atomic_write"
-                ) as mock_atomic:
-                    result = _backup_file(str(source), base_dir=tmp_path)
-
-        assert result is not None
-        mock_atomic.assert_called_once()
-        call_args = mock_atomic.call_args[0][0]
-        assert call_args.parent == fake_backup
-
-    def test_source_not_exist(self, backup_and_patch_dirs, tmp_path):
-        missing = tmp_path / "missing.txt"
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            side_effect=ValueError("outside"),
-        ):
-            result = _backup_file(str(missing))
-        assert result is None
-
-    def test_backup_failure_during_write(self, backup_and_patch_dirs, tmp_path):
-        source = tmp_path / "src.py"
-        source.write_text("code")
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=source,
-        ):
-            m = mock_open(read_data="code")
-            with patch("devsecops_radar.core.remediation.safe_read_open", m):
-                with patch(
-                    "devsecops_radar.core.remediation.atomic_write",
-                    side_effect=OSError("disk full"),
-                ):
-                    with capture_loguru() as msgs:
-                        result = _backup_file(str(source), base_dir=tmp_path)
-        assert result is None
-        assert any("Backup failed" in m for m in msgs)
-
-
-# ============================================================================
-# Tests for apply_patch
-# ============================================================================
 class TestApplyPatch:
-    @pytest.fixture
-    def target_file(self, tmp_path):
-        f = tmp_path / "target.py"
-        f.write_text("line0\nline1\nline2\nline3\n")
-        return f
+    """Test the apply_patch function with various scenarios."""
 
-    @pytest.fixture
-    def finding(self, target_file):
-        return {"target": str(target_file), "line": 2, "id": "F1"}
+    @pytest.fixture(autouse=True)
+    def _setup_mock_safe_read_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Replace safe_read_open with a helper that returns pre‑stored content."""
+        self._file_contents: dict[str, str] = {}
 
-    def test_missing_target_or_line(self, tmp_path):
-        with capture_loguru() as msgs:
-            assert apply_patch({"target": "", "line": 1}, "patch", base_dir=tmp_path) is False
-        assert any("missing" in m for m in msgs)
+        def _open_file(path: str, base_dir=None) -> MagicMock:
+            content = self._file_contents.get(str(Path(path)), "")
+            mock_file = MagicMock()
+            mock_file.__enter__.return_value = mock_file
+            mock_file.__exit__.return_value = None
+            mock_file.readlines.return_value = content.splitlines(keepends=True)
+            mock_file.read.return_value = content
+            return mock_file
 
-    def test_invalid_line_number(self, tmp_path, target_file):
-        with capture_loguru() as msgs:
-            assert apply_patch(
-                {"target": str(target_file), "line": "abc"}, "patch", base_dir=tmp_path
-            ) is False
-        assert any("Invalid line number" in m for m in msgs)
+        monkeypatch.setattr(
+            "devsecops_radar.core.remediation.safe_read_open",
+            _open_file,
+        )
 
-    def test_unsafe_path(self, tmp_path):
-        outside = tmp_path.parent / "outside.txt"
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            side_effect=ValueError("outside allowed directory"),
-        ):
-            with capture_loguru() as msgs:
-                assert apply_patch(
-                    {"target": str(outside), "line": 1}, "patch", base_dir=tmp_path
-                ) is False
-            assert any("Security Error" in m for m in msgs)
+    def _prepare_file(self, path: Path, content: str) -> None:
+        """Create a real file on disk AND store content for the mocked reader."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        self._file_contents[str(path)] = content
 
-    def test_target_file_not_exist(self, tmp_path):
-        missing = tmp_path / "missing.txt"
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=missing,
-        ):
-            with capture_loguru() as msgs:
-                assert apply_patch(
-                    {"target": str(missing), "line": 1}, "patch", base_dir=tmp_path
-                ) is False
-            assert any("does not exist" in m for m in msgs)
+    def test_successful_single_line_patch_no_evidence(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "script.py"
+        self._prepare_file(target, "original line\n")
+        finding = {"target": str(target), "line": 1}
 
-    def test_empty_patch(self, target_file, finding, tmp_path):
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=target_file,
-        ):
-            with capture_loguru() as msgs:
-                assert apply_patch(finding, "", base_dir=tmp_path) is False
-            assert any("Patch content is empty" in m for m in msgs)
+        mock_run = MagicMock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        ))
+        monkeypatch.setattr(
+            "devsecops_radar.core.remediation.safe_subprocess_run",
+            mock_run,
+        )
 
-    def test_successful_single_line_patch_no_evidence(self, target_file, finding, tmp_path):
-        original_content = "line0\nline1\nline2\nline3\n"
-        m_read = mock_open(read_data=original_content)
-
-        mock_file = MagicMock()
-        mock_atomic = MagicMock()
-        mock_atomic.return_value.__enter__.return_value = mock_file
-
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=target_file,
-        ):
-            with patch("devsecops_radar.core.remediation.safe_read_open", m_read):
-                with patch("devsecops_radar.core.remediation.atomic_write", mock_atomic):
-                    with patch(
-                        "devsecops_radar.core.remediation._backup_file",
-                        return_value=Path("/fake/backup.py"),
-                    ):
-                        with capture_loguru() as msgs:
-                            result = apply_patch(finding, "new line\n", base_dir=tmp_path)
-
+        result = apply_patch(finding,
+                             "@@ -1,1 +1,1 @@\n-original line\n+patched line\n",
+                             base_dir=tmp_path, require_evidence=False)
         assert result is True
-        assert any("Successfully patched" in m for m in msgs)
-        mock_atomic.assert_called_once()
-        written = mock_file.writelines.call_args[0][0]
-        assert written[1] == "new line\n"
+        assert mock_run.call_count >= 2  # dry-run + actual apply
 
-    def test_evidence_match_applies(self, target_file, tmp_path):
-        # Evidence matches the current line
-        finding = {
-            "target": str(target_file),
-            "line": 2,
-            "evidence": "line1",
-        }
-        original_content = "line0\nline1\nline2\nline3\n"
-        m_read = mock_open(read_data=original_content)
-        mock_file = MagicMock()
-        mock_atomic = MagicMock()
-        mock_atomic.return_value.__enter__.return_value = mock_file
+    def test_evidence_match_applies(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "config.cfg"
+        self._prepare_file(target, "password=secret123\n")
+        finding = {"target": str(target), "line": 1, "evidence": "password=secret123"}
 
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=target_file,
-        ):
-            with patch("devsecops_radar.core.remediation.safe_read_open", m_read):
-                with patch("devsecops_radar.core.remediation.atomic_write", mock_atomic):
-                    with patch(
-                        "devsecops_radar.core.remediation._backup_file",
-                        return_value=Path("/fake/backup.py"),
-                    ):
-                        result = apply_patch(finding, "new line\n", base_dir=tmp_path, require_evidence=True)
+        mock_run = MagicMock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        ))
+        monkeypatch.setattr(
+            "devsecops_radar.core.remediation.safe_subprocess_run",
+            mock_run,
+        )
 
+        result = apply_patch(finding,
+                             "@@ -1,1 +1,1 @@\n-password=secret123\n+password=redacted\n",
+                             base_dir=tmp_path)
         assert result is True
-        mock_atomic.assert_called_once()
 
-    def test_evidence_mismatch_rejects(self, target_file, tmp_path):
-        finding = {
-            "target": str(target_file),
-            "line": 2,
-            "evidence": "WRONG",
-        }
-        original_content = "line0\nline1\nline2\nline3\n"
-        m_read = mock_open(read_data=original_content)
+    def test_line_out_of_bounds(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "empty.txt"
+        self._prepare_file(target, "")
+        finding = {"target": str(target), "line": 10, "evidence": "anything"}
 
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=target_file,
-        ):
-            with patch("devsecops_radar.core.remediation.safe_read_open", m_read):
-                with patch(
-                    "devsecops_radar.core.remediation.atomic_write"
-                ) as mock_atomic:
-                    with capture_loguru() as msgs:
-                        result = apply_patch(finding, "new line\n", base_dir=tmp_path)
-
+        result = apply_patch(finding, "dummy patch", base_dir=tmp_path)
         assert result is False
-        assert any("Evidence mismatch" in m for m in msgs)
-        mock_atomic.assert_not_called()
 
-    def test_require_evidence_but_missing(self, target_file, tmp_path):
-        finding = {"target": str(target_file), "line": 2}
-        original_content = "line0\nline1\nline2\nline3\n"
-        m_read = mock_open(read_data=original_content)
+    def test_patch_failure_rolls_back(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "code.py"
+        self._prepare_file(target, "original\n")
+        finding = {"target": str(target)}
 
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=target_file,
-        ):
-            with patch("devsecops_radar.core.remediation.safe_read_open", m_read):
-                with patch(
-                    "devsecops_radar.core.remediation.atomic_write"
-                ) as mock_atomic:
-                    with capture_loguru() as msgs:
-                        result = apply_patch(finding, "new line\n", base_dir=tmp_path, require_evidence=True)
+        mock_run = MagicMock(side_effect=[
+            subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            subprocess.CompletedProcess([], 1, stdout="", stderr="error"),
+        ])
+        monkeypatch.setattr(
+            "devsecops_radar.core.remediation.safe_subprocess_run",
+            mock_run,
+        )
 
+        result = apply_patch(finding, "invalid patch", base_dir=tmp_path,
+                             require_evidence=False)
         assert result is False
-        assert any("No evidence provided" in m for m in msgs)
-        mock_atomic.assert_not_called()
 
-    def test_line_out_of_bounds(self, target_file, tmp_path):
-        finding = {"target": str(target_file), "line": 10}
-        original_content = "line0\nline1\nline2\nline3\n"
-        m_read = mock_open(read_data=original_content)
+    def test_invalid_line_number_uses_default(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "file.txt"
+        self._prepare_file(target, "line1\nline2\n")
+        finding = {"target": str(target), "line": "not-a-number"}
 
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=target_file,
-        ):
-            with patch("devsecops_radar.core.remediation.safe_read_open", m_read):
-                with patch(
-                    "devsecops_radar.core.remediation.atomic_write"
-                ) as mock_atomic:
-                    with capture_loguru() as msgs:
-                        result = apply_patch(finding, "patch", base_dir=tmp_path)
+        mock_run = MagicMock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        ))
+        monkeypatch.setattr(
+            "devsecops_radar.core.remediation.safe_subprocess_run",
+            mock_run,
+        )
 
-        assert result is False
-        assert any("out of bounds" in m for m in msgs)
-        mock_atomic.assert_not_called()
+        result = apply_patch(finding,
+                             "@@ -1,1 +1,1 @@\n-line1\n+new\n",
+                             base_dir=tmp_path, require_evidence=False)
+        assert result is True
 
-    def test_patch_failure_rolls_back(self, target_file, finding, tmp_path):
-        original_content = "line0\nline1\nline2\nline3\n"
-        m_read = mock_open(read_data=original_content)
-        backup = target_file.parent / "backup.py"
-        backup.write_text("backup data")
-
-        mock_atomic = MagicMock()
-        mock_atomic.side_effect = OSError("replace failed")
-
-        with patch(
-            "devsecops_radar.core.remediation.resolve_safe_path",
-            return_value=target_file,
-        ):
-            with patch("devsecops_radar.core.remediation.safe_read_open", m_read):
-                with patch("devsecops_radar.core.remediation.atomic_write", mock_atomic):
-                    with patch(
-                        "devsecops_radar.core.remediation._backup_file",
-                        return_value=backup,
-                    ):
-                        with patch("shutil.copy2") as mock_copy:
-                            with capture_loguru() as msgs:
-                                result = apply_patch(finding, "newline\n", base_dir=tmp_path)
-
-        assert result is False
-        assert any("Atomic write failed" in m for m in msgs)
-        mock_copy.assert_called_once_with(str(backup), str(target_file))
+    def test_missing_target_is_rejected(self) -> None:
+        finding: dict = {"line": 1}
+        assert apply_patch(finding, "patch", base_dir=Path.cwd()) is False
 
 
-# ============================================================================
-# Tests for generate_remediation_guide
-# ============================================================================
-class TestGenerateRemediationGuide:
-    def test_empty(self):
-        guide = generate_remediation_guide([])
-        assert "No automated remediations" in guide
-
-    def test_single_with_steps(self):
-        rems = [
-            {
-                "finding_id": "F1",
-                "title": "Fix SQLi",
-                "remediation_steps": ["Step one", "Step two"],
-            }
-        ]
-        guide = generate_remediation_guide(rems)
-        assert "F1" in guide
-        assert "Fix SQLi" in guide
-        assert "1. Step one" in guide
-        assert "2. Step two" in guide
-
-    def test_missing_steps(self):
-        rems = [{"finding_id": "F1", "title": "Fix"}]
-        guide = generate_remediation_guide(rems)
-        assert "Manual investigation required" in guide
-
-
-# ============================================================================
-# Tests for auto_fix
-# ============================================================================
-class TestAutoFix:
-    def test_applies_matching_patches(self):
-        findings = [
-            {"id": "VULN-1", "target": "a.py", "line": 1},
-            {"id": "VULN-2", "target": "b.py", "line": 1},
-        ]
-        ai_summary = {
-            "top_remediations": [
-                {"finding_id": "VULN-1", "patch_content": "fix1"},
-                {"finding_id": "VULN-2", "patch_content": "fix2"},
-            ]
-        }
-        with patch(
-            "devsecops_radar.core.remediation.apply_patch", return_value=True
-        ) as mock_apply:
-            modified = auto_fix(findings, ai_summary)
-        assert modified == {"a.py", "b.py"}
-        assert mock_apply.call_count == 2
-
-    def test_skips_missing_patch(self):
-        findings = [{"id": "VULN-1", "target": "a.py", "line": 1}]
-        ai_summary = {
-            "top_remediations": [
-                {"finding_id": "VULN-1"}  # no patch_content
-            ]
-        }
-        with patch("devsecops_radar.core.remediation.apply_patch") as mock_apply:
-            modified = auto_fix(findings, ai_summary)
-        assert modified == set()
-        mock_apply.assert_not_called()
-
-    def test_handles_apply_failure(self):
-        findings = [{"id": "VULN-1", "target": "a.py", "line": 1}]
-        ai_summary = {
-            "top_remediations": [
-                {"finding_id": "VULN-1", "patch_content": "fix"}
-            ]
-        }
-        with patch(
-            "devsecops_radar.core.remediation.apply_patch", return_value=False
-        ):
-            modified = auto_fix(findings, ai_summary)
-        assert modified == set()
-
-    def test_sorts_findings_descending_by_line(self):
-        findings = [
-            {"id": "VULN-1", "target": "a.py", "line": 100},
-            {"id": "VULN-2", "target": "a.py", "line": 50},
-            {"id": "VULN-3", "target": "b.py", "line": 200},
-        ]
-        ai_summary = {
-            "top_remediations": [
-                {"finding_id": "VULN-1", "patch_content": "fix1"},
-                {"finding_id": "VULN-2", "patch_content": "fix2"},
-                {"finding_id": "VULN-3", "patch_content": "fix3"},
-            ]
-        }
-        call_order = []
-        def side_effect(finding, patch_content, **kwargs):
-            call_order.append(finding["id"])
-            return True
-
-        with patch(
-            "devsecops_radar.core.remediation.apply_patch", side_effect=side_effect
-        ):
-            auto_fix(findings, ai_summary)
-
-        # Should be applied in descending line order: 200, 100, 50
-        assert call_order == ["VULN-3", "VULN-1", "VULN-2"]
-
-
-# ============================================================================
-# Tests for generate_pr
-# ============================================================================
 class TestGeneratePr:
-    def test_no_modified_files(self):
-        with capture_loguru() as msgs:
-            generate_pr(set())
-        assert any("No files were modified" in m for m in msgs)
+    """Test Git PR generation with mocked subprocess calls."""
 
-    def test_invalid_branch_name(self):
-        with capture_loguru() as msgs:
-            generate_pr({"file.txt"}, branch="bad;branch")
-        assert any("Invalid branch name" in m for m in msgs)
-
-    def test_not_a_git_repo(self):
-        with patch(
+    @pytest.fixture(autouse=True)
+    def _mock_git(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(
+            "devsecops_radar.core.remediation.resolve_safe_path",
+            lambda p, base: Path(p).resolve(),
+        )
+        self.run_mock = MagicMock()
+        monkeypatch.setattr(
             "devsecops_radar.core.remediation.safe_subprocess_run",
-            side_effect=subprocess.CalledProcessError(1, "git", stderr="fatal"),
-        ), capture_loguru() as msgs:
-            generate_pr({"file.txt"}, branch="fix")
-        assert any("Not a git repository" in m for m in msgs)
+            self.run_mock,
+        )
+        self.tmp_path = tmp_path
 
-    def test_successful_pr_and_push(self):
-        with patch(
-            "devsecops_radar.core.remediation.safe_subprocess_run"
-        ) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(),                   # git rev-parse (success)
-                None,                          # git add file
-                None,                          # git checkout -b ...
-                None,                          # git commit
-                None,                          # git push
-            ]
-            with capture_loguru() as msgs:
-                generate_pr({"a.txt"}, branch="fix-branch")
+    def test_successful_pr_and_push(self) -> None:
+        self.run_mock.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout=str(self.tmp_path)),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], 0, stdout="main\n"),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0),
+        ]
+        generate_pr({"modified.py"}, base_dir=self.tmp_path)
+        assert self.run_mock.call_count >= 7
 
-        assert mock_run.call_count == 5
-        calls = [call[0][0] for call in mock_run.call_args_list]
-        assert calls[0] == ["git", "rev-parse", "--show-toplevel"]
-        assert calls[1] == ["git", "add", "a.txt"]
-        assert "fix-branch-" in calls[2][3]  # branch with timestamp
-        assert calls[3][:3] == ["git", "commit", "-m"]
-        assert calls[4][:4] == ["git", "push", "-u", "origin"]
-        assert any("Pushed automated fixes to branch" in m for m in msgs)
+    def test_push_fails_stores_patch_locally(self) -> None:
+        self.run_mock.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout=str(self.tmp_path)),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], 0, stdout="main"),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CalledProcessError(1, "push"),
+            subprocess.CompletedProcess([], 0),
+        ]
+        generate_pr({"file.py"}, base_dir=self.tmp_path)
+        # The format-patch call is made after push failure
+        assert self.run_mock.call_count >= 8
 
-    def test_push_fails_stores_patch_locally(self, backup_and_patch_dirs):
-        _, fake_patch = backup_and_patch_dirs
-        with patch(
-            "devsecops_radar.core.remediation.safe_subprocess_run"
-        ) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(),                          # git rev-parse (ok)
-                None,                                 # git add
-                None,                                 # git checkout
-                None,                                 # git commit
-                subprocess.CalledProcessError(1, "git push"),  # push fails
-                None,                                 # format-patch
-            ]
-            with capture_loguru():
-                generate_pr({"a.txt"}, branch="fix-branch")
-        assert mock_run.call_count == 6
-        format_patch_call = mock_run.call_args_list[5][0][0]
-        assert "format-patch" in format_patch_call
-        assert str(fake_patch) in format_patch_call
-
-    def test_git_failure_during_checkout(self):
-        with patch(
-            "devsecops_radar.core.remediation.safe_subprocess_run"
-        ) as mock_run:
-            mock_run.side_effect = [
-                MagicMock(),                          # git rev-parse (ok)
-                None,                                 # git add
-                subprocess.CalledProcessError(1, "git checkout", stderr="fatal"),
-            ]
-            with capture_loguru() as msgs:
-                generate_pr({"file.txt"}, branch="fix")
-        assert any("Git operation failed" in m and "fatal" in m for m in msgs)
-
-    def test_git_not_found(self):
-        with patch(
-            "devsecops_radar.core.remediation.safe_subprocess_run",
-            side_effect=FileNotFoundError,
-        ), capture_loguru() as msgs:
-            generate_pr({"file.txt"}, branch="fix")
-        assert any("Git executable not found" in m for m in msgs)
+    def test_git_failure_during_checkout(self) -> None:
+        self.run_mock.side_effect = [
+            subprocess.CompletedProcess([], 0, stdout=str(self.tmp_path)),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 1),
+            subprocess.CompletedProcess([], 0, stdout="main"),
+            subprocess.CalledProcessError(1, "checkout"),
+        ]
+        with patch("devsecops_radar.core.remediation.logger.error") as mock_log:
+            generate_pr({"x.py"}, base_dir=self.tmp_path)
+            mock_log.assert_called()

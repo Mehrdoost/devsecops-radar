@@ -1,49 +1,129 @@
 # devsecops_radar/web/dashboard/routes.py
+"""
+Dashboard routes – unified data source (database), safe report generation,
+asynchronous notification dispatching, strict output redaction,
+and automatic patch application.
+"""
+
+from __future__ import annotations
+
 import asyncio
 import io
 import json
 import os
-import shutil
-import tempfile
+import threading
 from datetime import UTC, datetime, timedelta
 from html import escape as html_escape
 from pathlib import Path
+from typing import Any
 
 from flask import Blueprint, jsonify, render_template, request, send_file
 from loguru import logger
 
 from devsecops_radar.core.auth import require_any_auth
-from devsecops_radar.core.database import db_session, get_findings_paginated
-from devsecops_radar.core.models import Scan
+from devsecops_radar.core.database import (
+    get_findings_paginated,
+    get_session,
+)
+from devsecops_radar.core.models import Finding, Scan
 from devsecops_radar.core.path_security import safe_read_open
 from devsecops_radar.core.rag import rag_search
-from devsecops_radar.core.reporting import generate_pdf_report, redact_sensitive
-from devsecops_radar.web.sentry.routes import get_live_snapshot  # <-- new import
+from devsecops_radar.core.remediation import apply_patch
+from devsecops_radar.core.reporting import (
+    _build_pdf_elements,
+    redact_sensitive,
+)
+from devsecops_radar.web.sentry.routes import get_live_snapshot
 
 dashboard_bp = Blueprint("dashboard", __name__)
 
-_ALLOWED_DATA_DIR = Path.cwd().resolve()
-FINDINGS_FILE = os.environ.get("FINDINGS_FILE", "findings.json")
-AI_SUMMARY_FILE = os.environ.get("AI_SUMMARY_FILE", "findings_ai_summary.json")
+_MAX_FINDINGS_RETURN = 5000
 
 
-def load_findings() -> list[dict]:
-    """Load findings from the validated JSON file (TOCTOU‑safe)."""
-    try:
-        with safe_read_open(FINDINGS_FILE, base_dir=_ALLOWED_DATA_DIR) as f:
-            return json.load(f)
-    except (ValueError, FileNotFoundError, PermissionError, OSError, json.JSONDecodeError) as e:
-        logger.error(f"Failed to load findings: {e}")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _all_findings() -> list[dict[str, Any]]:
+    with get_session() as session:
+        rows = session.query(Finding).order_by(Finding.id.desc()).limit(_MAX_FINDINGS_RETURN).all()
+        return [
+            {
+                "id": f.rule_id,
+                "tool": f.tool,
+                "severity": f.severity,
+                "target": f.target,
+                "title": redact_sensitive(f.title or ""),
+                "description": redact_sensitive(f.description or ""),
+                "line": f.line,
+            }
+            for f in rows
+        ]
+
+
+def _findings_from_db(limit: int | None = None) -> list[dict[str, Any]]:
+    with get_session() as session:
+        q = session.query(Finding).order_by(Finding.id.desc())
+        if limit is not None:
+            q = q.limit(limit)
+        rows = q.all()
+        return [
+            {
+                "id": f.rule_id,
+                "tool": f.tool,
+                "severity": f.severity,
+                "target": f.target,
+                "title": redact_sensitive(f.title or ""),
+                "description": redact_sensitive(f.description or ""),
+                "line": f.line,
+            }
+            for f in rows
+        ]
+
+
+def _latest_ai_summary() -> dict[str, Any]:
+    with get_session() as session:
+        scan = session.query(Scan).order_by(Scan.id.desc()).first()
+        if not scan or not scan.ai_summary_json:
+            return {}
+        try:
+            return json.loads(scan.ai_summary_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+
+def _ai_summary_for_scan(scan_id: int) -> dict[str, Any]:
+    with get_session() as session:
+        scan = session.query(Scan).filter(Scan.id == scan_id).first()
+        if not scan or not scan.ai_summary_json:
+            return {}
+        try:
+            return json.loads(scan.ai_summary_json)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+
+def _critical_count_from_db() -> int:
+    with get_session() as session:
+        return session.query(Finding).filter(Finding.severity == "CRITICAL").count()
+
+
+def _findings_by_ids(ids: list[str]) -> list[dict[str, Any]]:
+    if not ids:
         return []
-
-
-def load_ai_summary() -> dict:
-    """Load AI summary securely."""
-    try:
-        with safe_read_open(AI_SUMMARY_FILE, base_dir=_ALLOWED_DATA_DIR) as f:
-            return json.load(f)
-    except (ValueError, FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
-        return {}
+    with get_session() as session:
+        rows = session.query(Finding).filter(Finding.rule_id.in_(ids)).all()
+        return [
+            {
+                "id": f.rule_id,
+                "tool": f.tool,
+                "severity": f.severity,
+                "target": f.target,
+                "title": redact_sensitive(f.title or ""),
+                "description": redact_sensitive(f.description or ""),
+                "line": f.line,
+            }
+            for f in rows
+        ]
 
 
 # --------------------------------------------------------------------------
@@ -59,14 +139,35 @@ def index():
 def api_findings():
     page = request.args.get("page", 1, type=int)
     per_page = request.args.get("per_page", 50, type=int)
+    if per_page > 1000:
+        all_data = _all_findings()
+        return jsonify({
+            "total": len(all_data),
+            "page": 1,
+            "per_page": len(all_data),
+            "data": all_data,
+        })
     return jsonify(get_findings_paginated(page, per_page))
+
+
+@dashboard_bp.route("/api/severity-counts")
+@require_any_auth
+def severity_counts():
+    with get_session() as session:
+        from sqlalchemy import func
+        rows = session.query(Finding.severity, func.count()).group_by(Finding.severity).all()
+        counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for sev, cnt in rows:
+            key = str(sev).upper()
+            if key in counts:
+                counts[key] = cnt
+        return jsonify(counts)
 
 
 @dashboard_bp.route("/api/history")
 @require_any_auth
 def api_history():
-    session = db_session()
-    try:
+    with get_session() as session:
         scans_query = session.query(Scan).order_by(Scan.timestamp.desc())
         range_filter = request.args.get("range", "all")
         now = datetime.now(UTC)
@@ -96,22 +197,24 @@ def api_history():
                 "low": counts["LOW"],
             })
         return jsonify(result)
-    finally:
-        pass  # scoped session handled by teardown
 
 
 @dashboard_bp.route("/api/scanner-status")
 @require_any_auth
 def scanner_status():
     scanners = ["trivy", "semgrep", "poutine", "zizmor", "gitleaks"]
-    status = {name: shutil.which(name) is not None for name in scanners}
+    status = {name: bool(_which(name)) for name in scanners}
     return jsonify(status)
+
+
+def _which(cmd: str) -> str | None:
+    import shutil
+    return shutil.which(cmd)
 
 
 @dashboard_bp.route("/api/live-feed")
 @require_any_auth
 def live_feed():
-    """Expose the latest live findings from the sentry buffer (TTL‑pruned)."""
     return jsonify(get_live_snapshot())
 
 
@@ -122,21 +225,30 @@ def policy_status():
     if not policy_path.exists():
         return jsonify({"status": "no_policy"})
     try:
-        with safe_read_open(policy_path, base_dir=_ALLOWED_DATA_DIR) as f:
+        with safe_read_open(policy_path, base_dir=Path.cwd()) as f:
             policy = json.load(f)
         max_crit = policy.get("max_critical")
         if max_crit is None:
             return jsonify({"status": "invalid_policy"})
-        findings = load_findings()
-        crit_count = sum(1 for f in findings if f.get("severity", "").upper() == "CRITICAL")
+        crit_count = _critical_count_from_db()
         return jsonify({
             "max_critical": max_crit,
             "current_critical": crit_count,
             "violated": crit_count > max_crit,
         })
-    except (ValueError, FileNotFoundError, json.JSONDecodeError, OSError) as e:
+    except Exception as e:
         logger.error(f"Failed to read policy.json: {e}")
         return jsonify({"status": "error"})
+
+
+def _run_async_in_thread(coro):
+    def runner():
+        try:
+            asyncio.run(coro)
+        except Exception as e:
+            logger.error(f"Asynchronous notification failed: {e}")
+    t = threading.Thread(target=runner, daemon=True)
+    t.start()
 
 
 @dashboard_bp.route("/api/notify-jira", methods=["POST"])
@@ -146,22 +258,16 @@ def notify_jira_endpoint():
     finding_ids = data.get("finding_ids", [])
     if not isinstance(finding_ids, list):
         return jsonify({"error": "finding_ids must be a list"}), 400
-    findings = [f for f in load_findings() if f.get("id") in finding_ids]
+    findings = _findings_by_ids(finding_ids)
     if not findings:
         return jsonify({"error": "No matching findings provided"}), 400
-
     jira_url = os.environ.get("JIRA_URL")
     jira_token = os.environ.get("JIRA_TOKEN")
     if not jira_url or not jira_token:
         return jsonify({"error": "JIRA_URL and JIRA_TOKEN must be set"}), 500
-
     from devsecops_radar.core.notifier import notify_jira
-    try:
-        asyncio.run(notify_jira(findings, jira_url, jira_token))
-        return jsonify({"status": "sent"})
-    except Exception as e:
-        logger.error(f"Failed to send Jira notification: {e}")
-        return jsonify({"error": "Jira notification failed"}), 500
+    _run_async_in_thread(notify_jira(findings, jira_url, jira_token))
+    return jsonify({"status": "dispatched"})
 
 
 @dashboard_bp.route("/api/notify-asana", methods=["POST"])
@@ -171,22 +277,16 @@ def notify_asana_endpoint():
     finding_ids = data.get("finding_ids", [])
     if not isinstance(finding_ids, list):
         return jsonify({"error": "finding_ids must be a list"}), 400
-    findings = [f for f in load_findings() if f.get("id") in finding_ids]
+    findings = _findings_by_ids(finding_ids)
     if not findings:
         return jsonify({"error": "No matching findings provided"}), 400
-
     asana_token = os.environ.get("ASANA_TOKEN")
     asana_workspace = os.environ.get("ASANA_WORKSPACE")
     if not asana_token or not asana_workspace:
         return jsonify({"error": "ASANA_TOKEN and ASANA_WORKSPACE must be set"}), 500
-
     from devsecops_radar.core.notifier import notify_asana
-    try:
-        asyncio.run(notify_asana(findings, asana_token, asana_workspace))
-        return jsonify({"status": "sent"})
-    except Exception as e:
-        logger.error(f"Failed to send Asana notification: {e}")
-        return jsonify({"error": "Asana notification failed"}), 500
+    _run_async_in_thread(notify_asana(findings, asana_token, asana_workspace))
+    return jsonify({"status": "dispatched"})
 
 
 @dashboard_bp.route("/api/rag")
@@ -205,16 +305,13 @@ def api_simulate():
     finding_ids = data.get("finding_ids", [])
     if not isinstance(finding_ids, list):
         return jsonify({"error": "finding_ids must be a list"}), 400
-    findings = load_findings()
-    selected = [f for f in findings if f.get("id") in finding_ids]
+    selected = _findings_by_ids(finding_ids)
     if not selected:
         return jsonify({"error": "Not found"}), 404
-
     from devsecops_radar.core.attack_simulation import (
         run_sandboxed_poc,
         simulate_attack,
     )
-
     scripts = []
     descs = []
     last_artifact = None
@@ -222,24 +319,20 @@ def api_simulate():
         artifact = simulate_attack(f)
         if artifact:
             try:
-                # Read script safely – confined to artifact.temp_dir (not /tmp)
                 with safe_read_open(artifact.script_path, base_dir=artifact.temp_dir) as sf:
                     scripts.append(sf.read())
                 last_artifact = artifact
             except Exception as e:
                 logger.warning(f"Could not read simulation script {artifact.script_path}: {e}")
         descs.append(f"{f.get('id')}: {f.get('title')}")
-
     full_script = "\n".join(scripts)
     desc = " → ".join(descs)
-
     sandbox_output = None
     if last_artifact:
         try:
             sandbox_output = run_sandboxed_poc(last_artifact)
         except Exception:
             logger.warning("Sandbox execution failed silently.", exc_info=True)
-
     return jsonify({
         "script": full_script,
         "description": desc,
@@ -252,9 +345,8 @@ def api_simulate():
 def api_report():
     fmt = request.args.get("format", "pdf")
     framework = request.args.get("framework")
-    findings = load_findings()
-    ai_summary = load_ai_summary()
-
+    findings = _all_findings()
+    ai_summary = _latest_ai_summary()
     if fmt == "json":
         data = json.dumps({"findings": findings, "ai_summary": ai_summary}, indent=2)
         return send_file(
@@ -270,9 +362,10 @@ def api_report():
         ]
         if framework:
             html_parts.append(f"<h2>Compliance Framework: {html_escape(framework)}</h2>")
-        if ai_summary.get("executive_summary"):
+        summary = ai_summary.get("executive_summary", "")
+        if summary:
             html_parts.append("<h2>Executive Summary</h2>")
-            html_parts.append(f"<p>{html_escape(redact_sensitive(ai_summary['executive_summary']))}</p>")
+            html_parts.append(f"<p>{html_escape(redact_sensitive(summary))}</p>")
         html_parts.append(
             "<h2>Findings</h2><table border='1'><tr>"
             "<th>Tool</th><th>ID</th><th>Severity</th><th>Target</th><th>Title</th></tr>"
@@ -293,20 +386,107 @@ def api_report():
             as_attachment=True,
             download_name="report.html",
         )
-
-    # PDF – generate to a unique temp file to avoid race conditions
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        suffix=".pdf", prefix="sentinel_report_", dir=str(_ALLOWED_DATA_DIR)
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4)
+    elements = _build_pdf_elements(findings, ai_summary, framework=framework)
+    doc.build(elements)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="pipeline_sentinel_report.pdf",
     )
-    os.close(tmp_fd)  # we'll let generate_pdf_report write to the path
+
+
+@dashboard_bp.route("/api/scans-with-ai")
+@require_any_auth
+def scans_with_ai():
+    with get_session() as session:
+        scans = session.query(Scan).filter(
+            Scan.ai_summary_json.isnot(None)
+        ).order_by(Scan.timestamp.desc()).limit(20).all()
+        return jsonify([
+            {"scan_id": s.id, "timestamp": s.timestamp.isoformat() if s.timestamp else None}
+            for s in scans
+        ])
+
+
+@dashboard_bp.route("/api/summary/<int:scan_id>")
+@require_any_auth
+def api_summary_for_scan(scan_id):
+    ai_summary = _ai_summary_for_scan(scan_id)
+    if not ai_summary:
+        return jsonify({})
+    with get_session() as session:
+        total_findings = session.query(Finding).filter(Finding.scan_id == scan_id).count()
+        critical_count = session.query(Finding).filter(
+            Finding.scan_id == scan_id,
+            Finding.severity == "CRITICAL",
+        ).count()
+    ai_summary["total_findings"] = total_findings
+    ai_summary["critical_findings"] = critical_count
+    return jsonify(_sanitize_ai_summary(ai_summary))
+
+
+def _sanitize_ai_summary(ai_summary: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in ai_summary.items():
+        if isinstance(value, str):
+            sanitized[key] = html_escape(redact_sensitive(value))
+        elif isinstance(value, dict):
+            sanitized[key] = _sanitize_ai_summary(value)
+        elif isinstance(value, list):
+            sanitized[key] = [
+                _sanitize_ai_summary(item) if isinstance(item, dict)
+                else html_escape(redact_sensitive(item)) if isinstance(item, str)
+                else item
+                for item in value
+            ]
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+# ---------------------------------------------------------------------------
+# NEW: Apply AI‑suggested fix
+# ---------------------------------------------------------------------------
+@dashboard_bp.route("/api/apply-fix", methods=["POST"])
+@require_any_auth
+def apply_fix_endpoint():
+    data = request.get_json(force=True)
+    finding_id = data.get("finding_id")
+    patch_content = data.get("patch_content")
+
+    if not finding_id or not isinstance(finding_id, str):
+        return jsonify({"error": "finding_id is required"}), 400
+    if not patch_content or not isinstance(patch_content, str):
+        return jsonify({"error": "patch_content is required"}), 400
+
+    # Find the actual finding in the database
+    with get_session() as session:
+        finding = session.query(Finding).filter(Finding.rule_id == finding_id).first()
+        if not finding:
+            return jsonify({"error": "Finding not found"}), 404
+
+        # Build a minimal dict that apply_patch expects
+        finding_dict = {
+            "target": finding.target,
+            "line": finding.line,
+            "evidence": None,   # evidence check is optional
+        }
+
+    # Apply the patch using the core remediation module
     try:
-        generate_pdf_report(findings, ai_summary, tmp_path, framework=framework, base_dir=_ALLOWED_DATA_DIR)
-        return send_file(
-            tmp_path,
-            as_attachment=True,
-            download_name="pipeline_sentinel_report.pdf",
-        )
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+        success = apply_patch(finding_dict, patch_content, require_evidence=False)
+        if success:
+            logger.info(f"Patch applied successfully for {finding_id}")
+            return jsonify({"status": "applied"})
+        else:
+            logger.warning(f"Patch application failed for {finding_id}")
+            return jsonify({"error": "Patch application failed"}), 500
+    except Exception as e:
+        logger.error(f"Patch application error for {finding_id}: {e}")
+        return jsonify({"error": "Internal error applying patch"}), 500

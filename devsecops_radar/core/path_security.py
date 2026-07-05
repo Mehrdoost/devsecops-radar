@@ -1,16 +1,15 @@
-# devsecops_radar/core/path_security.py
-"""
-Centralised secure file‑access utilities.
+#Devsecops_radar/core/path_security.py
 
-Guarantees:
-- Path‑traversal protection (directory confinement)
-- TOCTOU‑safe reads via ``O_NOFOLLOW`` (Unix) / safe fallback (Windows)
-- Atomic writes via ``os.replace`` (no symlink‑swap window)
+"""
+Centralised secure file‑access utilities with strict TOCTOU protection
+and file permission preservation.
 """
 
 from __future__ import annotations
 
+import errno
 import os
+import shutil
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -30,17 +29,10 @@ _O_NOFOLLOW = os.O_NOFOLLOW if hasattr(os, "O_NOFOLLOW") else 0
 # --------------------------------------------------------------------------
 def resolve_safe_path(path: str | Path, base_dir: Path | None = None) -> Path:
     """
-    Resolve *path* and raise ValueError if it escapes *base_dir*.
+    Resolve *path* and raise ``ValueError`` if it escapes *base_dir*.
 
-    Args:
-        path: Absolute or relative path. Relative paths are joined with *base_dir*.
-        base_dir: The allowed root. Defaults to ``Path.cwd()``.
-
-    Returns:
-        A fully resolved ``Path`` that is guaranteed to be inside *base_dir*.
-
-    Raises:
-        ValueError: If the resolved path is outside the allowed directory.
+    The error message sent to the caller is generic (no internal paths).
+    Full details are logged for debugging.
     """
     base = (base_dir or Path.cwd()).resolve()
     p = Path(path)
@@ -50,14 +42,16 @@ def resolve_safe_path(path: str | Path, base_dir: Path | None = None) -> Path:
         target = p.resolve()
 
     if not target.is_relative_to(base):
-        raise ValueError(
-            f"Path '{path}' resolves to '{target}' which is outside '{base}'"
+        logger.error(
+            f"Path confinement violation: '{path}' resolves to '{target}' "
+            f"which is outside the allowed base '{base}'."
         )
+        raise ValueError("Path traversal attempt blocked.")
     return target
 
 
 # --------------------------------------------------------------------------
-# TOCTOU‑safe read
+# TOCTOU‑safe read – STRICTLY rejects symlinks on Unix
 # --------------------------------------------------------------------------
 def safe_read_open(
     path: str | Path,
@@ -65,55 +59,66 @@ def safe_read_open(
     encoding: str = "utf-8",
 ) -> TextIO:
     """
-    Open *path* for reading, immune to symlink‑swap attacks on Unix.
+    Open *path* for reading.  Symlinks are **never** followed.
 
-    Uses ``os.open`` with ``O_NOFOLLOW`` on Unix; falls back to regular open
-    on Windows after confinement is verified.
-
-    Note on Windows:
-        O_NOFOLLOW is not available on Windows.  A TOCTOU window exists between
-        the confinement check and the actual open, but this is an accepted risk
-        on Windows platforms where Pipeline Sentinel is typically not deployed
-        in production security contexts.
-
-    The caller is responsible for closing the returned file object.
+    On Unix the file descriptor is obtained with ``O_NOFOLLOW``.
+    If the path is a symlink, the call is rejected immediately.
+    On Windows ``O_NOFOLLOW`` is 0, so the operation falls back to a
+    regular open after confinement has been verified.
     """
     safe_path = resolve_safe_path(path, base_dir)
+
+    # Use O_NOFOLLOW on Unix – if the path is a symlink we get ELOOP.
     try:
         fd = os.open(str(safe_path), os.O_RDONLY | _O_NOFOLLOW)
-    except OSError:
-        # O_NOFOLLOW not supported (Windows) or the path is a symlink.
-        # Confinement has already been checked – safe fallback.
-        logger.debug(
-            f"O_NOFOLLOW not available for '{safe_path}'; "
-            "using regular open (Windows or symlink target)."
-        )
-        return open(safe_path, encoding=encoding)
-    return open(fd, encoding=encoding)
+    except OSError as e:
+        # ELOOP means the path is a symlink → reject
+        if _O_NOFOLLOW and e.errno == errno.ELOOP:
+            logger.error(f"Symlink not allowed: {safe_path}")
+            raise ValueError("Symlink not allowed.") from e
+        # Other errors (permission denied, etc.) are passed through
+        raise
+
+    # Wrap the file descriptor in a Python file object.
+    # closefd=True ensures the fd is closed when the file object is closed.
+    return open(fd, encoding=encoding, closefd=True)
 
 
 # --------------------------------------------------------------------------
-# Atomic write (race‑free, symlink‑safe)
+# Atomic write (race‑free, symlink‑safe, preserves original permissions)
 # --------------------------------------------------------------------------
 @contextmanager
 def atomic_write(
     dest: str | Path,
     base_dir: Path | None = None,
     encoding: str = "utf-8",
+    preserve_permissions: bool = True,
 ) -> Iterator[TextIO]:
     """
-    Context manager that yields a writeable file object and atomically replaces
-    the destination file on success.
+    Context manager that yields a writeable file object and atomically
+    replaces the destination file on success.
 
     - The destination must be inside *base_dir*.
     - A temporary file is created in the **same directory** so that
       ``os.replace`` is atomic.
+    - If *preserve_permissions* is ``True`` (the default), the original
+      file's permission bits are copied to the temporary file before
+      writing begins, so they are retained after the atomic replacement.
     - On exception the temporary file is removed.
     """
     safe_dest = resolve_safe_path(dest, base_dir)
     tmp_fd, tmp_path = tempfile.mkstemp(
         dir=str(safe_dest.parent), prefix=".sentinel_tmp_"
     )
+
+    # If the destination already exists, copy its permissions to the
+    # temporary file so that os.replace does not change them.
+    if preserve_permissions and safe_dest.exists():
+        try:
+            shutil.copymode(str(safe_dest), tmp_path)
+        except OSError:
+            logger.warning(f"Could not copy permissions from {safe_dest} to temp file.")
+
     try:
         with os.fdopen(tmp_fd, "w", encoding=encoding) as f:
             yield f
